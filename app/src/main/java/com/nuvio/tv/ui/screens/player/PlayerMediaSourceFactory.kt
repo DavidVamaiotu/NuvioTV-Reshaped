@@ -22,6 +22,15 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.text.SubtitleParser
 import com.nuvio.tv.NuvioApplication
+import com.nuvio.tv.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
+import com.nuvio.tv.core.connection.PlaybackThroughput
 import com.nuvio.tv.core.network.IPv4FirstDns
 import com.nuvio.tv.data.local.PlayerSettings
 import com.nuvio.tv.data.local.VodCacheSizeMode
@@ -94,7 +103,9 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         mediaMetadata: androidx.media3.common.MediaMetadata? = null
     ): MediaSource {
         val sanitizedHeaders = sanitizeHeaders(headers)
-        val httpDataSourceFactory = PlayerPlaybackNetworking.createDataSourceFactory(context, sanitizedHeaders)
+        val httpDataSourceFactory = PlaybackThroughput.countingNetworkBytes(
+            PlayerPlaybackNetworking.createDataSourceFactory(context, sanitizedHeaders)
+        )
 
         val resolvedMimeType = mimeTypeOverride ?: inferMimeType(
             url = url,
@@ -131,6 +142,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
             val okHttpFactory = OkHttpDataSource.Factory(playbackHttpClient).apply {
                 setDefaultRequestProperties(sanitizedHeaders)
                 setUserAgent(DEFAULT_USER_AGENT)
+                setTransferListener(PlaybackThroughput.networkByteCounter)
             }
             val effectiveNative =
                 nuvioPerformanceModeEnabled || NuvioEngineConfig.get().isNativeAllocationEnabled()
