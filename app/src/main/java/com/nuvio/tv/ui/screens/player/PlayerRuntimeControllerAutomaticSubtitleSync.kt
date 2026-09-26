@@ -1,8 +1,6 @@
 package com.nuvio.tv.ui.screens.player
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.media3.common.C
@@ -20,6 +18,8 @@ import com.nuvio.tv.ui.screens.player.autosync.AutomaticSubtitleSync
 import com.nuvio.tv.ui.screens.player.autosync.EmbeddedSubtitleTimelineLoader
 import com.nuvio.tv.ui.screens.player.autosync.SubtitleLanguageMatching
 import com.nuvio.tv.ui.screens.player.autosync.applyAutoSyncSidecarTimeline
+import com.nuvio.tv.ui.screens.player.autosync.bubble.AutoSyncBubbleKind
+import com.nuvio.tv.ui.screens.player.autosync.bubble.showAutoSyncMessage
 import com.nuvio.tv.ui.screens.player.autosync.maxAlignmentShiftMs
 import com.nuvio.tv.ui.screens.player.autosync.replaceAutoSyncSidecarSubtitle
 import com.nuvio.tv.ui.screens.player.autosync.secondaryLanguageSearchSeed
@@ -31,15 +31,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.update
 
 /** Thin TV adapter around the feature-owned Mobile AutoSync V2 pipeline. */
-private val autoSyncToastHandler = Handler(Looper.getMainLooper())
 
+/**
+ * Shows an AutoSync message in the glass bubble when it is on and the player is showing, else as
+ * a plain toast. [kind] tells the bubble whether the run is still working or how it ended.
+ */
 private fun PlayerRuntimeController.showAutoSyncToast(
+    kind: AutoSyncBubbleKind,
     message: String,
     duration: Int = Toast.LENGTH_SHORT,
 ) {
-    autoSyncToastHandler.post {
-        Toast.makeText(context, message, duration).show()
-    }
+    showAutoSyncMessage(context, kind, message, duration)
 }
 /**
  * Wraps Nuvio's extractors so AutoSync can observe embedded subtitle timing (output is forwarded
@@ -108,10 +110,10 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
     val player = _exoPlayer ?: return
     val useLibass = requestedUseLibassByUser || activePlayerUsesLibass
 
-    showAutoSyncToast(context.getString(R.string.autosync_toast_analyzing))
+    showAutoSyncToast(AutoSyncBubbleKind.Working, context.getString(R.string.autosync_toast_analyzing))
 
     if (!canAttachAddonSubtitleViaSidecar(selectedSubtitle)) {
-        showAutoSyncToast(context.getString(R.string.autosync_toast_failed_unsupported))
+        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed_unsupported))
         return
     }
 
@@ -135,7 +137,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
         },
     )
     if (!started) {
-        showAutoSyncToast(context.getString(R.string.autosync_toast_failed))
+        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed))
         return
     }
 
@@ -276,6 +278,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     "REJECT V2 - original subtitle timing kept",
                 )
                 showAutoSyncToast(
+                    if (audioTakesOver) AutoSyncBubbleKind.Working else AutoSyncBubbleKind.Failure,
                     if (audioTakesOver) {
                         context.getString(R.string.autosync_toast_failed_audio_fallback)
                     } else {
@@ -352,7 +355,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     context,
                     "REJECT V2 - sidecar changed or apply failed",
                 )
-                showAutoSyncToast(context.getString(R.string.autosync_toast_failed))
+                showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed))
                 return@launch
             }
 
@@ -394,6 +397,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                 },
             )
             showAutoSyncToast(
+                AutoSyncBubbleKind.Success,
                 context.getString(
                     when {
                         chosenSubtitle.url != selectedUrl -> R.string.autosync_toast_synced_replaced
@@ -413,7 +417,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
             if (activeSidecarSubtitleKey == null) {
                 startSidecarAddonSubtitle(selectedSubtitle)
             }
-            showAutoSyncToast(context.getString(R.string.autosync_toast_failed))
+            showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed))
         }
     }.also { job ->
         job.invokeOnCompletion { selectedBodyDeferred.complete(null) }
