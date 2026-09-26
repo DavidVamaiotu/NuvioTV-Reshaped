@@ -45,5 +45,7 @@ internal fun NuvioReshapedSettingsContent(
             },
         )
         seekrKeySettingsItems()
+        subtitleFontSettingsItems()
+        connectionSpeedSettingsItems()
     }
 }
