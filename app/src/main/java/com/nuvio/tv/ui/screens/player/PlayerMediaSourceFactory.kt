@@ -130,7 +130,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
             resolvedMimeType == MimeTypes.VIDEO_MP4
         val useChunkSessionSource = (useParallelConnections || mp4SessionMode) && !isHls && !isDash
         parallelStartupPrefetchUnlocked.set(!useChunkSessionSource)
-        val progressiveUpstreamFactory: DataSource.Factory = if (useChunkSessionSource) {
+        val networkUpstreamFactory: DataSource.Factory = if (useChunkSessionSource) {
             if (mp4SessionMode) {
                 Log.i(
                     "PlayerMediaSourceFactory",
@@ -166,6 +166,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         } else {
             httpDataSourceFactory
         }
+        val progressiveUpstreamFactory = com.nuvio.tv.ui.screens.player.seekbuffer.SeekReadAhead.wrap(context, url, progressive = !isHls && !isDash, upstream = networkUpstreamFactory) // Nuvio RS hook: disk read-ahead (Seek buffer)
 
         // 2. VOD disk cache (opt-in).
         val useVodCache = ENABLE_VOD_CACHE && vodCacheEnabled && !isHls && !isDash && shouldUseVodCache(url)

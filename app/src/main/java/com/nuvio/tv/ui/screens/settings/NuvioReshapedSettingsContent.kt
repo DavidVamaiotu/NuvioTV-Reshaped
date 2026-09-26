@@ -50,5 +50,6 @@ internal fun NuvioReshapedSettingsContent(
         seekPreviewSettingsItems()
         connectionSpeedSettingsItems()
         pillNavSettingsItems()
+        seekBufferSettingsItems()
     }
 }
