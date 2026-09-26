@@ -1326,6 +1326,7 @@ fun PlayerRuntimeController.onEvent(event: PlayerEvent) {
             pendingAddonSubtitleTrackId = null
             pendingAudioSelectionAfterSubtitleRefresh = null
             resetSubtitleAutoSyncState()
+            stopAutomaticSubtitleSync() // AutoSync hook
             rememberInternalSubtitleSelection(event.index)
             selectSubtitleTrack(event.index)
             _uiState.update {
@@ -1349,6 +1350,7 @@ fun PlayerRuntimeController.onEvent(event: PlayerEvent) {
             pendingAddonSubtitleTrackId = null
             pendingAudioSelectionAfterSubtitleRefresh = null
             resetSubtitleAutoSyncState()
+            stopAutomaticSubtitleSync() // AutoSync hook
             rememberSubtitleDisabled()
             disableSubtitles()
             _uiState.update {
