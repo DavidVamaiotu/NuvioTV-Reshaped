@@ -49,5 +49,6 @@ internal fun NuvioReshapedSettingsContent(
         subtitleFontSettingsItems()
         seekPreviewSettingsItems()
         connectionSpeedSettingsItems()
+        pillNavSettingsItems()
     }
 }
