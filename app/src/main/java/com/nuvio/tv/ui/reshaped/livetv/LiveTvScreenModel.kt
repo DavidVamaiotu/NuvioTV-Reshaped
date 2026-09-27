@@ -60,7 +60,7 @@ class LiveTvFilterInput(
     val channels: List<LiveTvChannel>,
     val favoriteUrls: Set<String>,
     val hiddenGroups: Set<String>,
-    val hiddenChannels: Set<String>,
+    val hiddenChannels: Set<Long>,
     val filterKey: String,
     val query: String,
 ) {

@@ -4,14 +4,14 @@ import android.content.Context
 import android.util.Log
 import java.io.File
 import java.io.InputStream
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,18 +50,40 @@ object LiveTvRepository {
 
     /** The list the last channel was picked from (a category, favorites, a search): zapping stays in it. */
     @Volatile var zapList: List<LiveTvChannel> = emptyList()
+        private set
+    /** The category key [zapList] is, or null for a search. */
+    @Volatile var zapFolderKey: String? = null
+        private set
+
+    fun setZapList(channels: List<LiveTvChannel>, folderKey: String?) {
+        zapList = channels
+        zapFolderKey = folderKey
+    }
 
     private lateinit var appContext: Context
-    private var storage: LiveTvStorage? = null
+    @Volatile private var storage: LiveTvStorage? = null
     private var loadedProfileId: Int? = null
-    private var loadJob: Job? = null
+    private var profileJob: Job? = null
     private var epgJob: Job? = null
     @Volatile private var epgGeneration = 0
     private var epgKey: Pair<List<String>, Set<String>>? = null
     /** The viewer's category order; empty for A to Z. */
     @Volatile private var groupOrder: List<String> = emptyList()
 
-    /** What each source loaded last. Only touched from [publish] and the loads, which run one at a time. */
+    /** Results, state changes and [publish] run here one at a time, so no two of them race. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val serial = Dispatchers.Default.limitedParallelism(1)
+    /** Saves run in order on one IO thread: an older save can never land after a newer one. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val writer = Dispatchers.IO.limitedParallelism(1)
+    private val loadPermits = Semaphore(PARALLEL_SOURCES)
+    /**
+     * One load per source. Adding, removing or refreshing a source cancels only that source's
+     * load, so a phone upload during start-up no longer drops the sources still loading.
+     */
+    private val sourceJobs = ConcurrentHashMap<String, Job>()
+
+    /** What each source loaded last. Only touched on [serial]. */
     private class LoadedSource(val channels: List<LiveTvChannel>, val epgUrls: List<String>)
     private val loaded = HashMap<String, LoadedSource>()
 
@@ -73,69 +95,41 @@ object LiveTvRepository {
         if (loadedProfileId == profileId) return
         appContext = context.applicationContext
         loadedProfileId = profileId
-        loadJob?.cancel()
-        stopEpg()
+        profileJob?.cancel()
+        cancelAllLoads()
         LiveTvStalker.clearSession()
+        storage = null
         _uiState.value = LiveTvUiState(isLoading = true)
-        loadJob = scope.launch {
+        profileJob = scope.launch(serial) {
+            stopEpg()
+            epgKey = null
             val store = withContext(Dispatchers.IO) {
-                LiveTvStorage(appContext, profileId).also { it.favoriteUrls() } // first read parses the file
+                LiveTvStorage(appContext, profileId).also {
+                    it.favoriteUrls() // first read parses the file
+                    groupOrder = it.groupOrder()
+                }
             }
             val sources = withContext(Dispatchers.IO) { store.sources() }
-            groupOrder = withContext(Dispatchers.IO) { store.groupOrder() }
+            val hiddenChannels = withContext(Dispatchers.IO) { store.hiddenChannelKeys() }
             storage = store
-            synchronized(loaded) { loaded.clear() }
+            loaded.clear()
             _uiState.value = LiveTvUiState(
                 sources = sources,
                 favoriteUrls = store.favoriteUrls(),
                 hiddenGroups = store.hiddenGroups(),
-                hiddenChannelUrls = store.hiddenChannelUrls(),
+                hiddenChannelKeys = hiddenChannels,
                 recentChannel = store.recentChannel(),
+                isLoading = sources.isNotEmpty(),
             )
-            reloadAll()
+            sources.forEach { launchSourceLoad(it, adding = false) }
         }
     }
 
     /** Loads every saved source again (the Refresh button). */
     fun refresh() {
         if (storage == null) return
-        launchLoad { reloadAll() }
-    }
-
-    private suspend fun reloadAll() {
-        val sources = _uiState.value.sources
-        if (sources.isEmpty()) {
-            _uiState.update { it.copy(isLoading = false) }
-            return
-        }
-        startLoading()
-        val permits = Semaphore(PARALLEL_SOURCES)
-        val results = coroutineScope {
-            sources.map { source ->
-                async {
-                    permits.withPermit {
-                        source.id to try {
-                            Result.success(loadSource(source))
-                        } catch (cancel: CancellationException) {
-                            throw cancel
-                        } catch (error: Exception) {
-                            Log.w(TAG, "Live TV source ${source.type} failed", error)
-                            Result.failure(error)
-                        }
-                    }
-                }
-            }.awaitAll()
-        }
-        val errors = HashMap<String, LiveTvError>()
-        synchronized(loaded) {
-            results.forEach { (id, result) ->
-                result.onSuccess { loaded[id] = it.first }
-                val error = result.exceptionOrNull()?.let { (it as? LiveTvException)?.error ?: fallbackError(sources, id) }
-                    ?: result.getOrNull()?.second
-                if (error != null) errors[id] = error
-            }
-        }
-        publish(errors)
+        _uiState.update { it.copy(error = null) }
+        _uiState.value.sources.forEach { launchSourceLoad(it, adding = false) }
     }
 
     fun loadM3uUrl(url: String) {
@@ -181,20 +175,23 @@ object LiveTvRepository {
         return true
     }
 
-    /** Removes one source and its channels. */
+    /** Removes one source and its channels; the other sources' loads carry on. */
     fun removeSource(sourceId: String) {
         val store = storage ?: return
-        val sources = _uiState.value.sources.filterNot { it.id == sourceId }
-        if (sources.size == _uiState.value.sources.size) return
-        loadJob?.cancel()
-        LiveTvStalker.clearSession()
-        synchronized(loaded) { loaded.remove(sourceId) }
-        _uiState.update { it.copy(sources = sources, isLoading = false, error = null) }
-        scope.launch(Dispatchers.IO) {
-            store.saveSources(sources)
-            store.deletePlaylistFile(sourceId)
+        sourceJobs.remove(sourceId)?.cancel()
+        scope.launch(serial) {
+            val sources = _uiState.value.sources.filterNot { it.id == sourceId }
+            if (sources.size == _uiState.value.sources.size) return@launch
+            LiveTvStalker.clearSession()
+            loaded.remove(sourceId)
+            _uiState.update { it.copy(sources = sources, sourceErrors = it.sourceErrors - sourceId, error = null) }
+            scope.launch(writer) {
+                store.saveSources(sources)
+                store.deletePlaylistFile(sourceId)
+            }
+            publish()
+            updateLoading()
         }
-        publish(_uiState.value.sourceErrors - sourceId)
     }
 
     /** Shows or hides a category. */
@@ -210,12 +207,14 @@ object LiveTvRepository {
     }
 
     /** Shows or hides single channels (a whole category's at once for Show all / Hide all). */
-    fun setChannelsHidden(streamUrls: Collection<String>, hidden: Boolean) {
-        val current = _uiState.value.hiddenChannelUrls
-        val next = if (hidden) current + streamUrls else current - streamUrls.toSet()
+    fun setChannelsHidden(channels: Collection<LiveTvChannel>, hidden: Boolean) {
+        val keys = channels.map { it.hideKey }
+        val current = _uiState.value.hiddenChannelKeys
+        val next = if (hidden) current + keys else current - keys.toSet()
         if (next.size == current.size) return
-        _uiState.update { it.copy(hiddenChannelUrls = next) }
-        storage?.let { store -> scope.launch(Dispatchers.IO) { store.saveHiddenChannelUrls(next) } }
+        _uiState.update { it.copy(hiddenChannelKeys = next) }
+        refreshShownChannels()
+        storage?.let { store -> scope.launch(writer) { store.saveHiddenChannelKeys(next) } }
     }
 
     /** Moves a category [step] places up (negative) or down; the order is kept for every list. */
@@ -227,27 +226,30 @@ object LiveTvRepository {
         val reordered = ArrayList(groups).apply { add(to, removeAt(from)) }
         groupOrder = reordered
         _uiState.update { it.copy(groups = reordered) }
-        storage?.let { store -> scope.launch(Dispatchers.IO) { store.saveGroupOrder(reordered) } }
+        storage?.let { store -> scope.launch(writer) { store.saveGroupOrder(reordered) } }
     }
 
     /** Back to A to Z. */
     fun resetGroupOrder() {
         groupOrder = emptyList()
         _uiState.update { it.copy(groups = orderedGroups(it.groupCounts.keys)) }
-        storage?.let { store -> scope.launch(Dispatchers.IO) { store.saveGroupOrder(emptyList()) } }
+        storage?.let { store -> scope.launch(writer) { store.saveGroupOrder(emptyList()) } }
     }
 
-    /** [names] in the viewer's order, then the ones it does not have yet, A to Z. */
+    /** [names] in the viewer's order, then the ones it does not have yet, A to Z, with "Uncategorised" last. */
     private fun orderedGroups(names: Set<String>): List<String> {
         val ordered = groupOrder.filterTo(ArrayList()) { it in names }
         val placed = ordered.toHashSet()
-        names.filterNot(placed::contains).sortedWith(String.CASE_INSENSITIVE_ORDER).forEach(ordered::add)
+        names.filterNot(placed::contains)
+            .sortedWith(compareBy<String> { it == LIVE_TV_UNGROUPED }.thenBy(String.CASE_INSENSITIVE_ORDER) { it })
+            .forEach(ordered::add)
         return ordered
     }
 
     private fun saveHiddenGroups(groups: Set<String>) {
         _uiState.update { it.copy(hiddenGroups = groups) }
-        storage?.let { store -> scope.launch(Dispatchers.IO) { store.saveHiddenGroups(groups) } }
+        refreshShownChannels()
+        storage?.let { store -> scope.launch(writer) { store.saveHiddenGroups(groups) } }
     }
 
     fun toggleFavorite(channel: LiveTvChannel) {
@@ -255,7 +257,7 @@ object LiveTvRepository {
         val favorites = _uiState.value.favoriteUrls.toHashSet()
         if (!favorites.add(channel.streamUrl)) favorites.remove(channel.streamUrl)
         _uiState.update { it.copy(favoriteUrls = favorites) }
-        store.saveFavoriteUrls(favorites)
+        scope.launch(writer) { store.saveFavoriteUrls(favorites) }
     }
 
     /** [channel] is the list's own entry (not a resolved Stalker link), so it can be found again. */
@@ -263,7 +265,7 @@ object LiveTvRepository {
         val recent = LiveTvRecentChannel(channel.streamUrl, channel.name, channel.logoUrl, channel.group, channel.tvgId)
         if (_uiState.value.recentChannel == recent) return
         _uiState.update { it.copy(recentChannel = recent) }
-        storage?.saveRecentChannel(recent)
+        storage?.let { store -> scope.launch(writer) { store.saveRecentChannel(recent) } }
     }
 
     /** The list entry for a remembered channel, or a stand-in when the list no longer has it. */
@@ -278,6 +280,11 @@ object LiveTvRepository {
                 group = recent.group,
                 headers = defaultStreamHeaders(recent.streamUrl),
             )
+
+    /** Whether [channel] comes from a Stalker portal, whose links are created per play. */
+    fun isStalker(channel: LiveTvChannel): Boolean =
+        channel.stalkerCommand != null &&
+            _uiState.value.sources.firstOrNull { it.id == channel.sourceId }?.type == LiveTvSourceType.Stalker
 
     /** The channel with a link that plays now: Stalker links are created per play; others are as listed. */
     suspend fun playableChannel(channel: LiveTvChannel): LiveTvChannel {
@@ -312,12 +319,18 @@ object LiveTvRepository {
         return channels[next]
     }
 
-    private fun launchLoad(block: suspend () -> Unit) {
-        loadJob?.cancel()
-        loadJob = scope.launch { block() }
+    // region Loads
+
+    private fun cancelAllLoads() {
+        sourceJobs.values.forEach(Job::cancel)
+        sourceJobs.clear()
     }
 
-    // region Loads
+    /** The screen shows "Loading" while any source is loading. */
+    private fun updateLoading() {
+        val busy = sourceJobs.values.any { it.isActive }
+        _uiState.update { if (it.isLoading == busy) it else it.copy(isLoading = busy) }
+    }
 
     /** A source being added keeps the id of a saved one that is the same source, so it replaces it. */
     private fun withExistingId(candidate: LiveTvSource, store: LiveTvStorage): LiveTvSource {
@@ -333,37 +346,74 @@ object LiveTvRepository {
         val store = storage ?: return
         val validation = validate(input)
         if (validation != null) {
-            _uiState.update { it.copy(error = validation, isLoading = false) }
+            _uiState.update { it.copy(error = validation) }
             return
         }
         val candidate = if (input.id.isBlank()) withExistingId(input, store) else input
-        val isNew = _uiState.value.sources.none { it.id == candidate.id }
-        launchLoad {
-            startLoading()
-            try {
-                val (result, notice) = loadSource(candidate)
-                synchronized(loaded) { loaded[candidate.id] = result }
-                val sources = _uiState.value.sources.let { current ->
-                    if (isNew) current + candidate else current.map { if (it.id == candidate.id) candidate else it }
+        _uiState.update { it.copy(error = null) }
+        launchSourceLoad(candidate, adding = true)
+    }
+
+    /** Loads one source in its own job, replacing only an earlier load of the same source. */
+    private fun launchSourceLoad(source: LiveTvSource, adding: Boolean) {
+        val store = storage ?: return
+        sourceJobs.remove(source.id)?.cancel()
+        val job = scope.launch(start = CoroutineStart.LAZY) {
+            val outcome = loadPermits.withPermit {
+                try {
+                    Result.success(loadSource(source))
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (error: Exception) {
+                    Log.w(TAG, "Live TV source ${source.type} failed", error)
+                    Result.failure(error)
                 }
-                _uiState.update { it.copy(sources = sources) }
-                withContext(Dispatchers.IO) {
-                    store.saveSources(sources)
-                    if (candidate.type != LiveTvSourceType.M3u || candidate.url.isHttpUrl()) store.deletePlaylistFile(candidate.id)
+            }
+            val self = coroutineContext[Job]
+            withContext(serial) {
+                // A newer load of this source, or its removal, wins over this result.
+                if (sourceJobs[source.id] !== self) return@withContext
+                val known = _uiState.value.sources.any { it.id == source.id }
+                if (!adding && !known) return@withContext
+                outcome.onSuccess { (result, notice) ->
+                    loaded[source.id] = result
+                    if (adding) {
+                        val sources = _uiState.value.sources.let { current ->
+                            if (known) current.map { if (it.id == source.id) source else it } else current + source
+                        }
+                        _uiState.update { it.copy(sources = sources, addedCount = it.addedCount + 1, error = notice) }
+                        scope.launch(writer) {
+                            store.saveSources(sources)
+                            if (source.type != LiveTvSourceType.M3u || source.url.isHttpUrl()) store.deletePlaylistFile(source.id)
+                        }
+                    }
+                    _uiState.update { state ->
+                        val errors = state.sourceErrors - source.id
+                        state.copy(sourceErrors = if (notice != null) errors + (source.id to notice) else errors)
+                    }
+                    publish()
                 }
-                val errors = _uiState.value.sourceErrors - candidate.id
-                publish(if (notice != null) errors + (candidate.id to notice) else errors)
-                if (notice != null) _uiState.update { it.copy(error = notice) }
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (error: Exception) {
-                Log.w(TAG, "Live TV source could not be added", error)
-                if (isNew && candidate.type == LiveTvSourceType.M3u && !candidate.url.isHttpUrl()) {
-                    withContext(Dispatchers.IO) { store.deletePlaylistFile(candidate.id) }
+                outcome.onFailure { error ->
+                    val reason = (error as? LiveTvException)?.error ?: fallbackError(source.type)
+                    if (adding) {
+                        if (!known && source.type == LiveTvSourceType.M3u && !source.url.isHttpUrl()) {
+                            scope.launch(writer) { store.deletePlaylistFile(source.id) }
+                        }
+                        _uiState.update { it.copy(error = reason, isLoaded = it.isLoaded || it.sources.isNotEmpty()) }
+                    } else {
+                        // The source keeps the channels it had.
+                        _uiState.update { it.copy(sourceErrors = it.sourceErrors + (source.id to reason), isLoaded = true) }
+                    }
                 }
-                fail((error as? LiveTvException)?.error ?: fallbackError(candidate.type))
             }
         }
+        sourceJobs[source.id] = job
+        job.invokeOnCompletion {
+            sourceJobs.remove(source.id, job)
+            updateLoading()
+        }
+        _uiState.update { it.copy(isLoading = true) }
+        job.start()
     }
 
     private fun validate(source: LiveTvSource): LiveTvError? = when (source.type) {
@@ -379,9 +429,6 @@ object LiveTvRepository {
             else -> null
         }
     }
-
-    private fun fallbackError(sources: List<LiveTvSource>, id: String): LiveTvError =
-        fallbackError(sources.firstOrNull { it.id == id }?.type ?: LiveTvSourceType.M3u)
 
     private fun fallbackError(type: LiveTvSourceType): LiveTvError = when (type) {
         LiveTvSourceType.M3u -> LiveTvError.LoadFailed
@@ -421,7 +468,15 @@ object LiveTvRepository {
         }
         // Ids only need to be unique within a source; the list keys on them across all of them.
         val tagged = ArrayList<LiveTvChannel>(channels.size)
-        channels.forEach { tagged += it.copy(id = "${source.id}/${it.id}", sourceId = source.id) }
+        channels.forEach { channel ->
+            val group = channel.group.trim()
+            tagged += channel.copy(
+                id = "${source.id}/${channel.id}",
+                sourceId = source.id,
+                group = group,
+                hideKey = liveTvHideKey(source.id, group, channel.name),
+            )
+        }
         return LoadedSource(tagged, epgUrls) to notice
     }
 
@@ -433,25 +488,20 @@ object LiveTvRepository {
         return if (parsed.isHlsStream) ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList()) else parsed
     }
 
-    /** The shown channels change only once a load finished, so a failed attempt keeps the list. */
-    private fun startLoading() {
-        _uiState.update { it.copy(isLoading = true, error = null) }
-    }
-
-    private fun fail(error: LiveTvError) {
-        _uiState.update { it.copy(isLoading = false, isLoaded = it.channels.isNotEmpty() || it.sources.isNotEmpty(), error = error) }
-    }
-
-    /** Shows the channels of every saved source as one list, and (re)starts the guide when its inputs changed. */
-    private fun publish(errors: Map<String, LiveTvError>) {
+    /**
+     * Shows the channels of every saved source as one list, and (re)starts the guide when its
+     * inputs changed. Runs on [serial].
+     */
+    private fun publish() {
         val sources = _uiState.value.sources
-        val parts = synchronized(loaded) { sources.mapNotNull { loaded[it.id] } }
+        val parts = sources.mapNotNull { loaded[it.id] }
         val channels = ArrayList<LiveTvChannel>(parts.sumOf { it.channels.size })
         parts.forEach { channels.addAll(it.channels) }
         val groupCounts = HashMap<String, Int>()
         val sourceCounts = HashMap<String, Int>()
         channels.forEach { channel ->
-            if (channel.group.isNotBlank()) groupCounts[channel.group] = (groupCounts[channel.group] ?: 0) + 1
+            // Channels without a category count under "Uncategorised", so they can be hidden too.
+            groupCounts[channel.group] = (groupCounts[channel.group] ?: 0) + 1
             sourceCounts[channel.sourceId] = (sourceCounts[channel.sourceId] ?: 0) + 1
         }
         val groups = orderedGroups(groupCounts.keys)
@@ -462,15 +512,13 @@ object LiveTvRepository {
         _uiState.update {
             it.copy(
                 channels = channels,
+                shownChannels = shownChannels(channels, it.hiddenGroups, it.hiddenChannelKeys),
                 groups = groups,
                 groupCounts = groupCounts,
                 sourceCounts = sourceCounts,
-                sourceErrors = errors,
                 currentProgrammes = if (hasGuide && !guideChanged) it.currentProgrammes else emptyMap(),
                 isEpgLoading = hasGuide && (guideChanged || it.isEpgLoading),
-                isLoading = false,
                 isLoaded = true,
-                error = null,
             )
         }
         if (!hasGuide) {
@@ -481,6 +529,30 @@ object LiveTvRepository {
             startEpg(epgUrls, tvgIds)
         }
     }
+
+    /** Recomputes the channels zapping moves through after a category or channel was hidden or shown. */
+    private fun refreshShownChannels() {
+        scope.launch(serial) {
+            val state = _uiState.value
+            val shown = shownChannels(state.channels, state.hiddenGroups, state.hiddenChannelKeys)
+            _uiState.update { current ->
+                if (current.channels === state.channels && current.hiddenGroups === state.hiddenGroups &&
+                    current.hiddenChannelKeys === state.hiddenChannelKeys
+                ) {
+                    current.copy(shownChannels = shown)
+                } else {
+                    current
+                }
+            }
+        }
+    }
+
+    private fun shownChannels(channels: List<LiveTvChannel>, hiddenGroups: Set<String>, hiddenKeys: Set<Long>): List<LiveTvChannel> =
+        if (hiddenGroups.isEmpty() && hiddenKeys.isEmpty()) {
+            channels
+        } else {
+            channels.filter { it.group !in hiddenGroups && it.hideKey !in hiddenKeys }
+        }
 
     // endregion
 

@@ -56,6 +56,7 @@
     <string name="live_tv_categories_description">OK shows or hides a category, ▶ picks its channels. Hold OK to move it, then ▲▼, and OK to drop it. Hidden ones leave the list, search and channel switching; favorites always stay.</string>
     <string name="live_tv_category_channels_description">OK shows or hides a channel. Hidden ones leave the list, search and channel switching; favorites always stay.</string>
     <string name="live_tv_categories_sort">A–Z</string>
+    <string name="live_tv_uncategorised">Uncategorised</string>
     <string name="live_tv_categories_shown">%1$d of %2$d shown</string>
     <string name="live_tv_categories_show_all">Show all</string>
     <string name="live_tv_categories_hide_all">Hide all</string>

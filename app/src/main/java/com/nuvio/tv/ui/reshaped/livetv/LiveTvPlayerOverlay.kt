@@ -62,6 +62,7 @@ import com.nuvio.tv.R
 import com.nuvio.tv.domain.model.ProxyHeaders
 import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.model.StreamBehaviorHints
+import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
@@ -125,13 +126,19 @@ internal class LiveTvPlayerState(
     }
 
     /** The list zapping moves through: the one the channel was picked from, else every shown channel. */
-    internal fun zapList(): List<LiveTvChannel> {
+    internal fun zapList(): List<LiveTvChannel> = zapTarget().first
+
+    /** The list zapping moves through and the category it is (null for a search). */
+    private fun zapTarget(): Pair<List<LiveTvChannel>, String?> {
         val picked = LiveTvRepository.zapList
-        if (picked.any { it.streamUrl == currentListUrl }) return picked
-        val state = LiveTvRepository.uiState.value
-        if (state.hiddenGroups.isEmpty() && state.hiddenChannelUrls.isEmpty()) return state.channels
-        return state.channels.filter { it.group !in state.hiddenGroups && it.streamUrl !in state.hiddenChannelUrls }
+        if (picked.any { it.streamUrl == currentListUrl }) return picked to LiveTvRepository.zapFolderKey
+        // Worked out off the main thread whenever the list or what is hidden changes.
+        return LiveTvRepository.uiState.value.shownChannels to FILTER_ALL
     }
+
+    /** The category the panel's list is, so the categories open on it; null for a search. */
+    var zappedFolderKey by mutableStateOf<String?>(null)
+        private set
 
     /** Called first by the player's key handler; true when the key was Live TV's. */
     fun onPreviewKey(event: KeyEvent, uiState: PlayerUiState): Boolean {
@@ -201,7 +208,9 @@ internal class LiveTvPlayerState(
     private fun openPanel() {
         folderJob?.cancel()
         panelFolderKey = null
-        panelChannels = zapList()
+        val (channels, folderKey) = zapTarget()
+        panelChannels = channels
+        zappedFolderKey = folderKey
         foldersOpen = false
         panelOpen = true
     }
@@ -214,14 +223,14 @@ internal class LiveTvPlayerState(
         folderJob = scope.launch {
             val state = LiveTvRepository.uiState.value
             panelChannels = withContext(Dispatchers.Default) {
-                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelUrls, key)
+                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelKeys, key)
             }
         }
     }
 
     /** A channel picked from the panel: zapping then stays in the list it was picked from. */
     internal fun pickFromPanel(channel: LiveTvChannel) {
-        if (panelFolderKey != null) LiveTvRepository.zapList = panelChannels
+        panelFolderKey?.let { LiveTvRepository.setZapList(panelChannels, it) }
         switchTo(channel)
     }
 
@@ -299,7 +308,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
     val clock = rememberLiveTvMinuteClock()
     // Numbered within the list being zapped (a category keeps its own 1, 2, 3...).
-    val zapList = remember(state.currentListUrl, liveState.channels) { state.zapList() }
+    val zapList = remember(state.currentListUrl, liveState.shownChannels) { state.zapList() }
     val currentIndex = remember(state.currentListUrl, zapList) { zapList.indexOfFirst { it.streamUrl == state.currentListUrl } }
     val current = zapList.getOrNull(currentIndex)
 
@@ -431,20 +440,17 @@ private fun LiveTvChannelPanel(state: LiveTvPlayerState, programmes: Map<String,
 private fun LiveTvFolderColumn(state: LiveTvPlayerState, liveState: LiveTvUiState) {
     val allLabel = stringResource(R.string.live_tv_all_channels)
     val favoritesLabel = stringResource(R.string.live_tv_favorites)
-    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, allLabel, favoritesLabel) {
+    val uncategorisedLabel = liveTvGroupLabel(LIVE_TV_UNGROUPED)
+    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, allLabel, favoritesLabel, uncategorisedLabel) {
         buildList {
             add(FILTER_ALL to allLabel)
             add(FILTER_FAVORITES to favoritesLabel)
             if (liveState.sources.size > 1) liveState.sources.forEach { add(FILTER_SOURCE_PREFIX + it.id to it.label) }
-            liveState.visibleGroups.forEach { add(it to it) }
+            liveState.visibleGroups.forEach { add(it to if (it == LIVE_TV_UNGROUPED) uncategorisedLabel else it) }
         }
     }
-    // The panel opens on the zapped list: its category when that list is one, else All channels.
-    val zappedFolder = remember(state.panelChannels, state.panelFolderKey == null) {
-        val group = state.panelChannels.firstOrNull()?.group
-        val oneGroup = state.panelFolderKey == null && group != null && state.panelChannels.all { it.group == group }
-        if (oneGroup && folders.any { it.first == group }) group.orEmpty() else FILTER_ALL
-    }
+    // The panel opens on the zapped list's category (All channels for a search or one gone since).
+    val zappedFolder = state.zappedFolderKey?.takeIf { key -> folders.any { it.first == key } } ?: FILTER_ALL
     val startKey = state.panelFolderKey ?: zappedFolder
     val startIndex = folders.indexOfFirst { it.first == startKey }.coerceAtLeast(0)
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 3).coerceAtLeast(0))

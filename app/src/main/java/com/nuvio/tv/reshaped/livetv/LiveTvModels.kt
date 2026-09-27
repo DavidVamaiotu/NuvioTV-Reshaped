@@ -16,7 +16,30 @@ data class LiveTvChannel(
     val stalkerCommand: String? = null,
     /** The [LiveTvSource.id] this channel was listed by. */
     val sourceId: String = "",
+    /** What hiding this channel stores: see [liveTvHideKey]. */
+    val hideKey: Long = 0L,
 )
+
+/** The category key of channels the playlist gives no category; the screens call it "Uncategorised". */
+const val LIVE_TV_UNGROUPED = ""
+
+/**
+ * A hidden channel is kept as a 64-bit hash of its source, category and name, not its link: the
+ * link can be long, carries account details, and changes when a provider rotates tokens.
+ */
+fun liveTvHideKey(sourceId: String, group: String, name: String): Long {
+    var hash = -0x340d631b7bdddcdbL // FNV-1a 64 offset basis
+    fun mix(text: String) {
+        text.forEach { char ->
+            hash = (hash xor char.code.toLong()) * 0x100000001b3L
+        }
+        hash = (hash xor 0x1fL) * 0x100000001b3L
+    }
+    mix(sourceId)
+    mix(group)
+    mix(name)
+    return hash
+}
 
 @Immutable
 data class LiveTvRecentChannel(
@@ -90,8 +113,10 @@ data class LiveTvUiState(
     val groupCounts: Map<String, Int> = emptyMap(),
     /** Categories the viewer chose not to see: their channels leave the list, search and zapping. */
     val hiddenGroups: Set<String> = emptySet(),
-    /** Single channels the viewer chose not to see (by stream URL), inside categories that stay. */
-    val hiddenChannelUrls: Set<String> = emptySet(),
+    /** Single channels the viewer chose not to see ([LiveTvChannel.hideKey]), inside categories that stay. */
+    val hiddenChannelKeys: Set<Long> = emptySet(),
+    /** [channels] without hidden categories and channels: what All channels and zapping go through. */
+    val shownChannels: List<LiveTvChannel> = emptyList(),
     /** How many channels each source listed. */
     val sourceCounts: Map<String, Int> = emptyMap(),
     /** Sources whose last load failed (their earlier channels, if any, stay listed). */
@@ -105,6 +130,8 @@ data class LiveTvUiState(
     val isLoaded: Boolean = false,
     /** The last failed attempt to add a source. */
     val error: LiveTvError? = null,
+    /** Goes up each time a source is added, so the Sources dialog can tell an add went through. */
+    val addedCount: Int = 0,
 ) {
     val hasSource: Boolean get() = sources.isNotEmpty()
 

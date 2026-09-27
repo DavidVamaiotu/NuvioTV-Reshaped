@@ -59,6 +59,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.nuvio.tv.R
+import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.ui.theme.NuvioTheme
@@ -247,6 +248,11 @@ private fun String.initials(): String =
     split(' ', '-', '_', '.').filter { it.isNotBlank() && it.first().isLetterOrDigit() }
         .take(2).joinToString("") { it.first().uppercase() }
 
+/** A category's name as shown; channels the playlist gives no category are "Uncategorised". */
+@Composable
+internal fun liveTvGroupLabel(group: String): String =
+    if (group == LIVE_TV_UNGROUPED) stringResource(R.string.live_tv_uncategorised) else group
+
 /** The time, updated on each minute. */
 @Composable
 internal fun rememberLiveTvMinuteClock(): State<Long> = produceState(LiveTvClock.nowEpochMs()) {
@@ -259,7 +265,9 @@ internal fun rememberLiveTvMinuteClock(): State<Long> = produceState(LiveTvClock
 /** "23 min left" or "1 h 5 min left" for the programme on now; recomposes with the minute clock. */
 @Composable
 internal fun liveTvTimeLeft(programme: LiveTvProgramme, clock: State<Long>): String {
-    val minutes = ((programme.stopEpochMs - clock.value).coerceAtLeast(0L) + 59_999L) / 60_000L
+    val exact = ((programme.stopEpochMs - clock.value).coerceAtLeast(0L) + 59_999L) / 60_000L
+    // The guide moves on at its own minute tick; until it does, this reads "1 min left", never "0 min".
+    val minutes = exact.coerceAtLeast(1L)
     return if (minutes < 60) {
         stringResource(R.string.live_tv_minutes_left, minutes.toInt())
     } else {

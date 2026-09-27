@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -45,7 +46,6 @@ import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.core.qr.QrCodeGenerator
 import com.nuvio.tv.core.server.DeviceIpAddress
-import com.nuvio.tv.reshaped.livetv.LiveTvError
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvSetupServer
 import com.nuvio.tv.reshaped.livetv.LiveTvSource
@@ -78,23 +78,17 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
     var stalkerPassword by rememberSaveable { mutableStateOf("") }
     val firstFocus = remember { FocusRequester() }
 
-    // Back to the list once a load that started while the dialog was open added a source.
-    var sawLoading by remember { mutableStateOf(false) }
-    var sourcesBefore by remember { mutableStateOf(uiState.sources) }
-    LaunchedEffect(uiState.isLoading, uiState.error) {
-        if (uiState.isLoading) {
-            if (!sawLoading) sourcesBefore = uiState.sources
-            sawLoading = true
-        } else if (sawLoading) {
-            sawLoading = false
-            val added = uiState.sources != sourcesBefore
-            if (added && (uiState.error == null || uiState.error == LiveTvError.StalkerIncomplete)) {
-                if (sourcesBefore.isEmpty()) onDismiss() else {
-                    adding = false
-                    m3uUrl = ""; xtreamServer = ""; xtreamUser = ""; xtreamPassword = ""
-                    stalkerPortal = ""; stalkerMac = ""; stalkerUser = ""; stalkerPassword = ""
-                }
-            }
+    // Back to the list once a source was added (or entered again) while the dialog was open; the
+    // first source closes it.
+    var seenAdds by remember { mutableIntStateOf(uiState.addedCount) }
+    val openedEmpty = remember { uiState.sources.isEmpty() }
+    LaunchedEffect(uiState.addedCount) {
+        if (uiState.addedCount == seenAdds) return@LaunchedEffect
+        seenAdds = uiState.addedCount
+        if (openedEmpty && uiState.sources.size == 1) onDismiss() else {
+            adding = false
+            m3uUrl = ""; xtreamServer = ""; xtreamUser = ""; xtreamPassword = ""
+            stalkerPortal = ""; stalkerMac = ""; stalkerUser = ""; stalkerPassword = ""
         }
     }
 
