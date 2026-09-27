@@ -79,8 +79,9 @@ internal fun PillNavScaffold(
     topBannerVisible: Boolean = false,
 ) {
     val showBar = currentRoute in rootRoutes
-    // Settings keeps the pill in its header band; every other root screen scrolls under it, so it tucks away.
-    val autoHide = showBar && currentRoute != Screen.Settings.route
+    // Settings and Live TV keep the pill in their header band; every other root screen scrolls under it, so it tucks away.
+    val autoHide = showBar && currentRoute != Screen.Settings.route &&
+        currentRoute != com.nuvio.tv.reshaped.livetv.LIVE_TV_ROUTE
     val hiddenUnlessFocused = currentRoute == Screen.Search.route
     val state = remember { PillNavBarState() }
     val focusRequesters = remember { HashMap<String, FocusRequester>() }

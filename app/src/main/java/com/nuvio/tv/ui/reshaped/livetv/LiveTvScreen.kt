@@ -99,6 +99,8 @@ fun LiveTvScreen(
     var launching by remember { mutableStateOf(false) }
     val channelListState = rememberLazyListState()
     val channelFocus = remember { FocusRequester() }
+    // Under the pill menu the screen starts below it, as Settings does, so the pill never covers the search field.
+    val topPadding = if (showBuiltInHeader) NuvioTheme.spacing.xl else 68.dp
 
     val filter = when (filterKey) {
         FILTER_ALL -> LiveTvFilter.All
@@ -180,7 +182,7 @@ fun LiveTvScreen(
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(start = NuvioTheme.spacing.xxxl, end = NuvioTheme.spacing.xl, top = NuvioTheme.spacing.xl),
+                    .padding(start = NuvioTheme.spacing.xxxl, end = NuvioTheme.spacing.xl, top = topPadding),
                 horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xl),
             ) {
                 LiveTvCategoryColumn(
