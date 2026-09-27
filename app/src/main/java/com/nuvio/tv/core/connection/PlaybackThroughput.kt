@@ -45,11 +45,13 @@ internal object PlaybackThroughput {
 
     /** ExoPlayer tick: bytes counted since the last tick, gated on whether the player is loading. */
     fun onExoTick(context: Context, streamUrl: String?, isLoading: Boolean) {
+        if (com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(streamUrl)) return
         samplerFor(context, streamUrl ?: return).onBytesTick(networkBytes.getAndSet(0L), isLoading)
     }
 
     /** mpv tick: its own download rate (`cache-speed`), gated on the demuxer still reading. */
     fun onMpvTick(context: Context, streamUrl: String?, bytesPerSecond: Long, isFetching: Boolean) {
+        if (com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(streamUrl)) return
         samplerFor(context, streamUrl ?: return).onRateTick(bytesPerSecond, isFetching)
     }
 
