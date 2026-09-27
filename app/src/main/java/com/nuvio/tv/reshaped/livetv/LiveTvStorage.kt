@@ -2,94 +2,201 @@ package com.nuvio.tv.reshaped.livetv
 
 import android.content.Context
 import android.content.SharedPreferences
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
+import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
- * Live TV's saved source, favorites and last channel, per profile. Small values live in their own
- * preferences file (read once, off the startup path); an imported playlist is a file, because
- * it can be megabytes and preferences keep everything in memory and rewrite it on each save.
+ * Live TV's saved sources, favorites, hidden categories and last channel, per profile. Small
+ * values live in their own preferences file (read once, off the startup path); an imported
+ * playlist is a file per source, because it can be megabytes and preferences keep everything in
+ * memory and rewrite it on each save.
  */
 internal class LiveTvStorage(context: Context, private val profileId: Int) {
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private val playlistFile = File(File(context.applicationContext.filesDir, "live_tv"), "playlist_$profileId.m3u")
+    private val playlistDir = File(context.applicationContext.filesDir, "live_tv")
 
     private fun key(base: String) = "${base}_$profileId"
     private fun string(base: String): String? = prefs.getString(key(base), null)?.takeIf(String::isNotBlank)
     private fun SharedPreferences.Editor.putOrRemove(base: String, value: String?): SharedPreferences.Editor =
         apply { if (value.isNullOrBlank()) remove(key(base)) else putString(key(base), value) }
 
-    fun sourceType(): LiveTvSourceType =
-        LiveTvSourceType.entries.firstOrNull { it.name == string(SOURCE_TYPE) } ?: LiveTvSourceType.M3u
+    // region Sources
 
-    fun sourceUrl(): String = string(SOURCE_URL).orEmpty()
-
-    fun saveM3uSource(url: String) {
-        prefs.edit().putOrRemove(SOURCE_TYPE, LiveTvSourceType.M3u.name).putOrRemove(SOURCE_URL, url).apply()
+    /** The saved sources, in the order they were added. A single source saved by an older version is moved over. */
+    fun sources(): List<LiveTvSource> {
+        val saved = string(SOURCES) ?: return migrateLegacySource()
+        return runCatching {
+            val array = JSONArray(saved)
+            (0 until array.length()).mapNotNull { index -> array.optJSONObject(index)?.toSource() }
+        }.getOrDefault(emptyList())
     }
 
-    fun stalkerSettings() = LiveTvStalkerSettings(
-        portalUrl = string(STALKER_PORTAL).orEmpty(),
-        macAddress = string(STALKER_MAC).orEmpty(),
-        username = string(STALKER_USER).orEmpty(),
-        password = string(STALKER_PASSWORD).orEmpty(),
-    )
-
-    fun saveStalker(settings: LiveTvStalkerSettings) {
-        prefs.edit().apply {
-            putOrRemove(SOURCE_TYPE, LiveTvSourceType.Stalker.name)
-            putOrRemove(SOURCE_URL, settings.portalUrl)
-            putOrRemove(STALKER_PORTAL, settings.portalUrl)
-            putOrRemove(STALKER_MAC, settings.macAddress)
-            putOrRemove(STALKER_USER, settings.username)
-            putOrRemove(STALKER_PASSWORD, settings.password)
-        }.apply()
+    fun saveSources(sources: List<LiveTvSource>) {
+        val array = JSONArray()
+        sources.forEach { array.put(it.toJson()) }
+        // An empty list is saved too, so an older single source is not moved over again.
+        prefs.edit().putString(key(SOURCES), array.toString()).apply()
     }
 
-    fun xtreamSettings() = LiveTvXtreamSettings(
-        serverUrl = string(XTREAM_SERVER).orEmpty(),
-        username = string(XTREAM_USER).orEmpty(),
-        password = string(XTREAM_PASSWORD).orEmpty(),
-    )
+    fun newSourceId(): String = UUID.randomUUID().toString().replace("-", "").take(12)
 
-    fun saveXtream(settings: LiveTvXtreamSettings) {
-        prefs.edit().apply {
-            putOrRemove(SOURCE_TYPE, LiveTvSourceType.Xtream.name)
-            putOrRemove(SOURCE_URL, settings.serverUrl)
-            putOrRemove(XTREAM_SERVER, settings.serverUrl)
-            putOrRemove(XTREAM_USER, settings.username)
-            putOrRemove(XTREAM_PASSWORD, settings.password)
-        }.apply()
+    private fun JSONObject.toSource(): LiveTvSource? {
+        val id = optString("id").takeIf(String::isNotBlank) ?: return null
+        val type = LiveTvSourceType.entries.firstOrNull { it.name == optString("type") } ?: return null
+        return LiveTvSource(
+            id = id,
+            type = type,
+            url = optString("url"),
+            stalker = LiveTvStalkerSettings(optString("portal"), optString("mac"), optString("stalkerUser"), optString("stalkerPassword")),
+            xtream = LiveTvXtreamSettings(optString("server"), optString("xtreamUser"), optString("xtreamPassword")),
+        )
     }
 
-    /** Forgets the active source; saved provider logins stay so they can be picked again. */
-    fun clearSource() {
-        prefs.edit().apply {
-            remove(key(SOURCE_TYPE))
-            remove(key(SOURCE_URL))
-        }.apply()
-        playlistFile.delete()
-    }
-
-    fun hasPlaylistFile(): Boolean = playlistFile.isFile && playlistFile.length() > 0L
-
-    /** The imported playlist file, or null. */
-    fun playlistFile(): File? = playlistFile.takeIf { hasPlaylistFile() }
-
-    /** Saves an imported playlist from [write]; call off the main thread. */
-    fun savePlaylistFile(write: (File) -> Unit): File {
-        playlistFile.parentFile?.mkdirs()
-        val temp = File(playlistFile.path + ".tmp")
-        write(temp)
-        if (!temp.renameTo(playlistFile)) {
-            playlistFile.delete()
-            temp.renameTo(playlistFile)
+    private fun LiveTvSource.toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
+        put("type", type.name)
+        put("url", url)
+        when (type) {
+            LiveTvSourceType.M3u -> Unit
+            LiveTvSourceType.Stalker -> {
+                put("portal", stalker.portalUrl)
+                put("mac", stalker.macAddress)
+                put("stalkerUser", stalker.username)
+                put("stalkerPassword", stalker.password)
+            }
+            LiveTvSourceType.Xtream -> {
+                put("server", xtream.serverUrl)
+                put("xtreamUser", xtream.username)
+                put("xtreamPassword", xtream.password)
+            }
         }
-        return playlistFile
     }
 
-    fun deletePlaylistFile() {
-        playlistFile.delete()
+    /** Versions before multiple sources kept one active source in separate keys. */
+    private fun migrateLegacySource(): List<LiveTvSource> {
+        val type = LiveTvSourceType.entries.firstOrNull { it.name == string(LEGACY_SOURCE_TYPE) }
+        val url = string(LEGACY_SOURCE_URL).orEmpty()
+        val id = "main"
+        val source = when (type) {
+            LiveTvSourceType.M3u -> {
+                val legacyFile = File(playlistDir, "playlist_$profileId.m3u")
+                if (legacyFile.isFile) legacyFile.renameTo(playlistFileFor(id))
+                LiveTvSource(id, LiveTvSourceType.M3u, url).takeIf { url.isNotBlank() }
+            }
+            LiveTvSourceType.Xtream -> LiveTvSource(
+                id, LiveTvSourceType.Xtream, url,
+                xtream = LiveTvXtreamSettings(string(XTREAM_SERVER).orEmpty(), string(XTREAM_USER).orEmpty(), string(XTREAM_PASSWORD).orEmpty()),
+            ).takeIf { it.xtream.isConfigured }
+            LiveTvSourceType.Stalker -> LiveTvSource(
+                id, LiveTvSourceType.Stalker, url,
+                stalker = LiveTvStalkerSettings(string(STALKER_PORTAL).orEmpty(), string(STALKER_MAC).orEmpty(), string(STALKER_USER).orEmpty(), string(STALKER_PASSWORD).orEmpty()),
+            ).takeIf { it.stalker.isConfigured }
+            null -> null
+        }
+        val sources = listOfNotNull(source)
+        saveSources(sources)
+        prefs.edit().apply {
+            listOf(
+                LEGACY_SOURCE_TYPE, LEGACY_SOURCE_URL, STALKER_PORTAL, STALKER_MAC, STALKER_USER, STALKER_PASSWORD,
+                XTREAM_SERVER, XTREAM_USER, XTREAM_PASSWORD,
+            ).forEach { remove(key(it)) }
+        }.apply()
+        return sources
+    }
+
+    // endregion
+
+    // region Imported playlists
+
+    private fun playlistFileFor(sourceId: String) = File(playlistDir, "playlist_${profileId}_$sourceId.m3u")
+
+    /** The imported playlist of [sourceId], or null. */
+    fun playlistFile(sourceId: String): File? = playlistFileFor(sourceId).takeIf { it.isFile && it.length() > 0L }
+
+    /** Saves an imported playlist for [sourceId] from [write]; call off the main thread. */
+    fun savePlaylistFile(sourceId: String, write: (File) -> Unit): File {
+        val target = playlistFileFor(sourceId)
+        playlistDir.mkdirs()
+        val temp = File(target.path + ".tmp")
+        write(temp)
+        if (!temp.renameTo(target)) {
+            target.delete()
+            temp.renameTo(target)
+        }
+        return target
+    }
+
+    fun deletePlaylistFile(sourceId: String) {
+        playlistFileFor(sourceId).delete()
+    }
+
+    // endregion
+
+    // Category names are saved one per line; the blank "Uncategorised" key gets a marker line.
+    private fun decodeGroups(base: String): Sequence<String> =
+        string(base)?.lineSequence()?.filter(String::isNotEmpty)?.map { if (it == UNGROUPED_LINE) LIVE_TV_UNGROUPED else it }
+            ?: emptySequence()
+
+    private fun encodeGroups(groups: Collection<String>): String =
+        groups.joinToString("\n") { if (it == LIVE_TV_UNGROUPED) UNGROUPED_LINE else it }
+
+    fun hiddenGroups(): Set<String> = decodeGroups(HIDDEN_GROUPS).toHashSet()
+
+    fun saveHiddenGroups(groups: Set<String>) {
+        prefs.edit().putOrRemove(HIDDEN_GROUPS, encodeGroups(groups)).apply()
+    }
+
+    // region Hidden channels
+
+    private val hiddenChannelsFile get() = File(playlistDir, "hidden_channels_$profileId.bin")
+
+    /**
+     * Hidden channels, as [LiveTvChannel.hideKey]s in a small file of their own (8 bytes each), so
+     * hiding a large category does not grow the preferences every other save rewrites. Call off
+     * the main thread.
+     */
+    fun hiddenChannelKeys(): Set<Long> {
+        // Older builds kept them as links in the preferences; those can't be matched to keys.
+        if (prefs.contains(key(LEGACY_HIDDEN_CHANNELS))) prefs.edit().remove(key(LEGACY_HIDDEN_CHANNELS)).apply()
+        val file = hiddenChannelsFile
+        if (!file.isFile) return emptySet()
+        return runCatching {
+            DataInputStream(file.inputStream().buffered()).use { input ->
+                val count = file.length().toInt() / Long.SIZE_BYTES
+                HashSet<Long>(count * 2).apply { repeat(count) { add(input.readLong()) } }
+            }
+        }.getOrDefault(emptySet())
+    }
+
+    fun saveHiddenChannelKeys(keys: Set<Long>) {
+        val target = hiddenChannelsFile
+        if (keys.isEmpty()) {
+            target.delete()
+            return
+        }
+        playlistDir.mkdirs()
+        val temp = File(target.path + ".tmp")
+        runCatching {
+            DataOutputStream(temp.outputStream().buffered()).use { out -> keys.forEach(out::writeLong) }
+            if (!temp.renameTo(target)) {
+                target.delete()
+                temp.renameTo(target)
+            }
+        }
+    }
+
+    // endregion
+
+    /** Categories in the order the viewer put them; ones not in it follow, A to Z. */
+    fun groupOrder(): List<String> = decodeGroups(GROUP_ORDER).toList()
+
+    fun saveGroupOrder(groups: List<String>) {
+        prefs.edit().putOrRemove(GROUP_ORDER, encodeGroups(groups)).apply()
     }
 
     fun favoriteUrls(): Set<String> =
@@ -123,8 +230,13 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
 
     companion object {
         const val PREFS = "nuvio_live_tv"
-        private const val SOURCE_TYPE = "source_type"
-        private const val SOURCE_URL = "source_url"
+        private const val SOURCES = "sources"
+        private const val HIDDEN_GROUPS = "hidden_groups"
+        private const val GROUP_ORDER = "group_order"
+        private const val LEGACY_HIDDEN_CHANNELS = "hidden_channel_urls"
+        private const val UNGROUPED_LINE = "\uE000"
+        private const val LEGACY_SOURCE_TYPE = "source_type"
+        private const val LEGACY_SOURCE_URL = "source_url"
         private const val STALKER_PORTAL = "stalker_portal_url"
         private const val STALKER_MAC = "stalker_mac_address"
         private const val STALKER_USER = "stalker_username"

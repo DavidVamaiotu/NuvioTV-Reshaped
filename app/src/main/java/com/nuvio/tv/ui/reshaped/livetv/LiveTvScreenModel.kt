@@ -59,11 +59,14 @@ class LiveTvScreenModel @Inject constructor(
 class LiveTvFilterInput(
     val channels: List<LiveTvChannel>,
     val favoriteUrls: Set<String>,
+    val hiddenGroups: Set<String>,
+    val hiddenChannels: Set<Long>,
     val filterKey: String,
     val query: String,
 ) {
     fun sameAs(other: LiveTvFilterInput): Boolean =
-        channels === other.channels && favoriteUrls === other.favoriteUrls &&
+        channels === other.channels && favoriteUrls === other.favoriteUrls && hiddenGroups === other.hiddenGroups &&
+            hiddenChannels === other.hiddenChannels &&
             filterKey == other.filterKey && query == other.query
 }
 

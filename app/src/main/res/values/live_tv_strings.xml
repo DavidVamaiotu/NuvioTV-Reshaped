@@ -10,7 +10,9 @@
     <string name="live_tv_channel_count">%1$d channels</string>
     <string name="live_tv_search">Search channels</string>
     <string name="live_tv_refresh">Refresh</string>
-    <string name="live_tv_source">Source</string>
+    <string name="live_tv_sources">Sources</string>
+    <string name="live_tv_categories">Categories</string>
+    <string name="live_tv_source_error">%1$s: %2$s</string>
     <string name="live_tv_continue">Continue watching</string>
     <string name="live_tv_favorite_add">Add to favorites</string>
     <string name="live_tv_favorite_remove">Remove from favorites</string>
@@ -23,8 +25,16 @@
     <string name="live_tv_empty_description">Connect an M3U playlist, an Xtream login or a Stalker portal. Setting it up from your phone is the quickest way.</string>
     <string name="live_tv_add_source">Add channels</string>
     <string name="live_tv_now">Now</string>
+    <string name="live_tv_minutes_left">%1$d min left</string>
+    <string name="live_tv_hours_minutes_left">%1$d h %2$d min left</string>
 
-    <string name="live_tv_source_title">Channel source</string>
+    <string name="live_tv_sources_title">Channel sources</string>
+    <string name="live_tv_sources_description">Channels from every source show together in one list.</string>
+    <string name="live_tv_source_add_title">Add a source</string>
+    <string name="live_tv_add_source_button">Add source</string>
+    <string name="live_tv_source_summary">%1$s · %2$d channels</string>
+    <string name="live_tv_remove_confirm">Press again to remove</string>
+    <string name="live_tv_back">Back</string>
     <string name="live_tv_source_description">Scan the code to set it up from your phone, or enter it here.</string>
     <string name="live_tv_source_m3u">M3U</string>
     <string name="live_tv_source_xtream">Xtream</string>
@@ -41,9 +51,24 @@
     <string name="live_tv_remove_source">Remove source</string>
     <string name="live_tv_close">Close</string>
     <string name="live_tv_phone_instruction">Scan with your phone to paste a link, type a login or send an M3U file.</string>
-    <string name="live_tv_current_source">Current: %1$s</string>
+
+    <string name="live_tv_categories_title">Categories</string>
+    <string name="live_tv_categories_description">OK shows or hides a category, ▶ picks its channels. Hold OK to move it, then ▲▼, and OK to drop it. Hidden ones leave the list, search and channel switching; favorites always stay.</string>
+    <string name="live_tv_category_channels_description">OK shows or hides a channel. Hidden ones leave the list, search and channel switching; favorites always stay.</string>
+    <string name="live_tv_categories_sort">A–Z</string>
+    <string name="live_tv_uncategorised">Uncategorised</string>
+    <string name="live_tv_categories_shown">%1$d of %2$d shown</string>
+    <string name="live_tv_categories_show_all">Show all</string>
+    <string name="live_tv_categories_hide_all">Hide all</string>
+    <string name="live_tv_categories_none">Categories show up here once channels have loaded.</string>
+    <string name="live_tv_done">Done</string>
+
+    <string name="live_tv_live_badge">LIVE</string>
+    <string name="settings_live_tv_previews_title">Channel previews</string>
+    <string name="settings_live_tv_previews_description">Play a small, muted picture of the channel you are on in the Live TV list</string>
 
     <string name="live_tv_player_channels">Channels</string>
+    <string name="live_tv_player_categories_hint">◀ Categories</string>
     <string name="live_tv_player_hint">▲▼ Switch channel  ·  ◀ Channel list  ·  ▶ Options</string>
 
     <string name="live_tv_error_invalid_url">Enter a valid HTTP or HTTPS playlist link.</string>

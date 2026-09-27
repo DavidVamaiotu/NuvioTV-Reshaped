@@ -4,8 +4,10 @@ package com.nuvio.tv.ui.reshaped.livetv
 
 import android.view.KeyEvent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
@@ -31,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -59,26 +62,30 @@ import com.nuvio.tv.R
 import com.nuvio.tv.domain.model.ProxyHeaders
 import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.model.StreamBehaviorHints
+import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.LiveTvUiState
 import com.nuvio.tv.ui.screens.player.PlayerEvent
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
-import com.nuvio.tv.ui.screens.player.onEvent
 import com.nuvio.tv.ui.screens.player.PlayerUiState
+import com.nuvio.tv.ui.screens.player.onEvent
 import com.nuvio.tv.ui.screens.player.switchToSourceStream
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Live TV inside Nuvio's player: CH+/CH- (and ▲▼ while the controls are hidden) switch channel,
- * ◀ opens the channel list, ▶ the player's controls, and a banner shows what is on after each switch. Everything is
+ * ◀ opens the channel list and ◀ again its categories, ▶ the player's controls, and a banner shows what is on after each switch. Everything is
  * inert unless the player is playing a Live TV channel.
  */
 @Stable
@@ -89,6 +96,16 @@ internal class LiveTvPlayerState(
 ) {
     var panelOpen by mutableStateOf(false)
         private set
+    /** The categories column beside the channel list (◀ from the list). */
+    var foldersOpen by mutableStateOf(false)
+        private set
+    /** The category the panel lists, or null for the list being zapped. */
+    var panelFolderKey by mutableStateOf<String?>(null)
+        private set
+    /** The channels the panel lists. */
+    var panelChannels by mutableStateOf<List<LiveTvChannel>>(emptyList())
+        private set
+    private var folderJob: Job? = null
     /** The list entry of the channel playing now (a Stalker link differs from its list URL). */
     var currentListUrl by mutableStateOf<String?>(null)
         private set
@@ -108,11 +125,20 @@ internal class LiveTvPlayerState(
         }
     }
 
-    /** The list zapping moves through: the one the channel was picked from. */
-    internal fun zapList(): List<LiveTvChannel> {
+    /** The list zapping moves through: the one the channel was picked from, else every shown channel. */
+    internal fun zapList(): List<LiveTvChannel> = zapTarget().first
+
+    /** The list zapping moves through and the category it is (null for a search). */
+    private fun zapTarget(): Pair<List<LiveTvChannel>, String?> {
         val picked = LiveTvRepository.zapList
-        return if (picked.any { it.streamUrl == currentListUrl }) picked else LiveTvRepository.uiState.value.channels
+        if (picked.any { it.streamUrl == currentListUrl }) return picked to LiveTvRepository.zapFolderKey
+        // Worked out off the main thread whenever the list or what is hidden changes.
+        return LiveTvRepository.uiState.value.shownChannels to FILTER_ALL
     }
+
+    /** The category the panel's list is, so the categories open on it; null for a search. */
+    var zappedFolderKey by mutableStateOf<String?>(null)
+        private set
 
     /** Called first by the player's key handler; true when the key was Live TV's. */
     fun onPreviewKey(event: KeyEvent, uiState: PlayerUiState): Boolean {
@@ -122,10 +148,25 @@ internal class LiveTvPlayerState(
             uiState.showSpeedDialog || uiState.showSubtitleDelayOverlay || uiState.showSubtitleTimingDialog ||
             uiState.showMoreDialog || uiState.showStreamInfoOverlay
         val down = event.action == KeyEvent.ACTION_DOWN
+        if (panelOpen && foldersOpen) {
+            return when (event.keyCode) {
+                // Back to the channels, which show the category last focused.
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (!down) foldersOpen = false
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> true
+                else -> false // the column handles the rest
+            }
+        }
         if (panelOpen) {
             return when (event.keyCode) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     if (!down) closePanel()
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    if (down && event.repeatCount == 0) foldersOpen = true
                     true
                 }
                 KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> true
@@ -147,7 +188,7 @@ internal class LiveTvPlayerState(
                 true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (down && event.repeatCount == 0) panelOpen = true
+                if (down && event.repeatCount == 0) openPanel()
                 true // also swallows the release, which would commit a seek
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
@@ -162,6 +203,35 @@ internal class LiveTvPlayerState(
     private fun zap(step: Int) {
         val next = LiveTvRepository.neighbour(zapList(), currentListUrl, step) ?: return
         switchTo(next)
+    }
+
+    private fun openPanel() {
+        folderJob?.cancel()
+        panelFolderKey = null
+        val (channels, folderKey) = zapTarget()
+        panelChannels = channels
+        zappedFolderKey = folderKey
+        foldersOpen = false
+        panelOpen = true
+    }
+
+    /** Shows a category's channels in the panel; zapping follows once one of them is picked. */
+    internal fun showFolder(key: String) {
+        if (key == panelFolderKey) return
+        panelFolderKey = key
+        folderJob?.cancel()
+        folderJob = scope.launch {
+            val state = LiveTvRepository.uiState.value
+            panelChannels = withContext(Dispatchers.Default) {
+                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelKeys, key)
+            }
+        }
+    }
+
+    /** A channel picked from the panel: zapping then stays in the list it was picked from. */
+    internal fun pickFromPanel(channel: LiveTvChannel) {
+        panelFolderKey?.let { LiveTvRepository.setZapList(panelChannels, it) }
+        switchTo(channel)
     }
 
     internal fun switchTo(channel: LiveTvChannel) {
@@ -189,6 +259,7 @@ internal class LiveTvPlayerState(
     internal fun closePanel() {
         if (!panelOpen) return
         panelOpen = false
+        foldersOpen = false
         runCatching { containerFocusRequester.requestFocus() }
     }
 
@@ -235,8 +306,9 @@ internal fun LiveTvPlayerOverlay(state: LiveTvPlayerState, uiState: PlayerUiStat
 private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiState: PlayerUiState) {
     LaunchedEffect(Unit) { state.syncCurrent() }
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
+    val clock = rememberLiveTvMinuteClock()
     // Numbered within the list being zapped (a category keeps its own 1, 2, 3...).
-    val zapList = remember(state.currentListUrl, liveState.channels) { state.zapList() }
+    val zapList = remember(state.currentListUrl, liveState.shownChannels) { state.zapList() }
     val currentIndex = remember(state.currentListUrl, zapList) { zapList.indexOfFirst { it.streamUrl == state.currentListUrl } }
     val current = zapList.getOrNull(currentIndex)
 
@@ -258,6 +330,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
                 channel = channel,
                 programme = channel.tvgId?.let(liveState.currentProgrammes::get),
                 number = currentIndex + 1,
+                clock = clock,
             )
         }
     }
@@ -268,12 +341,12 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         exit = slideOutHorizontally { -it } + fadeOut(),
         modifier = Modifier.align(Alignment.CenterStart).zIndex(3f),
     ) {
-        LiveTvChannelPanel(state, liveState.currentProgrammes)
+        LiveTvChannelPanel(state, liveState.currentProgrammes, clock)
     }
 }
 
 @Composable
-private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, number: Int) {
+private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {
     Row(
         modifier = Modifier
             .padding(start = 48.dp, top = 40.dp)
@@ -304,12 +377,28 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
             )
             if (programme != null) {
                 Text(
-                    text = "${programme.title}  ·  ${programme.timeLabel}",
+                    text = programme.title,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.75f),
+                    color = Color.White.copy(alpha = 0.85f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Row(modifier = Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    LiveTvProgressBar(
+                        programme = programme,
+                        clock = clock,
+                        fill = Color.White,
+                        track = Color.White.copy(alpha = 0.18f),
+                        modifier = Modifier.width(220.dp),
+                    )
+                    Text(
+                        text = "${programme.timeLabel}  ·  ${liveTvTimeLeft(programme, clock)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        modifier = Modifier.padding(start = 10.dp),
+                    )
+                }
             }
             Text(
                 text = stringResource(R.string.live_tv_player_hint),
@@ -322,37 +411,173 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
 }
 
 @Composable
-private fun LiveTvChannelPanel(state: LiveTvPlayerState, programmes: Map<String, LiveTvProgramme>) {
-    val channels = remember(state.panelOpen) { state.zapList() }
-    val startIndex = remember(channels) { channels.indexOfFirst { it.streamUrl == state.currentListUrl }.coerceAtLeast(0) }
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 3).coerceAtLeast(0))
-    val currentFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        // The row must be composed before it can take focus.
-        repeat(10) {
-            if (runCatching { currentFocus.requestFocus() }.isSuccess) return@LaunchedEffect
-            delay(16)
-        }
-    }
-    Column(
+private fun LiveTvChannelPanel(state: LiveTvPlayerState, programmes: Map<String, LiveTvProgramme>, clock: State<Long>) {
+    val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
+    Row(
         modifier = Modifier
             .fillMaxHeight()
-            .width(460.dp)
             .background(
                 Brush.horizontalGradient(
                     0f to Color.Black.copy(alpha = 0.92f),
                     0.85f to Color.Black.copy(alpha = 0.82f),
                     1f to Color.Black.copy(alpha = 0f),
                 ),
-            )
-            .padding(start = 32.dp, end = 40.dp, top = 32.dp),
+            ),
     ) {
+        AnimatedVisibility(
+            visible = state.foldersOpen,
+            enter = expandHorizontally(expandFrom = Alignment.Start) + fadeIn(),
+            exit = shrinkHorizontally(shrinkTowards = Alignment.Start) + fadeOut(),
+        ) {
+            LiveTvFolderColumn(state, liveState)
+        }
+        LiveTvChannelColumn(state, programmes, liveState, clock)
+    }
+}
+
+/** The categories: focusing one lists its channels beside it (after a short rest, so passing over is cheap). */
+@Composable
+private fun LiveTvFolderColumn(state: LiveTvPlayerState, liveState: LiveTvUiState) {
+    val allLabel = stringResource(R.string.live_tv_all_channels)
+    val favoritesLabel = stringResource(R.string.live_tv_favorites)
+    val uncategorisedLabel = liveTvGroupLabel(LIVE_TV_UNGROUPED)
+    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, allLabel, favoritesLabel, uncategorisedLabel) {
+        buildList {
+            add(FILTER_ALL to allLabel)
+            add(FILTER_FAVORITES to favoritesLabel)
+            if (liveState.sources.size > 1) liveState.sources.forEach { add(FILTER_SOURCE_PREFIX + it.id to it.label) }
+            liveState.visibleGroups.forEach { add(it to if (it == LIVE_TV_UNGROUPED) uncategorisedLabel else it) }
+        }
+    }
+    // The panel opens on the zapped list's category (All channels for a search or one gone since).
+    val zappedFolder = state.zappedFolderKey?.takeIf { key -> folders.any { it.first == key } } ?: FILTER_ALL
+    val startKey = state.panelFolderKey ?: zappedFolder
+    val startIndex = folders.indexOfFirst { it.first == startKey }.coerceAtLeast(0)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 3).coerceAtLeast(0))
+    val startFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        repeat(10) {
+            if (runCatching { startFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+            delay(16)
+        }
+    }
+    Column(modifier = Modifier.fillMaxHeight().width(250.dp).padding(start = 32.dp, top = 32.dp, end = 8.dp)) {
         Text(
-            text = stringResource(R.string.live_tv_player_channels),
+            text = stringResource(R.string.live_tv_categories),
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.SemiBold,
             color = Color.White,
             modifier = Modifier.padding(bottom = 16.dp),
+        )
+        LazyColumn(
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            contentPadding = PaddingValues(bottom = 32.dp),
+        ) {
+            itemsIndexed(folders, key = { _, folder -> folder.first }) { index, (key, label) ->
+                FolderRow(
+                    label = label,
+                    selected = key == (state.panelFolderKey ?: startKey),
+                    onFocused = { state.showFolder(key) },
+                    onClick = { state.showFolder(key) },
+                    modifier = if (index == startIndex) Modifier.focusRequester(startFocus) else Modifier,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderRow(
+    label: String,
+    selected: Boolean,
+    onFocused: () -> Unit,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(focused) {
+        if (focused && !selected) {
+            delay(250) // passing over a category does not re-filter
+            onFocused()
+        }
+    }
+    Card(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
+        shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
+        colors = CardDefaults.colors(
+            containerColor = if (selected) Color.White.copy(alpha = 0.12f) else Color.Transparent,
+            focusedContainerColor = Color.White,
+        ),
+        scale = CardDefaults.scale(focusedScale = 1.02f),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (focused) Color.Black else if (selected) Color.White else Color.White.copy(alpha = 0.7f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        )
+    }
+}
+
+@Composable
+private fun LiveTvChannelColumn(
+    state: LiveTvPlayerState,
+    programmes: Map<String, LiveTvProgramme>,
+    liveState: LiveTvUiState,
+    clock: State<Long>,
+) {
+    val channels = state.panelChannels
+    val startIndex = remember(channels) { channels.indexOfFirst { it.streamUrl == state.currentListUrl }.coerceAtLeast(0) }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 3).coerceAtLeast(0))
+    // A new category starts at its top (or at the channel playing, when it has it).
+    LaunchedEffect(channels) {
+        if (listState.layoutInfo.visibleItemsInfo.none { it.index == startIndex }) {
+            listState.scrollToItem((startIndex - 3).coerceAtLeast(0))
+        }
+    }
+    val currentFocus = remember { FocusRequester() }
+    // On opening, and when the categories close, focus goes to the channel playing (or the first).
+    LaunchedEffect(state.foldersOpen) {
+        if (state.foldersOpen) return@LaunchedEffect
+        // The row must be composed before it can take focus.
+        repeat(10) {
+            if (runCatching { currentFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+            delay(16)
+        }
+    }
+    val folderKey = state.panelFolderKey
+    val folderLabel = when {
+        folderKey == null -> null
+        folderKey == FILTER_ALL -> stringResource(R.string.live_tv_all_channels)
+        folderKey == FILTER_FAVORITES -> stringResource(R.string.live_tv_favorites)
+        folderKey.startsWith(FILTER_SOURCE_PREFIX) ->
+            liveState.sources.firstOrNull { FILTER_SOURCE_PREFIX + it.id == folderKey }?.label
+        else -> folderKey
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(460.dp)
+            .padding(start = if (state.foldersOpen) 8.dp else 32.dp, end = 40.dp, top = 32.dp),
+    ) {
+        Text(
+            text = folderLabel ?: stringResource(R.string.live_tv_player_channels),
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = stringResource(R.string.live_tv_player_categories_hint),
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = if (state.foldersOpen) 0f else 0.45f),
+            modifier = Modifier.padding(top = 2.dp, bottom = 12.dp),
         )
         LazyColumn(
             state = listState,
@@ -364,9 +589,22 @@ private fun LiveTvChannelPanel(state: LiveTvPlayerState, programmes: Map<String,
                     channel = channel,
                     programme = channel.tvgId?.let(programmes::get),
                     playing = channel.streamUrl == state.currentListUrl,
-                    onClick = { state.switchTo(channel) },
+                    clock = clock,
+                    onClick = { state.pickFromPanel(channel) },
                     modifier = if (index == startIndex) Modifier.focusRequester(currentFocus) else Modifier,
                 )
+            }
+            if (channels.isEmpty()) {
+                item(key = "empty") {
+                    Text(
+                        text = stringResource(
+                            if (folderKey == FILTER_FAVORITES) R.string.live_tv_no_favorites else R.string.live_tv_no_channels_found,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(vertical = 12.dp),
+                    )
+                }
             }
         }
     }
@@ -377,6 +615,7 @@ private fun PanelRow(
     channel: LiveTvChannel,
     programme: LiveTvProgramme?,
     playing: Boolean,
+    clock: State<Long>,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -391,7 +630,7 @@ private fun PanelRow(
         scale = CardDefaults.scale(focusedScale = 1.02f),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 10.dp),
+            modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 60.dp, height = 38.dp)
@@ -412,6 +651,22 @@ private fun PanelRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    Row(modifier = Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                        LiveTvProgressBar(
+                            programme = it,
+                            clock = clock,
+                            fill = if (focused) Color.Black else Color.White,
+                            track = if (focused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.15f),
+                            modifier = Modifier.width(120.dp),
+                        )
+                        Text(
+                            text = liveTvTimeLeft(it, clock),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (focused) Color.Black.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.5f),
+                            maxLines = 1,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
                 }
             }
             if (playing) {
