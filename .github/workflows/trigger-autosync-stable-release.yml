@@ -2,7 +2,7 @@ name: Trigger AutoSync TV Stable Release
 
 # Fresh stable release: Live TV, seek previews, pill menu and the latest fork features
 
-# Trigger: rebuild stable AutoSync after dependency fix
+# Trigger: AutoSync dense dialogue offset fix
 
 on:
   workflow_dispatch:
