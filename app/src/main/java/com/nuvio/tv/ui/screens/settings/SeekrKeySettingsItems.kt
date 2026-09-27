@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -47,7 +48,9 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
+import com.nuvio.tv.reshaped.phoneentry.PhoneEntryPage
 import com.nuvio.tv.ui.components.NuvioDialog
+import com.nuvio.tv.ui.reshaped.phoneentry.PhoneEntryQr
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekrKeyPreferences
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.launch
@@ -112,90 +115,117 @@ private fun SeekrApiKeyDialog(currentValue: String, onDismiss: () -> Unit) {
         onDismiss = onDismiss,
         title = stringResource(R.string.settings_seekr_api_key),
         subtitle = stringResource(R.string.settings_seekr_api_key_description),
-        width = 700.dp
+        width = 860.dp,
+        usePlatformDefaultWidth = false,
     ) {
-        Card(
-            onClick = { inputFocusRequester.requestFocus() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .onFocusChanged { isInputFocused = it.isFocused || it.hasFocus },
-            colors = CardDefaults.colors(
-                containerColor = NuvioTheme.colors.BackgroundElevated,
-                focusedContainerColor = NuvioTheme.colors.BackgroundElevated
-            ),
-            border = CardDefaults.border(
-                border = Border(
-                    border = BorderStroke(NuvioTheme.spacing.hairline, NuvioTheme.colors.Border),
-                    shape = RoundedCornerShape(10.dp)
-                ),
-                focusedBorder = Border(
-                    border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
-                    shape = RoundedCornerShape(10.dp)
-                )
-            ),
-            shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
-            scale = CardDefaults.scale(focusedScale = 1f)
-        ) {
-            Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = NuvioTheme.spacing.md)) {
-                BasicTextField(
-                    value = value,
-                    onValueChange = { value = it },
+        val phonePage = PhoneEntryPage(
+            title = stringResource(R.string.settings_seekr_api_key),
+            subtitle = stringResource(R.string.settings_seekr_phone_subtitle),
+            fieldLabel = stringResource(R.string.settings_seekr_api_key),
+            send = stringResource(R.string.settings_seekr_phone_send),
+            sending = stringResource(R.string.settings_seekr_phone_sending),
+            sent = stringResource(R.string.settings_seekr_phone_sent),
+            failed = stringResource(R.string.settings_seekr_phone_failed),
+            secret = true,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xl)) {
+            // Typing a long key with the remote is slow: scan to paste it on a phone.
+            PhoneEntryQr(
+                page = phonePage,
+                instruction = stringResource(R.string.settings_seekr_phone_instruction),
+                onValue = { sent ->
+                    value = sent
+                    if (!validating) save(sent)
+                },
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.lg),
+            ) {
+                Card(
+                    onClick = { inputFocusRequester.requestFocus() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .focusRequester(inputFocusRequester)
-                        .onKeyEvent { event ->
-                            event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER &&
-                                event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN
-                        },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = NuvioTheme.colors.TextPrimary),
-                    cursorBrush = SolidColor(if (isInputFocused) NuvioTheme.colors.Primary else Color.Transparent),
-                    decorationBox = { innerTextField ->
-                        if (value.isBlank()) {
-                            Text(
-                                text = stringResource(R.string.settings_seekr_api_key_builtin),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = NuvioTheme.colors.TextTertiary
-                            )
-                        }
-                        innerTextField()
+                        .onFocusChanged { isInputFocused = it.isFocused || it.hasFocus },
+                    colors = CardDefaults.colors(
+                        containerColor = NuvioTheme.colors.BackgroundElevated,
+                        focusedContainerColor = NuvioTheme.colors.BackgroundElevated
+                    ),
+                    border = CardDefaults.border(
+                        border = Border(
+                            border = BorderStroke(NuvioTheme.spacing.hairline, NuvioTheme.colors.Border),
+                            shape = RoundedCornerShape(10.dp)
+                        ),
+                        focusedBorder = Border(
+                            border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                    ),
+                    shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
+                    scale = CardDefaults.scale(focusedScale = 1f)
+                ) {
+                    Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = NuvioTheme.spacing.md)) {
+                        BasicTextField(
+                            value = value,
+                            onValueChange = { value = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(inputFocusRequester)
+                                .onKeyEvent { event ->
+                                    event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER &&
+                                        event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN
+                                },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(color = NuvioTheme.colors.TextPrimary),
+                            cursorBrush = SolidColor(if (isInputFocused) NuvioTheme.colors.Primary else Color.Transparent),
+                            decorationBox = { innerTextField ->
+                                if (value.isBlank()) {
+                                    Text(
+                                        text = stringResource(R.string.settings_seekr_api_key_builtin),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = NuvioTheme.colors.TextTertiary
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        )
                     }
-                )
-            }
-        }
+                }
 
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Button(
-                onClick = onDismiss,
-                colors = ButtonDefaults.colors(
-                    containerColor = NuvioTheme.colors.BackgroundElevated,
-                    contentColor = NuvioTheme.colors.TextPrimary
-                )
-            ) {
-                Text(stringResource(R.string.action_cancel))
-            }
-            Spacer(modifier = Modifier.width(NuvioTheme.spacing.sm))
-            Button(
-                onClick = { if (!validating) save("") },
-                colors = ButtonDefaults.colors(
-                    containerColor = NuvioTheme.colors.BackgroundElevated,
-                    contentColor = NuvioTheme.colors.TextPrimary
-                )
-            ) {
-                Text(stringResource(R.string.action_clear))
-            }
-            Spacer(modifier = Modifier.width(NuvioTheme.spacing.sm))
-            Button(
-                onClick = { if (!validating) save(value) },
-                colors = ButtonDefaults.colors(
-                    containerColor = NuvioTheme.colors.BackgroundCard,
-                    contentColor = NuvioTheme.colors.TextPrimary
-                )
-            ) {
-                Text(stringResource(if (validating) R.string.action_saving else R.string.action_save))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Button(
+                        onClick = onDismiss,
+                        colors = ButtonDefaults.colors(
+                            containerColor = NuvioTheme.colors.BackgroundElevated,
+                            contentColor = NuvioTheme.colors.TextPrimary
+                        )
+                    ) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                    Spacer(modifier = Modifier.width(NuvioTheme.spacing.sm))
+                    Button(
+                        onClick = { if (!validating) save("") },
+                        colors = ButtonDefaults.colors(
+                            containerColor = NuvioTheme.colors.BackgroundElevated,
+                            contentColor = NuvioTheme.colors.TextPrimary
+                        )
+                    ) {
+                        Text(stringResource(R.string.action_clear))
+                    }
+                    Spacer(modifier = Modifier.width(NuvioTheme.spacing.sm))
+                    Button(
+                        onClick = { if (!validating) save(value) },
+                        colors = ButtonDefaults.colors(
+                            containerColor = NuvioTheme.colors.BackgroundCard,
+                            contentColor = NuvioTheme.colors.TextPrimary
+                        )
+                    ) {
+                        Text(stringResource(if (validating) R.string.action_saving else R.string.action_save))
+                    }
+                }
             }
         }
     }

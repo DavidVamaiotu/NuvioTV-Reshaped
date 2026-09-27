@@ -6,4 +6,10 @@
     <string name="settings_seekr_api_key_custom">Your own key</string>
     <string name="settings_seekr_api_key_description">Seek preview thumbnails come from seekr.tv. The built-in key is shared by everyone and allows only 40 different titles a day, so previews can stop working. Get a free key at seekr.tv and paste it here. Leave it empty to use the built-in key.</string>
     <string name="settings_seekr_api_key_invalid">Seekr didn\'t accept this key.</string>
+    <string name="settings_seekr_phone_instruction">Scan with your phone to paste your key there.</string>
+    <string name="settings_seekr_phone_subtitle">Paste your key from seekr.tv. The TV checks it and saves it.</string>
+    <string name="settings_seekr_phone_send">Send to TV</string>
+    <string name="settings_seekr_phone_sending">Sending…</string>
+    <string name="settings_seekr_phone_sent">Sent. Check the TV to see if the key was accepted.</string>
+    <string name="settings_seekr_phone_failed">Could not reach the TV. Is the Seekr key screen still open?</string>
 </resources>
