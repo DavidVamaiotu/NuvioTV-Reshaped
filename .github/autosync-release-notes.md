@@ -1,1 +1,4 @@
-- **Smoother playback.** Fixes a short judder every 10 to 20 seconds. Seek preview thumbnails are now made while you pause or seek instead of during playback.
+- **Live TV page.** Add more than one source, and hide, reorder or hide single channels by category. The remote no longer gets stuck in search. Press Left twice in the player to open categories. What's on now shows with a progress bar and time left. Channel previews are capped at 720p on low-RAM TVs.
+- **Liquid glass.** On Android 13+ TVs with 3 GB+ RAM, the pill menu is a real glass lens when "Modern sidebar blur" is on. Other TVs get a thicker-looking glass with a lit rim.
+- **Volume boost.** The Audio panel shows amplification as a boost up to 200% with a red-tinted bar. Loud peaks are rounded off smoothly, and the mpv 10 dB setting is now really 10 dB.
+- The README now describes Nuvio Reshaped.
