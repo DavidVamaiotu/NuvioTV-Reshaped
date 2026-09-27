@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: smoother playback (no preview decoding while playing)
+# Release trigger: Live TV page, liquid glass pill, volume boost
 
 
 on:
