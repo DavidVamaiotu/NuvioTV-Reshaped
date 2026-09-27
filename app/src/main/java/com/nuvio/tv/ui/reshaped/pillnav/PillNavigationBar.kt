@@ -47,7 +47,7 @@ import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -208,7 +208,8 @@ internal fun PillNavigationBar(
     )
     val innerPaddingPx = with(density) { PillNavTokens.innerPadding.toPx() }
     val rowHeightPx = with(density) { (PillNavTokens.barHeight - PillNavTokens.innerPadding * 2).toPx() }
-    var barOrigin by remember { mutableStateOf(Offset.Zero) }
+    // Kept out of state: the glass reads it while drawing, and a move redraws it through hideFraction/version.
+    val barCoordinates = remember { arrayOfNulls<LayoutCoordinates>(1) }
 
     Box(
         modifier = modifier
@@ -230,7 +231,7 @@ internal fun PillNavigationBar(
                 }
                 .then(
                     if (refracts) {
-                        Modifier.onGloballyPositioned { barOrigin = it.positionInRoot() }
+                        Modifier.onGloballyPositioned { barCoordinates[0] = it }
                     } else {
                         Modifier
                             .drawWithCache {
@@ -247,7 +248,8 @@ internal fun PillNavigationBar(
             if (refracts && backdrop != null) {
                 LiquidPillGlass(
                     backdrop = backdrop,
-                    origin = { barOrigin },
+                    coordinates = { barCoordinates[0] },
+                    transformTick = { hideFraction.value },
                     lens = {
                         if (!showLens || !indicator.placed) null
                         else indicator.bounds(rowHeightPx).translate(innerPaddingPx, innerPaddingPx)
@@ -577,27 +579,30 @@ private fun DrawScope.drawStaticGlassEdge(paint: StaticGlassPaint) {
 @Composable
 private fun LiquidPillGlass(
     backdrop: PillGlassBackdrop,
-    origin: () -> Offset,
+    coordinates: () -> LayoutCoordinates?,
+    transformTick: () -> Float,
     lens: () -> Rect?,
     focus: () -> Float,
     tint: Color,
     modifier: Modifier,
 ) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-    LiquidPillGlassApi33(backdrop, origin, lens, focus, tint, modifier)
+    LiquidPillGlassApi33(backdrop, coordinates, transformTick, lens, focus, tint, modifier)
 }
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 @Composable
 private fun LiquidPillGlassApi33(
     backdrop: PillGlassBackdrop,
-    origin: () -> Offset,
+    coordinates: () -> LayoutCoordinates?,
+    transformTick: () -> Float,
     lens: () -> Rect?,
     focus: () -> Float,
     tint: Color,
     modifier: Modifier,
 ) {
     val shader = remember { RuntimeShader(PillGlassShader) }
+    LaunchedEffect(backdrop) { backdrop.refreshWhileShown() }
     Box(
         modifier
             .graphicsLayer {
@@ -616,8 +621,9 @@ private fun LiquidPillGlassApi33(
             }
             .drawBehind {
                 backdrop.version // Redraw whenever the screen behind was re-recorded.
+                transformTick() // and while the pill tucks away, so the backdrop follows its scale.
                 drawRect(GlassBaseColor)
-                with(backdrop) { drawAligned(origin()) }
+                with(backdrop) { drawAligned(coordinates()) }
             },
     )
 }
