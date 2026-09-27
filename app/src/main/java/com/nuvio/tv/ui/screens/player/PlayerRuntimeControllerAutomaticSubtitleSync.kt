@@ -74,6 +74,8 @@ private fun PlayerRuntimeController.prefetchAutoSyncIndex(
     url: String,
     headers: Map<String, String>,
 ) {
+    // A live channel has no subtitle index, and a second connection can take its provider's only slot.
+    if (com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url)) return
     AutoSyncPreferences.ensureLoaded(context)
     if (!AutoSyncPreferences.isEnabled(context)) return
     EmbeddedSubtitleTimelineLoader.prefetch(scope, url, headers)

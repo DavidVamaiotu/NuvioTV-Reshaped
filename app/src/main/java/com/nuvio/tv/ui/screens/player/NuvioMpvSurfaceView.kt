@@ -185,7 +185,9 @@ class NuvioMpvSurfaceView @JvmOverloads constructor(
             context = context,
             streamUrl = streamUrl,
             bytesPerSecond = mpv.getPropertyDouble("cache-speed")?.toLong() ?: 0L,
-            isFetching = mpv.getPropertyBoolean("demuxer-cache-idle") == false
+            // A live stream (no duration) only arrives at its own bitrate: it says nothing about the network.
+            isFetching = mpv.getPropertyBoolean("demuxer-cache-idle") == false &&
+                (mpv.getPropertyDouble("duration") ?: 0.0) > 0.0
         )
     }
 

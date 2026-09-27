@@ -294,7 +294,8 @@ internal fun PlayerRuntimeController.startProgressUpdates() {
                     playerReportsLive = player.isCurrentMediaItemLive,
                     isPlaying = player.isPlaying
                 )
-                PlaybackThroughput.onExoTick(context, currentStreamUrl, com.nuvio.tv.ui.screens.player.seekbuffer.SeekReadAhead.isDownloading() ?: player.isLoading) // Nuvio RS hook: read-ahead's connection
+                // Nuvio RS hook: read-ahead's connection; a live stream only arrives at its own bitrate, so it says nothing about the network.
+                PlaybackThroughput.onExoTick(context, currentStreamUrl, !player.isCurrentMediaItemLive && playerDuration != androidx.media3.common.C.TIME_UNSET && (com.nuvio.tv.ui.screens.player.seekbuffer.SeekReadAhead.isDownloading() ?: player.isLoading))
                 playbackAnalyticsDiagnostics.recordProgressSnapshot(
                     player = player,
                     hasRenderedFirstFrame = hasRenderedFirstFrame,
