@@ -25,6 +25,8 @@
     <string name="live_tv_empty_description">Connect an M3U playlist, an Xtream login or a Stalker portal. Setting it up from your phone is the quickest way.</string>
     <string name="live_tv_add_source">Add channels</string>
     <string name="live_tv_now">Now</string>
+    <string name="live_tv_minutes_left">%1$d min left</string>
+    <string name="live_tv_hours_minutes_left">%1$d h %2$d min left</string>
 
     <string name="live_tv_sources_title">Channel sources</string>
     <string name="live_tv_sources_description">Channels from every source show together in one list.</string>
