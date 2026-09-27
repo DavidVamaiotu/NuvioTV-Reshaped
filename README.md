@@ -10,7 +10,7 @@
     Everything you know from Nuvio, plus subtitles that sync themselves, instant seeking with previews, Live TV and a calmer, more cinematic player. Tuned to stay light on low-end TVs.
   </p>
 
-  [Download](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases) · [Phone version](https://github.com/DavidVamaiotu/NuvioMobile-AutoSync) · [Official Nuvio](https://nuvio.tv)
+  [Download](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases) · [Phone version](https://github.com/DavidVamaiotu/NuvioMobile-Reshaped) · [Official Nuvio](https://nuvio.tv)
 
 </div>
 
