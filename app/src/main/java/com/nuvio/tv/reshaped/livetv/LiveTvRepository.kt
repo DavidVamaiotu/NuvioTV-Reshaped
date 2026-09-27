@@ -58,6 +58,8 @@ object LiveTvRepository {
     private var epgJob: Job? = null
     @Volatile private var epgGeneration = 0
     private var epgKey: Pair<List<String>, Set<String>>? = null
+    /** The viewer's category order; empty for A to Z. */
+    @Volatile private var groupOrder: List<String> = emptyList()
 
     /** What each source loaded last. Only touched from [publish] and the loads, which run one at a time. */
     private class LoadedSource(val channels: List<LiveTvChannel>, val epgUrls: List<String>)
@@ -80,12 +82,14 @@ object LiveTvRepository {
                 LiveTvStorage(appContext, profileId).also { it.favoriteUrls() } // first read parses the file
             }
             val sources = withContext(Dispatchers.IO) { store.sources() }
+            groupOrder = withContext(Dispatchers.IO) { store.groupOrder() }
             storage = store
             synchronized(loaded) { loaded.clear() }
             _uiState.value = LiveTvUiState(
                 sources = sources,
                 favoriteUrls = store.favoriteUrls(),
                 hiddenGroups = store.hiddenGroups(),
+                hiddenChannelUrls = store.hiddenChannelUrls(),
                 recentChannel = store.recentChannel(),
             )
             reloadAll()
@@ -203,6 +207,42 @@ object LiveTvRepository {
     /** Shows every category, or hides every one (to then pick the few that are wanted). */
     fun setAllGroupsHidden(hidden: Boolean) {
         saveHiddenGroups(if (hidden) _uiState.value.groups.toHashSet() else emptySet())
+    }
+
+    /** Shows or hides single channels (a whole category's at once for Show all / Hide all). */
+    fun setChannelsHidden(streamUrls: Collection<String>, hidden: Boolean) {
+        val current = _uiState.value.hiddenChannelUrls
+        val next = if (hidden) current + streamUrls else current - streamUrls.toSet()
+        if (next.size == current.size) return
+        _uiState.update { it.copy(hiddenChannelUrls = next) }
+        storage?.let { store -> scope.launch(Dispatchers.IO) { store.saveHiddenChannelUrls(next) } }
+    }
+
+    /** Moves a category [step] places up (negative) or down; the order is kept for every list. */
+    fun moveGroup(group: String, step: Int) {
+        val groups = _uiState.value.groups
+        val from = groups.indexOf(group)
+        val to = from + step
+        if (from < 0 || to !in groups.indices) return
+        val reordered = ArrayList(groups).apply { add(to, removeAt(from)) }
+        groupOrder = reordered
+        _uiState.update { it.copy(groups = reordered) }
+        storage?.let { store -> scope.launch(Dispatchers.IO) { store.saveGroupOrder(reordered) } }
+    }
+
+    /** Back to A to Z. */
+    fun resetGroupOrder() {
+        groupOrder = emptyList()
+        _uiState.update { it.copy(groups = orderedGroups(it.groupCounts.keys)) }
+        storage?.let { store -> scope.launch(Dispatchers.IO) { store.saveGroupOrder(emptyList()) } }
+    }
+
+    /** [names] in the viewer's order, then the ones it does not have yet, A to Z. */
+    private fun orderedGroups(names: Set<String>): List<String> {
+        val ordered = groupOrder.filterTo(ArrayList()) { it in names }
+        val placed = ordered.toHashSet()
+        names.filterNot(placed::contains).sortedWith(String.CASE_INSENSITIVE_ORDER).forEach(ordered::add)
+        return ordered
     }
 
     private fun saveHiddenGroups(groups: Set<String>) {
@@ -414,7 +454,7 @@ object LiveTvRepository {
             if (channel.group.isNotBlank()) groupCounts[channel.group] = (groupCounts[channel.group] ?: 0) + 1
             sourceCounts[channel.sourceId] = (sourceCounts[channel.sourceId] ?: 0) + 1
         }
-        val groups = groupCounts.keys.sortedWith(String.CASE_INSENSITIVE_ORDER)
+        val groups = orderedGroups(groupCounts.keys)
         val epgUrls = parts.flatMap { it.epgUrls }.distinct()
         val tvgIds = channels.mapNotNullTo(LinkedHashSet()) { it.tvgId?.takeIf(String::isNotBlank) }
         val hasGuide = epgUrls.isNotEmpty() && tvgIds.isNotEmpty()
