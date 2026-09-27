@@ -1007,8 +1007,10 @@ open class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    val rootRoutes = remember(discoverLocation) {
+                    val liveTvMenuItem = com.nuvio.tv.ui.reshaped.livetv.rememberLiveTvMenuItem(currentRoute, navController) // Nuvio RS hook: Live TV menu entry
+                    val rootRoutes = remember(discoverLocation, liveTvMenuItem) {
                         buildSet {
+                            liveTvMenuItem?.let { add(it.route) } // Nuvio RS hook: Live TV menu entry
                             add(Screen.Home.route)
                             add(Screen.Search.route)
                             add(Screen.Library.route)
@@ -1030,7 +1032,8 @@ open class MainActivity : ComponentActivity() {
                         strNavSearch,
                         strNavLibrary,
                         strNavSettings,
-                        discoverLocation
+                        discoverLocation,
+                        liveTvMenuItem
                     ) {
                         buildList {
                             add(
@@ -1063,6 +1066,7 @@ open class MainActivity : ComponentActivity() {
                                     iconRes = R.raw.sidebar_library
                                 )
                             )
+                            liveTvMenuItem?.let(::add) // Nuvio RS hook: Live TV menu entry
                             add(
                                 DrawerItem(
                                     route = Screen.Settings.route,

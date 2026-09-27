@@ -50,6 +50,7 @@ internal fun NuvioReshapedSettingsContent(
         subtitleFontSettingsItems()
         connectionSpeedSettingsItems()
         pillNavSettingsItems()
+        liveTvSettingsItems()
         seekBufferSettingsItems()
     }
 }
