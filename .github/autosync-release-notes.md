@@ -1,7 +1,1 @@
-- **Live TV.** Watch your IPTV channels from an M3U playlist, an Xtream login or a Stalker portal. Turn it on in Settings > Nuvio Reshaped and it appears in the menu. Set it up from your phone by scanning the QR code, including sending an .m3u file. It shows what's on now with a progress bar, and has favorites and a "Continue watching" row. In the player, ▲▼ or CH+/CH- change channel, ◀ opens the channel list and ▶ opens the controls.
-- **Seek previews.** Thumbnails while you seek, made from what has already been watched and filled in by Seekr elsewhere. You can paste your own Seekr API key from your phone with a QR code.
-- **Pill menu.** An optional top menu in place of the sidebar, in Settings > Nuvio Reshaped.
-- **Seek buffer.** Keeps more of the video ahead of you, so seeking forward is faster and playback stutters less.
-- **Your own subtitle font.** Import a font from your phone and subtitles use it.
-- **Auto Sync.** Clearer messages in a new bubble, an "Auto synced" label in the subtitle list, and settings in your language. It tries your secondary subtitle language before falling back to the audio, and it no longer overrides a subtitle you picked yourself. AudioSync statistics stay hidden unless you turn them on.
-- **Stream sorting.** Streams your connection can't keep up with move down the list; the add-on's own order is kept otherwise.
+- **Smoother playback.** Fixes a short judder every 10 to 20 seconds. Seek preview thumbnails are now made while you pause or seek instead of during playback.
