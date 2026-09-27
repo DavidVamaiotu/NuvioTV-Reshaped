@@ -222,6 +222,8 @@ internal fun LiveTvPreviewPanel(
         delay(PREVIEW_DELAY_MS)
         preview.play(LiveTvRepository.playableChannel(channel))
     }
+    // Turning previews off removes the panel: nothing may keep playing unseen.
+    DisposableEffect(preview) { onDispose { preview.stop() } }
 
     Column(modifier = modifier) {
         val shape = RoundedCornerShape(16.dp)
