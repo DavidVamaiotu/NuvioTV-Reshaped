@@ -15,7 +15,8 @@ import okhttp3.Request
 
 /** Live TV's own small HTTP client: playlists, provider APIs and guides, never playback. */
 internal object LiveTvHttp {
-    private val client: OkHttpClient by lazy {
+    /** Also carries the list's channel previews, so they stay out of Nuvio's playback networking and speed learning. */
+    internal val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(45, TimeUnit.SECONDS)

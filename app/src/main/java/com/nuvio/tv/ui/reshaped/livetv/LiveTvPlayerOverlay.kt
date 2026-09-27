@@ -108,10 +108,12 @@ internal class LiveTvPlayerState(
         }
     }
 
-    /** The list zapping moves through: the one the channel was picked from. */
+    /** The list zapping moves through: the one the channel was picked from, else every shown channel. */
     internal fun zapList(): List<LiveTvChannel> {
         val picked = LiveTvRepository.zapList
-        return if (picked.any { it.streamUrl == currentListUrl }) picked else LiveTvRepository.uiState.value.channels
+        if (picked.any { it.streamUrl == currentListUrl }) return picked
+        val state = LiveTvRepository.uiState.value
+        return if (state.hiddenGroups.isEmpty()) state.channels else state.channels.filter { it.group !in state.hiddenGroups }
     }
 
     /** Called first by the player's key handler; true when the key was Live TV's. */
