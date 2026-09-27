@@ -63,7 +63,6 @@ import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRecentChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
-import com.nuvio.tv.ui.reshaped.pillnav.rememberPillNavEnabled
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -76,9 +75,6 @@ internal sealed interface LiveTvFilter {
     data object Favorites : LiveTvFilter
     data class Group(val name: String) : LiveTvFilter
 }
-
-/** The pill menu's top gap and height (12 + 44 dp) plus room to breathe. */
-private val PILL_NAV_CLEARANCE = 76.dp
 
 private const val FILTER_ALL = "\u0000all"
 private const val FILTER_FAVORITES = "\u0000favorites"
@@ -103,8 +99,8 @@ fun LiveTvScreen(
     var launching by remember { mutableStateOf(false) }
     val channelListState = rememberLazyListState()
     val channelFocus = remember { FocusRequester() }
-    // With the pill menu on, the screen starts below it, so the pill never covers the search field.
-    val topPadding = if (rememberPillNavEnabled()) PILL_NAV_CLEARANCE else NuvioTheme.spacing.xl
+    // Under the pill menu the screen starts below it, as Settings does, so the pill never covers the search field.
+    val topPadding = if (showBuiltInHeader) NuvioTheme.spacing.xl else 68.dp
 
     val filter = when (filterKey) {
         FILTER_ALL -> LiveTvFilter.All
