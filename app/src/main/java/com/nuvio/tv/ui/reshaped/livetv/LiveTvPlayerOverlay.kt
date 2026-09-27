@@ -235,9 +235,10 @@ internal fun LiveTvPlayerOverlay(state: LiveTvPlayerState, uiState: PlayerUiStat
 private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiState: PlayerUiState) {
     LaunchedEffect(Unit) { state.syncCurrent() }
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
-    val current = remember(state.currentListUrl, liveState.channels) {
-        liveState.channels.firstOrNull { it.streamUrl == state.currentListUrl }
-    }
+    // Numbered within the list being zapped (a category keeps its own 1, 2, 3...).
+    val zapList = remember(state.currentListUrl, liveState.channels) { state.zapList() }
+    val currentIndex = remember(state.currentListUrl, zapList) { zapList.indexOfFirst { it.streamUrl == state.currentListUrl } }
+    val current = zapList.getOrNull(currentIndex)
 
     var bannerVisible by remember { mutableStateOf(false) }
     LaunchedEffect(state.bannerKey) {
@@ -256,7 +257,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
             LiveTvBanner(
                 channel = channel,
                 programme = channel.tvgId?.let(liveState.currentProgrammes::get),
-                number = liveState.channels.indexOf(channel) + 1,
+                number = currentIndex + 1,
             )
         }
     }

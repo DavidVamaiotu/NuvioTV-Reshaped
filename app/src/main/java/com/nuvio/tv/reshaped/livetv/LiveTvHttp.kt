@@ -1,10 +1,13 @@
 package com.nuvio.tv.reshaped.livetv
 
 import java.io.BufferedInputStream
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
+import java.util.zip.Deflater
 import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import okhttp3.OkHttpClient
@@ -39,6 +42,45 @@ internal object LiveTvHttp {
             }
         }
 
+    /**
+     * Saves [url] to [target] gzip-compressed (as sent when the server already gzipped it, else
+     * compressed quickly on the way), so a 100+ MB guide takes a few MB on the TV's storage.
+     * The old file stays until the new one is complete.
+     */
+    suspend fun download(url: String, headers: Map<String, String>, target: File) {
+        runInterruptible(Dispatchers.IO) {
+            val request = Request.Builder().url(url).apply {
+                headers.forEach { (name, value) -> header(name, value) }
+            }.build()
+            target.parentFile?.mkdirs()
+            val temp = File(target.path + ".part")
+            try {
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                    val body = response.body ?: throw IOException("Empty response")
+                    BufferedInputStream(body.byteStream(), BUFFER_BYTES).use { buffered ->
+                        if (buffered.startsWithGzipMagic()) {
+                            temp.outputStream().use { buffered.copyTo(it, BUFFER_BYTES) }
+                        } else {
+                            FastGzipOutputStream(temp.outputStream()).use { buffered.copyTo(it, BUFFER_BYTES) }
+                        }
+                    }
+                }
+                if (!temp.renameTo(target)) throw IOException("Could not save ${target.name}")
+            } finally {
+                temp.delete()
+            }
+        }
+    }
+
+    /** Reads a file saved by [download]. Runs on the IO pool; cancelling interrupts the read. */
+    suspend fun <T> readFile(file: File, block: (InputStream) -> T): T =
+        runInterruptible(Dispatchers.IO) {
+            BufferedInputStream(file.inputStream(), BUFFER_BYTES).use { buffered ->
+                block(if (buffered.startsWithGzipMagic()) GZIPInputStream(buffered, BUFFER_BYTES) else buffered)
+            }
+        }
+
     /** A small response (provider API calls) as text. */
     suspend fun text(url: String, headers: Map<String, String>): String =
         stream(url, headers) { it.bufferedReader().readText() }
@@ -52,4 +94,11 @@ internal object LiveTvHttp {
     }
 
     private const val BUFFER_BYTES = 64 * 1024
+
+    /** Lowest compression: XML still shrinks about tenfold, at little CPU on a weak TV. */
+    private class FastGzipOutputStream(out: java.io.OutputStream) : GZIPOutputStream(out, BUFFER_BYTES) {
+        init {
+            def.setLevel(Deflater.BEST_SPEED)
+        }
+    }
 }

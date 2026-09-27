@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -26,8 +27,10 @@ import kotlinx.coroutines.withContext
 object LiveTvRepository {
     private const val TAG = "LiveTv"
     private const val EPG_TICK_MS = 60_000L
-    /** The guide keeps 12 hours; it is read again before that runs out. */
-    private const val EPG_REFRESH_MS = 10L * 60 * 60 * 1000
+    /** How long a downloaded guide is used before it is downloaded again. */
+    private const val EPG_DOWNLOAD_MS = 10L * 60 * 60 * 1000
+    /** The saved guide is read again when channels run out of kept programmes, at most this often. */
+    private const val EPG_MIN_READ_GAP_MS = 60L * 60 * 1000
     /** A guide that could not be read is tried again sooner. */
     private const val EPG_RETRY_MS = 30L * 60 * 1000
 
@@ -132,7 +135,10 @@ object LiveTvRepository {
         loadJob?.cancel()
         stopEpg()
         LiveTvStalker.clearSession()
-        scope.launch(Dispatchers.IO) { store.clearSource() }
+        scope.launch(Dispatchers.IO) {
+            store.clearSource()
+            guideDir().deleteRecursively()
+        }
         _uiState.update {
             LiveTvUiState(
                 stalkerSettings = it.stalkerSettings,
@@ -342,29 +348,39 @@ object LiveTvRepository {
         epgJob = null
     }
 
-    /** Reads the guide once, moves each channel's "now playing" on every minute, re-reads it before it runs out. */
+    /**
+     * Reads the guide and moves each channel's "now playing" on every minute. Only runs while
+     * something shows Live TV (the list or a channel in the player) and catches up when it is
+     * opened again. The guide is saved compressed in the cache, downloaded again every 10 hours,
+     * and re-read from there whenever channels run out of kept programmes.
+     */
     private fun startEpg(sourceUrl: String, epgUrls: List<String>, channels: List<LiveTvChannel>) {
         stopEpg()
         val tvgIds = channels.mapNotNullTo(LinkedHashSet()) { it.tvgId?.takeIf(String::isNotBlank) }
         val channelIds = tvgIds.mapTo(HashSet()) { it.lowercase() }
+        val guideFiles = epgUrls.map { File(guideDir(), "guide_${Integer.toHexString(it.hashCode())}.xml.gz") }
         epgJob = scope.launch {
+            withContext(Dispatchers.IO) {
+                // Guides of an earlier source.
+                guideDir().listFiles()?.filter { it !in guideFiles }?.forEach(File::delete)
+            }
             var schedule: LiveTvSchedule = emptyMap()
-            var nextFetchAtMs = 0L
+            var nextReadAtMs = 0L
             while (isActive) {
+                _uiState.subscriptionCount.first { it > 0 }
                 val nowMs = LiveTvClock.nowEpochMs()
-                if (nowMs >= nextFetchAtMs) {
+                if (nowMs >= nextReadAtMs) {
                     val loaded = HashMap<String, List<LiveTvProgramme>>()
-                    for (epgUrl in epgUrls) {
-                        try {
-                            loadXmlTvSchedule(epgUrl, channelIds, nowMs).forEach { (id, list) -> loaded.putIfAbsent(id, list) }
-                        } catch (cancel: CancellationException) {
-                            throw cancel
-                        } catch (error: Exception) {
-                            Log.w(TAG, "Guide failed", error)
-                        }
+                    epgUrls.forEachIndexed { index, epgUrl ->
+                        readGuide(epgUrl, guideFiles[index], channelIds, nowMs)
+                            .forEach { (id, list) -> loaded.putIfAbsent(id, list) }
                     }
                     schedule = loaded
-                    nextFetchAtMs = nowMs + if (loaded.isEmpty()) EPG_RETRY_MS else EPG_REFRESH_MS
+                    nextReadAtMs = if (loaded.isEmpty()) {
+                        nowMs + EPG_RETRY_MS
+                    } else {
+                        nextScheduleReadAt(loaded, nowMs, EPG_MIN_READ_GAP_MS, EPG_DOWNLOAD_MS)
+                    }
                 }
                 val current = currentProgrammes(schedule, tvgIds, nowMs)
                 _uiState.update { state ->
@@ -380,6 +396,31 @@ object LiveTvRepository {
             }
         }
     }
+
+    /** One guide, downloaded when its saved copy is missing or old; an old copy still serves when the download fails. */
+    private suspend fun readGuide(url: String, file: File, channelIds: Set<String>, nowMs: Long): LiveTvSchedule {
+        try {
+            val saved = withContext(Dispatchers.IO) { file.lastModified() }
+            if (saved == 0L || nowMs - saved !in 0 until EPG_DOWNLOAD_MS) {
+                try {
+                    LiveTvHttp.download(url, LIVE_TV_STREAM_HEADERS, file)
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (error: Exception) {
+                    Log.w(TAG, "Guide download failed", error)
+                    if (saved == 0L) return emptyMap()
+                }
+            }
+            return readXmlTvSchedule(file, channelIds, nowMs)
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (error: Exception) {
+            Log.w(TAG, "Guide failed", error)
+            return emptyMap()
+        }
+    }
+
+    private fun guideDir(): File = File(appContext.cacheDir, "live_tv")
 
     // endregion
 }

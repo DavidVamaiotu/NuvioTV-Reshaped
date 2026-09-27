@@ -16,6 +16,9 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
     val channels = ArrayList<LiveTvChannel>()
     val seenUrls = HashSet<String>()
     val epgUrls = LinkedHashSet<String>()
+    // Thousands of channels share a few groups and header sets: each is kept once.
+    val groups = HashMap<String, String>()
+    val headerSets = HashMap<Map<String, String>, Map<String, String>>()
     var metadata: M3uMetadata? = null
     var pendingHeaders = emptyMap<String, String>()
     var isHlsStream = false
@@ -54,14 +57,21 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
                 if (url.isEmpty() || !seenUrls.add(url)) continue
                 val name = current?.name?.takeIf(String::isNotBlank) ?: "Channel ${channels.size + 1}"
                 if (isLikelyCategoryHeading(name)) continue
+                val extraHeaders = headers + parseUrlHeaders(line)
+                val defaults = defaultStreamHeaders(url)
+                val group = current?.group.orEmpty()
                 channels += LiveTvChannel(
-                    id = "$url#${channels.size}",
+                    id = "m${channels.size}",
                     name = name,
                     streamUrl = url,
                     tvgId = current?.tvgId,
                     logoUrl = current?.logoUrl,
-                    group = current?.group.orEmpty(),
-                    headers = defaultStreamHeaders(url) + headers + parseUrlHeaders(line),
+                    group = groups.getOrPut(group) { group },
+                    headers = if (extraHeaders.isEmpty()) {
+                        defaults
+                    } else {
+                        (defaults + extraHeaders).let { headerSets.getOrPut(it) { it } }
+                    },
                 )
             }
         }
