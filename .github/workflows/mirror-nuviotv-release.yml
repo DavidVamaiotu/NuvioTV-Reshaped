@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: clearer Auto Sync messages, stable-to-beta install fix
+# Release trigger: Live TV, seek previews, pill menu, seek buffer, subtitle fonts
 
 
 on:
