@@ -6,6 +6,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.Format
 import androidx.media3.common.util.MediaFormatUtil
@@ -14,11 +15,14 @@ import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewTrack
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,6 +46,11 @@ import kotlinx.coroutines.withContext
  * memory and in a disk cache per title/release, so a rewatch starts with every part watched
  * before. Decoding runs on one background thread behind a short queue that drops keyframes when
  * it falls behind, so a slow box never stalls playback's loader.
+ *
+ * Keyframes are not decoded while the video plays: a software decode of a large keyframe takes
+ * every core for a moment and playback drops frames (a judder every 10-20 s). They are kept
+ * compressed in a spool file instead and decoded while paused or scrubbing, the ones nearest
+ * the scrub position first.
  */
 internal class LocalPreviewTrack(
     context: Context,
@@ -100,6 +109,33 @@ internal class LocalPreviewTrack(
 
     private val cacheFile: File = File(File(context.applicationContext.cacheDir, CACHE_DIR), sha1(cacheKey) + ".bin")
 
+    /**
+     * False while the viewer has paused or is scrubbing (set by the owner from the player's
+     * state); keyframes are only decoded then.
+     */
+    @Volatile var playbackActive = true
+        set(value) {
+            field = value
+            if (!value) scheduleDrain()
+        }
+
+    /** A keyframe copied while playing, waiting in the spool to be decoded. */
+    private class SpooledKeyframe(val format: Format, val timeUs: Long, val position: Long, val size: Int)
+
+    /** Slot → its spooled keyframe; the slot stays CLAIMED meanwhile. Guarded by [lock]. */
+    private val spooled = HashMap<Int, SpooledKeyframe>()
+    private val spoolFile = File(
+        File(context.applicationContext.cacheDir, CACHE_DIR),
+        sha1(cacheKey) + "-" + SystemClock.elapsedRealtimeNanos() + SPOOL_SUFFIX,
+    )
+    // Spool file state: only touched on the tap thread.
+    private var spool: RandomAccessFile? = null
+    private var spoolEnd = 0L
+    private var spoolLimit = SPOOL_LIMIT_BYTES
+    private val drainScheduled = AtomicBoolean(false)
+    /** Slot the viewer last looked at, so its keyframes are decoded first. */
+    @Volatile private var focusSlot = -1
+
     fun start() {
         // Coalesce UI updates: at most a few revisions per second however fast frames land.
         scope.launch {
@@ -109,6 +145,7 @@ internal class LocalPreviewTrack(
             }
         }
         scope.launch(Dispatchers.IO) {
+            deleteStaleSpools()
             loadCache()
             notifyChanged()
         }
@@ -121,6 +158,9 @@ internal class LocalPreviewTrack(
         Thread({
             runCatching { tapExecutor.awaitTermination(3, TimeUnit.SECONDS) }
             decoder.release()
+            runCatching { spool?.close() }
+            spool = null
+            spoolFile.delete()
             saveCache()
             scope.cancel()
         }, "NuvioPreviewClose").apply { isDaemon = true }.start()
@@ -131,6 +171,8 @@ internal class LocalPreviewTrack(
     override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? {
         val corrected = (positionMs + offsetMs).coerceIn(0L, (durationMs - 1).coerceAtLeast(0L))
         val slot = (corrected / SLOT_MS).toInt().coerceIn(0, slotCount - 1)
+        focusSlot = slot
+        if (synchronized(lock) { spooled.isNotEmpty() }) scheduleDrain()
         val found = synchronized(lock) { nearestFilled(slot) } ?: return null
         val approximate = found != slot
         val bitmap = bitmapFor(found, small = approximate) ?: return null
@@ -203,17 +245,94 @@ internal class LocalPreviewTrack(
         val copy = data.copyOfRange(offset, offset + size)
         val submitted = runCatching {
             tapExecutor.execute {
-                val frame = runCatching {
-                    decoder.decode(MediaFormatUtil.createMediaFormatFromFormat(format), copy, 0, copy.size, timeUs)
-                }.getOrNull()
-                if (frame != null) {
-                    store(slot, frame.jpeg, keyMs)
-                } else {
+                if (mayDecodeNow()) {
+                    decodeInto(slot, format, copy, timeUs)
+                } else if (!spoolKeyframe(slot, format, timeUs, copy)) {
                     release(slot)
                 }
+                if (mayDecodeNow()) scheduleDrain()
             }
         }.isSuccess
         if (!submitted) release(slot)
+    }
+
+    /** Tap thread. */
+    private fun decodeInto(slot: Int, format: Format, bytes: ByteArray, timeUs: Long) {
+        val frame = runCatching {
+            decoder.decode(MediaFormatUtil.createMediaFormatFromFormat(format), bytes, 0, bytes.size, timeUs)
+        }.getOrNull()
+        if (frame != null) {
+            store(slot, frame.jpeg, timeUs / 1_000L)
+        } else {
+            release(slot)
+        }
+    }
+
+    /** Paused, or scrubbing: the viewer is not watching frames go by. */
+    private fun mayDecodeNow(): Boolean = !playbackActive
+
+    // ---- Spool (tap thread only) -------------------------------------------------------
+
+    /** Keeps [bytes] compressed until it may be decoded; false when the spool is full or unwritable. */
+    private fun spoolKeyframe(slot: Int, format: Format, timeUs: Long, bytes: ByteArray): Boolean {
+        if (spoolEnd + bytes.size > spoolLimit) return false
+        return runCatching {
+            val file = spool ?: run {
+                val dir = spoolFile.parentFile
+                dir?.mkdirs()
+                // TV boxes have little storage: never take more than a quarter of what is free.
+                val free = runCatching { dir?.usableSpace ?: 0L }.getOrDefault(0L)
+                spoolLimit = minOf(SPOOL_LIMIT_BYTES, free / 4)
+                if (spoolEnd + bytes.size > spoolLimit) return false
+                RandomAccessFile(spoolFile, "rw").also { it.setLength(0L); spool = it }
+            }
+            file.seek(spoolEnd)
+            file.write(bytes)
+            synchronized(lock) { spooled[slot] = SpooledKeyframe(format, timeUs, spoolEnd, bytes.size) }
+            spoolEnd += bytes.size
+        }.onFailure { Log.w(TAG, "spool not written: ${it.message}") }.isSuccess
+    }
+
+    private fun scheduleDrain() {
+        if (closed || !drainScheduled.compareAndSet(false, true)) return
+        val submitted = runCatching { tapExecutor.execute(::drainOne) }.isSuccess
+        if (!submitted) drainScheduled.set(false)
+    }
+
+    /** Decodes one spooled keyframe, nearest the scrub position first, then schedules the next. */
+    private fun drainOne() {
+        drainScheduled.set(false)
+        if (closed || !mayDecodeNow()) return
+        val next = synchronized(lock) {
+            val focus = focusSlot
+            val slot = if (focus >= 0) spooled.keys.minByOrNull { abs(it - focus) } else spooled.keys.minOrNull()
+            slot?.let { it to spooled.remove(it)!! }
+        }
+        if (next == null) {
+            // Everything decoded: start the spool over so it never grows past one pause's worth.
+            if (spoolEnd > 0L) {
+                spoolEnd = 0L
+                runCatching { spool?.setLength(0L) }
+            }
+            return
+        }
+        val (slot, entry) = next
+        val bytes = runCatching {
+            ByteArray(entry.size).also { buffer ->
+                val file = spool ?: error("no spool")
+                file.seek(entry.position)
+                file.readFully(buffer)
+            }
+        }.getOrNull()
+        if (bytes != null) decodeInto(slot, entry.format, bytes, entry.timeUs) else release(slot)
+        scheduleDrain()
+    }
+
+    private fun deleteStaleSpools() {
+        val now = System.currentTimeMillis()
+        spoolFile.parentFile?.listFiles { file ->
+            file.name.endsWith(SPOOL_SUFFIX) && file != spoolFile && now - file.lastModified() > STALE_SPOOL_MS
+        }?.forEach { it.delete() }
     }
 
     /** Nearest slot to a keyframe, or null when the keyframe is closer to no slot start. */
@@ -335,6 +454,11 @@ internal class LocalPreviewTrack(
         private const val CACHE_DIR = "seek_previews"
         private const val CACHE_MAGIC = 0x4E535031 // "NSP1"
         private const val CACHE_LIMIT_BYTES = 200L * 1_000_000L
+        private const val SPOOL_SUFFIX = ".spool"
+        /** About an hour of 1080p keyframes. */
+        private const val SPOOL_LIMIT_BYTES = 96L * 1024 * 1024
+        /** A spool left by a crash; a live one is never this old without being written. */
+        private const val STALE_SPOOL_MS = 12L * 60 * 60 * 1000
 
         private const val EMPTY: Byte = 0
         private const val CLAIMED: Byte = 1

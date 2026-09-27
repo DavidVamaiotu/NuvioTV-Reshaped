@@ -64,6 +64,9 @@ object PlayerMemoryReporter {
     // Peak is what matters for calibration, and a single reading at playback start misses it.
     fun startSampling(context: Context) {
         if (samplerJob?.isActive == true) return
+        // Nuvio RS: Debug.getMemoryInfo walks the whole memory map; every 10 s during playback
+        // it can make low-end boxes judder. Only sample when enabled: adb shell setprop log.tag.PlayerMemory DEBUG
+        if (!Log.isLoggable(TAG, Log.DEBUG)) return
         peakRssMb = 0
         val appContext = context.applicationContext
         samplerJob = scope.launch {
