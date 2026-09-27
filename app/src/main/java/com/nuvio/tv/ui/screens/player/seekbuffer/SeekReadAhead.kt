@@ -196,6 +196,8 @@ private class ReadAheadSession(val key: String, private val file: File, private 
      * reads it directly and the read-ahead stops.
      */
     private var unbounded = false
+    /** The open connection of an [unbounded] stream, waiting for the player to take it over. */
+    private var handoff: DataSource? = null
 
     /** True while the connection is receiving data, false while it waits (full, ended, retry). */
     @Volatile var isDownloading = false
@@ -212,6 +214,15 @@ private class ReadAheadSession(val key: String, private val file: File, private 
 
     /** The player should read this stream directly (see [unbounded]). */
     val readsDirectly: Boolean get() = lock.withLock { unbounded }
+
+    /**
+     * The connection already open at the start of an [unbounded] stream, for the player to read
+     * on: reconnecting could be refused by a provider that allows one connection at a time.
+     */
+    fun takeHandoff(position: Long): DataSource? = lock.withLock {
+        if (position != 0L || closed) return null
+        handoff.also { handoff = null }
+    }
 
     /**
      * Prepares the ring for a player read at [position]: inside (or just past) it, the read waits
@@ -356,11 +367,12 @@ private class ReadAheadSession(val key: String, private val file: File, private 
             if (closed) return
             closed = true
             changed.signalAll()
-            (filler != null) to activeSource.also { activeSource = null }
+            val untaken = handoff.also { handoff = null }
+            (filler != null) to listOfNotNull(activeSource, untaken).also { activeSource = null }
         }
         // Off the caller's (possibly main) thread: closing a connection may touch the network.
-        if (stale != null) {
-            Thread({ stale.closeQuietly() }, "NuvioSeekReadAheadClose").apply { isDaemon = true }.start()
+        if (stale.isNotEmpty()) {
+            Thread({ stale.forEach { it.closeQuietly() } }, "NuvioSeekReadAheadClose").apply { isDaemon = true }.start()
         }
         // The filler deletes the file itself once its connection is closed.
         if (!hadFiller) disposeFile()
@@ -512,11 +524,10 @@ private class ReadAheadSession(val key: String, private val file: File, private 
             }
         }
         if (lock.withLock { unbounded }) {
-            // Hand the stream to the player: one connection at a time, so this one closes
-            // before the waiting open is released to connect directly.
-            source.closeQuietly()
+            // Hand the open connection to the player, which reads on from it (see takeHandoff).
             lock.withLock {
                 if (activeSource === source) activeSource = null
+                handoff = source
                 connected = true
                 changed.signalAll()
             }
@@ -626,7 +637,17 @@ private class ReadAheadDataSource(
         remaining = dataSpec.length
         if (dataSpec.uri.toString() == session.key && session.serve(position)) {
             val length = session.awaitLength()
-            if (session.readsDirectly) return openDirect(dataSpec)
+            if (session.readsDirectly) {
+                session.takeHandoff(position)?.let { handed ->
+                    // Already open at the start; it reports no transfers to the player's meter.
+                    direct?.closeQuietly()
+                    direct = handed
+                    fromRing = false
+                    directOpen = true
+                    return C.LENGTH_UNSET.toLong()
+                }
+                return openDirect(dataSpec)
+            }
             fromRing = true
             return when {
                 remaining != C.LENGTH_UNSET.toLong() -> remaining

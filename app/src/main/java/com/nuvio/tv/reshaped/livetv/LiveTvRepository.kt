@@ -283,7 +283,7 @@ object LiveTvRepository {
         _uiState.update { it.copy(stalkerSettings = settings) }
         startLoading()
         runLoad(LiveTvError.StalkerFailed) {
-            val channels = LiveTvStalker.channels(settings)
+            val (channels, incomplete) = LiveTvStalker.channels(settings)
             if (channels.isEmpty()) throw LiveTvException(LiveTvError.StalkerNoChannels)
             storage?.let { store ->
                 withContext(Dispatchers.IO) {
@@ -292,6 +292,7 @@ object LiveTvRepository {
                 }
             }
             showChannels(LiveTvSourceType.Stalker, settings.portalUrl, channels, emptyList())
+            if (incomplete) _uiState.update { it.copy(error = LiveTvError.StalkerIncomplete) }
         }
     }
 

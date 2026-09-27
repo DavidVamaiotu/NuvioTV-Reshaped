@@ -56,6 +56,7 @@
     <string name="live_tv_error_stalker_no_channels">No playable channels were found on this portal.</string>
     <string name="live_tv_error_stalker_failed">The Stalker portal could not be loaded.</string>
     <string name="live_tv_error_stalker_token">The portal did not start a session. Check the portal URL and MAC address.</string>
+    <string name="live_tv_error_stalker_incomplete">Some channels could not be loaded from the portal. Refresh to try again.</string>
     <string name="live_tv_error_xtream_required">Server URL, username and password are required.</string>
     <string name="live_tv_error_xtream_invalid_url">Enter a valid HTTP or HTTPS Xtream server URL.</string>
     <string name="live_tv_error_xtream_no_channels">No playable channels were found for this Xtream login.</string>
