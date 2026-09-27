@@ -29,7 +29,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -38,11 +37,9 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -62,7 +59,6 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
-import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRecentChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
@@ -199,7 +195,7 @@ fun LiveTvScreen(
         withFrameNanos { }
         runCatching { channelFocus.requestFocus() }
     }
-    val minuteClock = rememberMinuteClock()
+    val minuteClock = rememberLiveTvMinuteClock()
 
     val play: (LiveTvChannel) -> Unit = { channel ->
         if (!launching) {
@@ -531,7 +527,7 @@ private fun LiveTvChannelRow(
     }
 }
 
-/** "Now: title · 21:00 – 22:00" with a thin progress bar, or the category when there is no guide. */
+/** What is on now, a thin progress bar and the time left, or the category when there is no guide. */
 @Composable
 private fun ProgrammeLine(programme: LiveTvProgramme?, clock: State<Long>, focused: Boolean, fallback: String = "") {
     val secondary = if (focused) Color.Black.copy(alpha = 0.65f) else NuvioTheme.colors.TextSecondary
@@ -542,36 +538,27 @@ private fun ProgrammeLine(programme: LiveTvProgramme?, clock: State<Long>, focus
         return
     }
     Text(
-        text = "${programme.title}  ·  ${programme.timeLabel}",
+        text = programme.title,
         style = MaterialTheme.typography.bodySmall,
         color = secondary,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )
-    val span = (programme.stopEpochMs - programme.startEpochMs).coerceAtLeast(1L)
-    val fill = if (focused) Color.Black else NuvioTheme.colors.TextPrimary
-    Box(
-        modifier = Modifier
-            .padding(top = 5.dp)
-            .widthIn(max = 220.dp)
-            .fillMaxWidth()
-            .height(3.dp)
-            .clip(LiveTvPillShape)
-            .background(if (focused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.12f))
-            // Read at draw time: the minute tick redraws the bar without recomposing the row.
-            .drawBehind {
-                val fraction = ((clock.value - programme.startEpochMs).toFloat() / span).coerceIn(0f, 1f)
-                drawRect(fill, size = Size(size.width * fraction, size.height))
-            },
-    )
-}
-
-/** The time, updated on each minute. */
-@Composable
-private fun rememberMinuteClock(): State<Long> = produceState(LiveTvClock.nowEpochMs()) {
-    while (true) {
-        delay(60_000L - value % 60_000L)
-        value = LiveTvClock.nowEpochMs()
+    Row(modifier = Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        LiveTvProgressBar(
+            programme = programme,
+            clock = clock,
+            fill = if (focused) Color.Black else NuvioTheme.colors.TextPrimary,
+            track = if (focused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.12f),
+            modifier = Modifier.weight(1f, fill = false).widthIn(max = 160.dp).fillMaxWidth(),
+        )
+        Text(
+            text = liveTvTimeLeft(programme, clock),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (focused) Color.Black.copy(alpha = 0.55f) else NuvioTheme.colors.TextTertiary,
+            maxLines = 1,
+            modifier = Modifier.padding(start = 8.dp),
+        )
     }
 }
 

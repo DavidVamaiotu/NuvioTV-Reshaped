@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -69,17 +70,17 @@ import com.nuvio.tv.reshaped.livetv.LiveTvUiState
 import com.nuvio.tv.ui.screens.player.PlayerEvent
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
-import com.nuvio.tv.ui.screens.player.onEvent
 import com.nuvio.tv.ui.screens.player.PlayerUiState
+import com.nuvio.tv.ui.screens.player.onEvent
 import com.nuvio.tv.ui.screens.player.switchToSourceStream
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
 
 /**
  * Live TV inside Nuvio's player: CH+/CH- (and ▲▼ while the controls are hidden) switch channel,
@@ -296,6 +297,7 @@ internal fun LiveTvPlayerOverlay(state: LiveTvPlayerState, uiState: PlayerUiStat
 private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiState: PlayerUiState) {
     LaunchedEffect(Unit) { state.syncCurrent() }
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
+    val clock = rememberLiveTvMinuteClock()
     // Numbered within the list being zapped (a category keeps its own 1, 2, 3...).
     val zapList = remember(state.currentListUrl, liveState.channels) { state.zapList() }
     val currentIndex = remember(state.currentListUrl, zapList) { zapList.indexOfFirst { it.streamUrl == state.currentListUrl } }
@@ -319,6 +321,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
                 channel = channel,
                 programme = channel.tvgId?.let(liveState.currentProgrammes::get),
                 number = currentIndex + 1,
+                clock = clock,
             )
         }
     }
@@ -329,12 +332,12 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         exit = slideOutHorizontally { -it } + fadeOut(),
         modifier = Modifier.align(Alignment.CenterStart).zIndex(3f),
     ) {
-        LiveTvChannelPanel(state, liveState.currentProgrammes)
+        LiveTvChannelPanel(state, liveState.currentProgrammes, clock)
     }
 }
 
 @Composable
-private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, number: Int) {
+private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {
     Row(
         modifier = Modifier
             .padding(start = 48.dp, top = 40.dp)
@@ -365,12 +368,28 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
             )
             if (programme != null) {
                 Text(
-                    text = "${programme.title}  ·  ${programme.timeLabel}",
+                    text = programme.title,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.75f),
+                    color = Color.White.copy(alpha = 0.85f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                Row(modifier = Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    LiveTvProgressBar(
+                        programme = programme,
+                        clock = clock,
+                        fill = Color.White,
+                        track = Color.White.copy(alpha = 0.18f),
+                        modifier = Modifier.width(220.dp),
+                    )
+                    Text(
+                        text = "${programme.timeLabel}  ·  ${liveTvTimeLeft(programme, clock)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        modifier = Modifier.padding(start = 10.dp),
+                    )
+                }
             }
             Text(
                 text = stringResource(R.string.live_tv_player_hint),
@@ -383,7 +402,7 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
 }
 
 @Composable
-private fun LiveTvChannelPanel(state: LiveTvPlayerState, programmes: Map<String, LiveTvProgramme>) {
+private fun LiveTvChannelPanel(state: LiveTvPlayerState, programmes: Map<String, LiveTvProgramme>, clock: State<Long>) {
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
     Row(
         modifier = Modifier
@@ -403,7 +422,7 @@ private fun LiveTvChannelPanel(state: LiveTvPlayerState, programmes: Map<String,
         ) {
             LiveTvFolderColumn(state, liveState)
         }
-        LiveTvChannelColumn(state, programmes, liveState)
+        LiveTvChannelColumn(state, programmes, liveState, clock)
     }
 }
 
@@ -500,7 +519,12 @@ private fun FolderRow(
 }
 
 @Composable
-private fun LiveTvChannelColumn(state: LiveTvPlayerState, programmes: Map<String, LiveTvProgramme>, liveState: LiveTvUiState) {
+private fun LiveTvChannelColumn(
+    state: LiveTvPlayerState,
+    programmes: Map<String, LiveTvProgramme>,
+    liveState: LiveTvUiState,
+    clock: State<Long>,
+) {
     val channels = state.panelChannels
     val startIndex = remember(channels) { channels.indexOfFirst { it.streamUrl == state.currentListUrl }.coerceAtLeast(0) }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 3).coerceAtLeast(0))
@@ -559,6 +583,7 @@ private fun LiveTvChannelColumn(state: LiveTvPlayerState, programmes: Map<String
                     channel = channel,
                     programme = channel.tvgId?.let(programmes::get),
                     playing = channel.streamUrl == state.currentListUrl,
+                    clock = clock,
                     onClick = { state.pickFromPanel(channel) },
                     modifier = if (index == startIndex) Modifier.focusRequester(currentFocus) else Modifier,
                 )
@@ -584,6 +609,7 @@ private fun PanelRow(
     channel: LiveTvChannel,
     programme: LiveTvProgramme?,
     playing: Boolean,
+    clock: State<Long>,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -598,7 +624,7 @@ private fun PanelRow(
         scale = CardDefaults.scale(focusedScale = 1.02f),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 10.dp),
+            modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 60.dp, height = 38.dp)
@@ -619,6 +645,22 @@ private fun PanelRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    Row(modifier = Modifier.padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                        LiveTvProgressBar(
+                            programme = it,
+                            clock = clock,
+                            fill = if (focused) Color.Black else Color.White,
+                            track = if (focused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.15f),
+                            modifier = Modifier.width(120.dp),
+                        )
+                        Text(
+                            text = liveTvTimeLeft(it, clock),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (focused) Color.Black.copy(alpha = 0.55f) else Color.White.copy(alpha = 0.5f),
+                            maxLines = 1,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
                 }
             }
             if (playing) {
