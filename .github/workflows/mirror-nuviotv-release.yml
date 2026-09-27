@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: Live TV, seek previews, pill menu, seek buffer, subtitle fonts
+# Release trigger: smoother playback (no preview decoding while playing)
 
 
 on:
