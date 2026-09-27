@@ -601,7 +601,7 @@ private fun LiquidPillGlassApi33(
     tint: Color,
     modifier: Modifier,
 ) {
-    val shader = remember { RuntimeShader(PillGlassShader) }
+    val shader = backdrop.shader as RuntimeShader
     LaunchedEffect(backdrop) { backdrop.refreshWhileShown() }
     Box(
         modifier

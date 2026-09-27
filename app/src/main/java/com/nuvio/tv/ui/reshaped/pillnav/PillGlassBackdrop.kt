@@ -3,6 +3,7 @@ package com.nuvio.tv.ui.reshaped.pillnav
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -37,7 +38,7 @@ import kotlinx.coroutines.delay
  * is on; everything else gets the static glass.
  */
 @Stable
-internal class PillGlassBackdrop(val layer: GraphicsLayer) {
+internal class PillGlassBackdrop(val layer: GraphicsLayer, internal val shader: Any) {
     var contentOrigin by mutableStateOf(Offset.Zero)
         internal set
 
@@ -116,6 +117,14 @@ internal fun pillLensSupported(context: Context): Boolean {
     return info.totalMem >= MinLensRamBytes
 }
 
+/** The lens shader as a [android.graphics.RuntimeShader], or null where it fails to compile. */
+private fun compilePillGlassShader(): Any? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
+    return runCatching { android.graphics.RuntimeShader(PillGlassShader) }
+        .onFailure { Log.w("PillGlass", "Liquid glass shader unavailable, using static glass", it) }
+        .getOrNull()
+}
+
 /**
  * The backdrop recorder, or null where the pill falls back to static glass: TVs that can't run it, or
  * [blurEnabled] off (Nuvio's blur setting, the same switch that gates the phone's liquid glass).
@@ -124,10 +133,11 @@ internal fun pillLensSupported(context: Context): Boolean {
 internal fun rememberPillGlassBackdrop(blurEnabled: Boolean): PillGlassBackdrop? {
     val context = LocalContext.current
     val supported = remember { pillLensSupported(context) }
-    if (!supported) return null
+    if (!supported || !blurEnabled) return null
+    // Compiled once here: a TV whose GPU driver rejects the shader keeps the static glass instead of crashing.
+    val shader = remember { compilePillGlassShader() } ?: return null
     val layer = rememberGraphicsLayer()
-    val backdrop = remember(layer) { PillGlassBackdrop(layer) }
-    return backdrop.takeIf { blurEnabled }
+    return remember(layer, shader) { PillGlassBackdrop(layer, shader) }
 }
 
 /** Put on the content the pill floats over: records it for the lens and draws it as usual. */
