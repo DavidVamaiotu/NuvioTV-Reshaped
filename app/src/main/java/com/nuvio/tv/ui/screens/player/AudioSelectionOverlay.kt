@@ -52,6 +52,8 @@ import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.ui.screens.detail.requestFocusAfterFrames
 import com.nuvio.tv.ui.util.languageCodeToName
+import com.nuvio.tv.ui.reshaped.volumeboost.VolumeBoostBar
+import com.nuvio.tv.ui.reshaped.volumeboost.volumeBoostPercent
 import java.util.Locale
 import kotlinx.coroutines.delay
 
@@ -507,8 +509,12 @@ private fun AudioControlsContent(
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             AdjustmentSection(
-                title = stringResource(R.string.audio_mix_label),
-                valueText = stringResource(R.string.audio_mix_value_db, currentDb),
+                title = stringResource(R.string.volume_boost_label), // Nuvio RS: volume boost
+                valueText = stringResource(
+                    R.string.volume_boost_value,
+                    volumeBoostPercent(currentDb, AUDIO_AMPLIFICATION_MAX_DB),
+                    currentDb
+                ),
                 helperText = amplificationHelperText,
                 canDecrease = canDecreaseAmp,
                 canIncrease = canIncreaseAmp,
@@ -542,6 +548,11 @@ private fun AudioControlsContent(
                         runCatching { ampMinusFocusRequester.requestFocus() }
                     }
                 }
+            )
+            VolumeBoostBar( // Nuvio RS: volume boost
+                gainDb = currentDb,
+                maxDb = AUDIO_AMPLIFICATION_MAX_DB,
+                enabled = isAmplificationAvailable
             )
 
             AdjustmentSection(

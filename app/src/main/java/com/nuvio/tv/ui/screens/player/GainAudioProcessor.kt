@@ -3,6 +3,7 @@ package com.nuvio.tv.ui.screens.player
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
+import com.nuvio.tv.ui.reshaped.volumeboost.softClipBoosted
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.pow
@@ -66,7 +67,7 @@ internal class GainAudioProcessor : BaseAudioProcessor() {
 
         while (inputBuffer.remaining() >= 2) {
             val sample = inputBuffer.short.toInt()
-            val amplified = (sample * scale)
+            val amplified = (softClipBoosted(sample * scale / 32768f) * 32768f) // Nuvio RS: soft clip
                 .roundToInt()
                 .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
             outputBuffer.putShort(amplified.toShort())
@@ -83,7 +84,7 @@ internal class GainAudioProcessor : BaseAudioProcessor() {
 
         while (inputBuffer.remaining() >= 4) {
             val sample = inputBuffer.float
-            val amplified = (sample * scale).coerceIn(-1f, 1f)
+            val amplified = softClipBoosted(sample * scale).coerceIn(-1f, 1f) // Nuvio RS: soft clip
             outputBuffer.putFloat(amplified)
         }
 
