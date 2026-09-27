@@ -23,6 +23,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.delay
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.input.key.Key
@@ -84,6 +86,16 @@ internal fun PillNavScaffold(
         currentRoute != com.nuvio.tv.reshaped.livetv.LIVE_TV_ROUTE
     val hiddenUnlessFocused = currentRoute == Screen.Search.route
     val state = remember { PillNavBarState() }
+    // Liquid glass on capable TVs with Nuvio's blur setting on. The screen is recorded only while the pill is on
+    // it, never during playback; the pill slides out over the last recording, which is then dropped.
+    val glassBackdrop = rememberPillGlassBackdrop(blurEnabled)
+    val glassDensity = LocalDensity.current
+    val glassLayoutDirection = LocalLayoutDirection.current
+    LaunchedEffect(showBar, glassBackdrop) {
+        if (showBar || glassBackdrop == null) return@LaunchedEffect
+        delay(400)
+        glassBackdrop.clear(glassDensity, glassLayoutDirection)
+    }
     val focusRequesters = remember { HashMap<String, FocusRequester>() }
     val requesterFor = remember<(String) -> FocusRequester> {
         { key: String -> focusRequesters.getOrPut(key) { FocusRequester() } }
@@ -182,6 +194,7 @@ internal fun PillNavScaffold(
         modifier = Modifier
             .fillMaxSize()
             .onPreviewKeyEvent { keyEvent ->
+                if (keyEvent.type == KeyEventType.KeyDown) glassBackdrop?.poke()
                 // Swallow the rest of a long-press Back until it is released so it cannot also exit the app.
                 if (longPressBackHeld.value && keyEvent.key == Key.Back) {
                     if (keyEvent.type == KeyEventType.KeyUp) longPressBackHeld.value = false
@@ -193,6 +206,7 @@ internal fun PillNavScaffold(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .pillGlassSource(glassBackdrop?.takeIf { showBar })
                 .onPreviewKeyEvent { keyEvent ->
                     if (keyEvent.key == Key.Back) {
                         // Long-press Back on a root screen jumps straight to the pill, past the screens' own Back.
@@ -292,6 +306,7 @@ internal fun PillNavScaffold(
                     }
                 },
                 onExitUp = { focusManager.moveFocus(FocusDirection.Up) },
+                backdrop = glassBackdrop,
             )
         }
     }
