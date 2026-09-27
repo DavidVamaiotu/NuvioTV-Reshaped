@@ -90,6 +90,8 @@ data class LiveTvUiState(
     val groupCounts: Map<String, Int> = emptyMap(),
     /** Categories the viewer chose not to see: their channels leave the list, search and zapping. */
     val hiddenGroups: Set<String> = emptySet(),
+    /** Single channels the viewer chose not to see (by stream URL), inside categories that stay. */
+    val hiddenChannelUrls: Set<String> = emptySet(),
     /** How many channels each source listed. */
     val sourceCounts: Map<String, Int> = emptyMap(),
     /** Sources whose last load failed (their earlier channels, if any, stay listed). */

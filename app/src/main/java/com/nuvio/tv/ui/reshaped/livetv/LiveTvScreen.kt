@@ -87,13 +87,14 @@ internal const val FILTER_FAVORITES = "\u0000favorites"
 internal const val FILTER_SOURCE_PREFIX = "\u0000source:"
 
 /**
- * The channels a filter key shows: hidden categories leave everything but favorites, and a
- * search matches names. Slow for big lists: call off the main thread.
+ * The channels a filter key shows: hidden categories and hidden channels leave everything but
+ * favorites, and a search matches names. Slow for big lists: call off the main thread.
  */
 internal fun filterChannels(
     channels: List<LiveTvChannel>,
     favorites: Set<String>,
     hidden: Set<String>,
+    hiddenChannels: Set<String>,
     key: String,
     query: String = "",
 ): List<LiveTvChannel> {
@@ -101,10 +102,10 @@ internal fun filterChannels(
     val needle = query.trim()
     return channels.filter { channel ->
         when (filter) {
-            LiveTvFilter.All -> channel.group !in hidden
+            LiveTvFilter.All -> channel.group !in hidden && channel.streamUrl !in hiddenChannels
             LiveTvFilter.Favorites -> channel.streamUrl in favorites
-            is LiveTvFilter.Source -> channel.sourceId == filter.id && channel.group !in hidden
-            is LiveTvFilter.Group -> channel.group == filter.name
+            is LiveTvFilter.Source -> channel.sourceId == filter.id && channel.group !in hidden && channel.streamUrl !in hiddenChannels
+            is LiveTvFilter.Group -> channel.group == filter.name && channel.streamUrl !in hiddenChannels
         } && (needle.isEmpty() || channel.name.contains(needle, ignoreCase = true))
     }
 }
@@ -158,14 +159,17 @@ fun LiveTvScreen(
 
     val filter = filterFor(filterKey)
     // Filtered off the main thread: lists can hold tens of thousands of channels.
-    val filterInput = LiveTvFilterInput(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, filterKey, query)
+    val filterInput = LiveTvFilterInput(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelUrls, filterKey, query)
     val visibleChannels = viewModel.visibleChannels
     val filtering = !viewModel.isFilteredFor(filterInput)
-    LaunchedEffect(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, filterKey, query) {
+    LaunchedEffect(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelUrls, filterKey, query) {
         if (viewModel.isFilteredFor(filterInput)) return@LaunchedEffect
         if (query.isNotEmpty()) delay(200) // typing
         val filtered = withContext(Dispatchers.Default) {
-            filterChannels(filterInput.channels, filterInput.favoriteUrls, filterInput.hiddenGroups, filterInput.filterKey, filterInput.query)
+            filterChannels(
+                filterInput.channels, filterInput.favoriteUrls, filterInput.hiddenGroups, filterInput.hiddenChannels,
+                filterInput.filterKey, filterInput.query,
+            )
         }
         viewModel.setVisible(filterInput, filtered)
     }

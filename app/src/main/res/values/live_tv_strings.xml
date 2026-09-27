@@ -51,7 +51,9 @@
     <string name="live_tv_phone_instruction">Scan with your phone to paste a link, type a login or send an M3U file.</string>
 
     <string name="live_tv_categories_title">Categories</string>
-    <string name="live_tv_categories_description">Choose which categories to show. Hidden ones leave the list, search and channel switching. Favorites always stay.</string>
+    <string name="live_tv_categories_description">OK shows or hides a category, ▶ picks its channels. Hold OK to move it, then ▲▼, and OK to drop it. Hidden ones leave the list, search and channel switching; favorites always stay.</string>
+    <string name="live_tv_category_channels_description">OK shows or hides a channel. Hidden ones leave the list, search and channel switching; favorites always stay.</string>
+    <string name="live_tv_categories_sort">A–Z</string>
     <string name="live_tv_categories_shown">%1$d of %2$d shown</string>
     <string name="live_tv_categories_show_all">Show all</string>
     <string name="live_tv_categories_hide_all">Hide all</string>

@@ -142,6 +142,21 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         prefs.edit().putOrRemove(HIDDEN_GROUPS, groups.joinToString("\n")).apply()
     }
 
+    fun hiddenChannelUrls(): Set<String> =
+        string(HIDDEN_CHANNELS)?.lineSequence()?.filter(String::isNotEmpty)?.toHashSet().orEmpty()
+
+    fun saveHiddenChannelUrls(urls: Set<String>) {
+        prefs.edit().putOrRemove(HIDDEN_CHANNELS, urls.joinToString("\n")).apply()
+    }
+
+    /** Categories in the order the viewer put them; ones not in it follow, A to Z. */
+    fun groupOrder(): List<String> =
+        string(GROUP_ORDER)?.lineSequence()?.filter(String::isNotEmpty)?.toList().orEmpty()
+
+    fun saveGroupOrder(groups: List<String>) {
+        prefs.edit().putOrRemove(GROUP_ORDER, groups.joinToString("\n")).apply()
+    }
+
     fun favoriteUrls(): Set<String> =
         string(FAVORITES)?.lineSequence()?.map(String::trim)?.filter(String::isNotBlank)?.toHashSet().orEmpty()
 
@@ -175,6 +190,8 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         const val PREFS = "nuvio_live_tv"
         private const val SOURCES = "sources"
         private const val HIDDEN_GROUPS = "hidden_groups"
+        private const val GROUP_ORDER = "group_order"
+        private const val HIDDEN_CHANNELS = "hidden_channel_urls"
         private const val LEGACY_SOURCE_TYPE = "source_type"
         private const val LEGACY_SOURCE_URL = "source_url"
         private const val STALKER_PORTAL = "stalker_portal_url"

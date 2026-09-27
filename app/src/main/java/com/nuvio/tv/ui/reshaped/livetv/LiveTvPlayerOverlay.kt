@@ -128,7 +128,8 @@ internal class LiveTvPlayerState(
         val picked = LiveTvRepository.zapList
         if (picked.any { it.streamUrl == currentListUrl }) return picked
         val state = LiveTvRepository.uiState.value
-        return if (state.hiddenGroups.isEmpty()) state.channels else state.channels.filter { it.group !in state.hiddenGroups }
+        if (state.hiddenGroups.isEmpty() && state.hiddenChannelUrls.isEmpty()) return state.channels
+        return state.channels.filter { it.group !in state.hiddenGroups && it.streamUrl !in state.hiddenChannelUrls }
     }
 
     /** Called first by the player's key handler; true when the key was Live TV's. */
@@ -212,7 +213,7 @@ internal class LiveTvPlayerState(
         folderJob = scope.launch {
             val state = LiveTvRepository.uiState.value
             panelChannels = withContext(Dispatchers.Default) {
-                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, key)
+                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelUrls, key)
             }
         }
     }
