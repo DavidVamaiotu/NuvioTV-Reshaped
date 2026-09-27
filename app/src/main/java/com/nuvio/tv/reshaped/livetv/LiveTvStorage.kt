@@ -2,6 +2,8 @@ package com.nuvio.tv.reshaped.livetv
 
 import android.content.Context
 import android.content.SharedPreferences
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.util.UUID
 import org.json.JSONArray
@@ -135,26 +137,66 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
 
     // endregion
 
-    fun hiddenGroups(): Set<String> =
-        string(HIDDEN_GROUPS)?.lineSequence()?.filter(String::isNotEmpty)?.toHashSet().orEmpty()
+    // Category names are saved one per line; the blank "Uncategorised" key gets a marker line.
+    private fun decodeGroups(base: String): Sequence<String> =
+        string(base)?.lineSequence()?.filter(String::isNotEmpty)?.map { if (it == UNGROUPED_LINE) LIVE_TV_UNGROUPED else it }
+            ?: emptySequence()
+
+    private fun encodeGroups(groups: Collection<String>): String =
+        groups.joinToString("\n") { if (it == LIVE_TV_UNGROUPED) UNGROUPED_LINE else it }
+
+    fun hiddenGroups(): Set<String> = decodeGroups(HIDDEN_GROUPS).toHashSet()
 
     fun saveHiddenGroups(groups: Set<String>) {
-        prefs.edit().putOrRemove(HIDDEN_GROUPS, groups.joinToString("\n")).apply()
+        prefs.edit().putOrRemove(HIDDEN_GROUPS, encodeGroups(groups)).apply()
     }
 
-    fun hiddenChannelUrls(): Set<String> =
-        string(HIDDEN_CHANNELS)?.lineSequence()?.filter(String::isNotEmpty)?.toHashSet().orEmpty()
+    // region Hidden channels
 
-    fun saveHiddenChannelUrls(urls: Set<String>) {
-        prefs.edit().putOrRemove(HIDDEN_CHANNELS, urls.joinToString("\n")).apply()
+    private val hiddenChannelsFile get() = File(playlistDir, "hidden_channels_$profileId.bin")
+
+    /**
+     * Hidden channels, as [LiveTvChannel.hideKey]s in a small file of their own (8 bytes each), so
+     * hiding a large category does not grow the preferences every other save rewrites. Call off
+     * the main thread.
+     */
+    fun hiddenChannelKeys(): Set<Long> {
+        // Older builds kept them as links in the preferences; those can't be matched to keys.
+        if (prefs.contains(key(LEGACY_HIDDEN_CHANNELS))) prefs.edit().remove(key(LEGACY_HIDDEN_CHANNELS)).apply()
+        val file = hiddenChannelsFile
+        if (!file.isFile) return emptySet()
+        return runCatching {
+            DataInputStream(file.inputStream().buffered()).use { input ->
+                val count = file.length().toInt() / Long.SIZE_BYTES
+                HashSet<Long>(count * 2).apply { repeat(count) { add(input.readLong()) } }
+            }
+        }.getOrDefault(emptySet())
     }
+
+    fun saveHiddenChannelKeys(keys: Set<Long>) {
+        val target = hiddenChannelsFile
+        if (keys.isEmpty()) {
+            target.delete()
+            return
+        }
+        playlistDir.mkdirs()
+        val temp = File(target.path + ".tmp")
+        runCatching {
+            DataOutputStream(temp.outputStream().buffered()).use { out -> keys.forEach(out::writeLong) }
+            if (!temp.renameTo(target)) {
+                target.delete()
+                temp.renameTo(target)
+            }
+        }
+    }
+
+    // endregion
 
     /** Categories in the order the viewer put them; ones not in it follow, A to Z. */
-    fun groupOrder(): List<String> =
-        string(GROUP_ORDER)?.lineSequence()?.filter(String::isNotEmpty)?.toList().orEmpty()
+    fun groupOrder(): List<String> = decodeGroups(GROUP_ORDER).toList()
 
     fun saveGroupOrder(groups: List<String>) {
-        prefs.edit().putOrRemove(GROUP_ORDER, groups.joinToString("\n")).apply()
+        prefs.edit().putOrRemove(GROUP_ORDER, encodeGroups(groups)).apply()
     }
 
     fun favoriteUrls(): Set<String> =
@@ -191,7 +233,8 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         private const val SOURCES = "sources"
         private const val HIDDEN_GROUPS = "hidden_groups"
         private const val GROUP_ORDER = "group_order"
-        private const val HIDDEN_CHANNELS = "hidden_channel_urls"
+        private const val LEGACY_HIDDEN_CHANNELS = "hidden_channel_urls"
+        private const val UNGROUPED_LINE = "\uE000"
         private const val LEGACY_SOURCE_TYPE = "source_type"
         private const val LEGACY_SOURCE_URL = "source_url"
         private const val STALKER_PORTAL = "stalker_portal_url"

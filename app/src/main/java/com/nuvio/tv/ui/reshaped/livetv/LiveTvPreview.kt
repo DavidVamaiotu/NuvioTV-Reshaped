@@ -2,6 +2,7 @@
 
 package com.nuvio.tv.ui.reshaped.livetv
 
+import android.app.ActivityManager
 import android.content.Context
 import android.view.TextureView
 import androidx.compose.animation.Crossfade
@@ -46,6 +47,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -72,9 +74,13 @@ private const val PREVIEW_DELAY_MS = 700L
  * first preview and released when the list is left, no audio decoding, the lowest quality an
  * adaptive stream offers and a few seconds of buffer. Loads go through Live TV's own HTTP client,
  * so previews never touch Nuvio's player, its caches or the connection speed learning.
+ *
+ * The picture is capped at 720p on TVs with little memory (1080p elsewhere). A channel that only
+ * comes larger is not decoded at all: the panel keeps its logo and what is on now.
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 internal class LiveTvPreviewPlayer(private val context: Context) {
+    private val lowMemory = isLowMemoryTv(context)
     private var player: ExoPlayer? = null
     private var surface: TextureView? = null
     private var current: LiveTvChannel? = null
@@ -96,6 +102,17 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
         override fun onVideoSizeChanged(videoSize: VideoSize) {
             if (videoSize.width > 0 && videoSize.height > 0) {
                 aspectRatio = (videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height).coerceIn(1f, 2.4f)
+            }
+        }
+
+        override fun onTracksChanged(tracks: Tracks) {
+            // Only renditions above the cap: stop, so no connection stays open for nothing.
+            val hasVideo = tracks.containsType(C.TRACK_TYPE_VIDEO)
+            if (hasVideo && !tracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) {
+                val channel = current
+                stop()
+                current = channel // an HLS retry of the same channel would be just as large
+                triedHls = true
             }
         }
 
@@ -175,13 +192,17 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
             setParameters(
                 buildUponParameters()
                     .setForceLowestBitrate(true)
+                    .apply { if (lowMemory) setMaxVideoSize(1280, 720) else setMaxVideoSize(1920, 1080) }
+                    .setExceedVideoConstraintsIfNecessary(false)
                     .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true),
             )
         }
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(2_000, 5_000, 1_000, 1_500)
-            .setTargetBufferBytes(4 * 1024 * 1024)
+            .apply {
+                if (lowMemory) setBufferDurationsMs(1_500, 3_000, 800, 1_000) else setBufferDurationsMs(2_000, 5_000, 1_000, 1_500)
+            }
+            .setTargetBufferBytes(if (lowMemory) 2 * 1024 * 1024 else 4 * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(false)
             .build()
         return ExoPlayer.Builder(context)
@@ -197,6 +218,15 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
 
     private companion object {
         const val PREVIEW_USER_AGENT = "VLC/3.0.0 LibVLC/3.0.0"
+        /** Boxes that report under this much memory (2 GB models report less than 2 GB) get the lighter preview. */
+        const val LOW_MEMORY_BYTES = 2_560L * 1024 * 1024
+
+        fun isLowMemoryTv(context: Context): Boolean {
+            val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return true
+            if (manager.isLowRamDevice) return true
+            val info = ActivityManager.MemoryInfo().also(manager::getMemoryInfo)
+            return info.totalMem in 1 until LOW_MEMORY_BYTES
+        }
     }
 }
 
@@ -217,8 +247,11 @@ internal fun LiveTvPreviewPanel(
     LaunchedEffect(channel?.id, playVideo) {
         preview.stop()
         if (!playVideo || channel == null) return@LaunchedEffect
+        // Stalker links are created per play, and portals flag a device that asks for many: those
+        // channels show their logo and what is on now, without a picture.
+        if (LiveTvRepository.isStalker(channel)) return@LaunchedEffect
         delay(PREVIEW_DELAY_MS)
-        preview.play(LiveTvRepository.playableChannel(channel))
+        preview.play(channel)
     }
     // Turning previews off removes the panel: nothing may keep playing unseen.
     DisposableEffect(preview) { onDispose { preview.stop() } }

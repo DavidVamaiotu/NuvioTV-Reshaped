@@ -78,7 +78,7 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
 
     NuvioDialog(
         onDismiss = onDismiss,
-        title = group ?: stringResource(R.string.live_tv_categories_title),
+        title = group?.let { liveTvGroupLabel(it) } ?: stringResource(R.string.live_tv_categories_title),
         subtitle = stringResource(if (group != null) R.string.live_tv_category_channels_description else R.string.live_tv_categories_description),
         width = 640.dp,
         usePlatformDefaultWidth = false,
@@ -132,7 +132,7 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
                     val visible = name !in uiState.hiddenGroups
                     val isMoving = moving == name
                     LiveTvCategoryToggle(
-                        label = name,
+                        label = liveTvGroupLabel(name),
                         count = (uiState.groupCounts[name] ?: 0).toString(),
                         visible = visible,
                         moving = isMoving,
@@ -172,7 +172,7 @@ private fun LiveTvCategoryChannels(group: String, uiState: LiveTvUiState, onBack
     val channels by produceState(emptyList<LiveTvChannel>(), uiState.channels, group) {
         value = withContext(Dispatchers.Default) { uiState.channels.filter { it.group == group } }
     }
-    val hidden = uiState.hiddenChannelUrls
+    val hidden = uiState.hiddenChannelKeys
     val firstFocus = remember { FocusRequester() }
     LaunchedEffect(channels.isNotEmpty()) {
         if (channels.isEmpty()) return@LaunchedEffect
@@ -188,7 +188,7 @@ private fun LiveTvCategoryChannels(group: String, uiState: LiveTvUiState, onBack
             back
         },
     ) {
-        val shown = channels.count { it.streamUrl !in hidden }
+        val shown = channels.count { it.hideKey !in hidden }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -202,11 +202,11 @@ private fun LiveTvCategoryChannels(group: String, uiState: LiveTvUiState, onBack
             )
             LiveTvPillButton(
                 text = stringResource(R.string.live_tv_categories_show_all),
-                onClick = { LiveTvRepository.setChannelsHidden(channels.map { it.streamUrl }, hidden = false) },
+                onClick = { LiveTvRepository.setChannelsHidden(channels, hidden = false) },
             )
             LiveTvPillButton(
                 text = stringResource(R.string.live_tv_categories_hide_all),
-                onClick = { LiveTvRepository.setChannelsHidden(channels.map { it.streamUrl }, hidden = true) },
+                onClick = { LiveTvRepository.setChannelsHidden(channels, hidden = true) },
             )
             LiveTvPillButton(text = stringResource(R.string.live_tv_back), onClick = onBack)
         }
@@ -216,12 +216,12 @@ private fun LiveTvCategoryChannels(group: String, uiState: LiveTvUiState, onBack
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             itemsIndexed(channels, key = { _, channel -> channel.id }) { index, channel ->
-                val visible = channel.streamUrl !in hidden
+                val visible = channel.hideKey !in hidden
                 LiveTvCategoryToggle(
                     label = channel.name,
                     count = null,
                     visible = visible,
-                    onToggle = { LiveTvRepository.setChannelsHidden(listOf(channel.streamUrl), hidden = visible) },
+                    onToggle = { LiveTvRepository.setChannelsHidden(listOf(channel), hidden = visible) },
                     modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
                 )
             }

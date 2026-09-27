@@ -90,7 +90,7 @@ internal fun filterChannels(
     channels: List<LiveTvChannel>,
     favorites: Set<String>,
     hidden: Set<String>,
-    hiddenChannels: Set<String>,
+    hiddenChannels: Set<Long>,
     key: String,
     query: String = "",
 ): List<LiveTvChannel> {
@@ -98,10 +98,10 @@ internal fun filterChannels(
     val needle = query.trim()
     return channels.filter { channel ->
         when (filter) {
-            LiveTvFilter.All -> channel.group !in hidden && channel.streamUrl !in hiddenChannels
+            LiveTvFilter.All -> channel.group !in hidden && channel.hideKey !in hiddenChannels
             LiveTvFilter.Favorites -> channel.streamUrl in favorites
-            is LiveTvFilter.Source -> channel.sourceId == filter.id && channel.group !in hidden && channel.streamUrl !in hiddenChannels
-            is LiveTvFilter.Group -> channel.group == filter.name && channel.streamUrl !in hiddenChannels
+            is LiveTvFilter.Source -> channel.sourceId == filter.id && channel.group !in hidden && channel.hideKey !in hiddenChannels
+            is LiveTvFilter.Group -> channel.group == filter.name && channel.hideKey !in hiddenChannels
         } && (needle.isEmpty() || channel.name.contains(needle, ignoreCase = true))
     }
 }
@@ -155,10 +155,10 @@ fun LiveTvScreen(
 
     val filter = filterFor(filterKey)
     // Filtered off the main thread: lists can hold tens of thousands of channels.
-    val filterInput = LiveTvFilterInput(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelUrls, filterKey, query)
+    val filterInput = LiveTvFilterInput(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelKeys, filterKey, query)
     val visibleChannels = viewModel.visibleChannels
     val filtering = !viewModel.isFilteredFor(filterInput)
-    LaunchedEffect(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelUrls, filterKey, query) {
+    LaunchedEffect(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelKeys, filterKey, query) {
         if (viewModel.isFilteredFor(filterInput)) return@LaunchedEffect
         if (query.isNotEmpty()) delay(200) // typing
         val filtered = withContext(Dispatchers.Default) {
@@ -196,6 +196,9 @@ fun LiveTvScreen(
         runCatching { channelFocus.requestFocus() }
     }
     val minuteClock = rememberLiveTvMinuteClock()
+    // Stays set until the player has taken over the screen, so the preview can't start again
+    // beside it during the navigation.
+    LaunchedEffect(started) { if (!started) launching = false }
 
     val play: (LiveTvChannel) -> Unit = { channel ->
         if (!launching) {
@@ -204,12 +207,14 @@ fun LiveTvScreen(
             preview.release()
             scope.launch {
                 try {
-                    LiveTvRepository.zapList = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
+                    val list = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
+                    LiveTvRepository.setZapList(list, folderKey = filterKey.takeIf { query.isBlank() })
                     val route = liveTvPlayerRoute(channel, viewModel.profileId)
                     viewModel.restoreFocusOnReturn = true
                     onPlay(route)
-                } finally {
+                } catch (error: Exception) {
                     launching = false
+                    throw error
                 }
             }
         }
@@ -421,7 +426,7 @@ private fun LiveTvCategoryColumn(
                 }
             }
             items(groups, key = { it }) { group ->
-                LiveTvCategoryItem(group, selectedKey == group) { onSelect(group) }
+                LiveTvCategoryItem(liveTvGroupLabel(group), selectedKey == group) { onSelect(group) }
             }
         }
     }
