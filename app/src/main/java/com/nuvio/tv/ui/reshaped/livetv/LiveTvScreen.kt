@@ -82,9 +82,32 @@ internal sealed interface LiveTvFilter {
     data class Group(val name: String) : LiveTvFilter
 }
 
-private const val FILTER_ALL = "\u0000all"
-private const val FILTER_FAVORITES = "\u0000favorites"
-private const val FILTER_SOURCE_PREFIX = "\u0000source:"
+internal const val FILTER_ALL = "\u0000all"
+internal const val FILTER_FAVORITES = "\u0000favorites"
+internal const val FILTER_SOURCE_PREFIX = "\u0000source:"
+
+/**
+ * The channels a filter key shows: hidden categories leave everything but favorites, and a
+ * search matches names. Slow for big lists: call off the main thread.
+ */
+internal fun filterChannels(
+    channels: List<LiveTvChannel>,
+    favorites: Set<String>,
+    hidden: Set<String>,
+    key: String,
+    query: String = "",
+): List<LiveTvChannel> {
+    val filter = filterFor(key)
+    val needle = query.trim()
+    return channels.filter { channel ->
+        when (filter) {
+            LiveTvFilter.All -> channel.group !in hidden
+            LiveTvFilter.Favorites -> channel.streamUrl in favorites
+            is LiveTvFilter.Source -> channel.sourceId == filter.id && channel.group !in hidden
+            is LiveTvFilter.Group -> channel.group == filter.name
+        } && (needle.isEmpty() || channel.name.contains(needle, ignoreCase = true))
+    }
+}
 
 private fun filterFor(key: String): LiveTvFilter = when {
     key == FILTER_ALL -> LiveTvFilter.All
@@ -141,18 +164,8 @@ fun LiveTvScreen(
     LaunchedEffect(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, filterKey, query) {
         if (viewModel.isFilteredFor(filterInput)) return@LaunchedEffect
         if (query.isNotEmpty()) delay(200) // typing
-        val favorites = filterInput.favoriteUrls
-        val hidden = filterInput.hiddenGroups
-        val needle = query.trim()
         val filtered = withContext(Dispatchers.Default) {
-            filterInput.channels.filter { channel ->
-                when (filter) {
-                    LiveTvFilter.All -> channel.group !in hidden
-                    LiveTvFilter.Favorites -> channel.streamUrl in favorites
-                    is LiveTvFilter.Source -> channel.sourceId == filter.id && channel.group !in hidden
-                    is LiveTvFilter.Group -> channel.group == filter.name
-                } && (needle.isEmpty() || channel.name.contains(needle, ignoreCase = true))
-            }
+            filterChannels(filterInput.channels, filterInput.favoriteUrls, filterInput.hiddenGroups, filterInput.filterKey, filterInput.query)
         }
         viewModel.setVisible(filterInput, filtered)
     }
