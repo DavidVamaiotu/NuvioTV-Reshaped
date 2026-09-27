@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -108,14 +110,17 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
         onDismiss = onDismiss,
         title = stringResource(R.string.live_tv_source_title),
         subtitle = stringResource(R.string.live_tv_source_description),
-        width = 900.dp,
+        width = 860.dp,
+        // The platform's default dialog width is narrower than this layout on TVs.
+        usePlatformDefaultWidth = false,
+        contentSpacing = NuvioTheme.spacing.md,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xl),
         ) {
             Column(
-                modifier = Modifier.width(220.dp),
+                modifier = Modifier.width(200.dp),
                 verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
@@ -123,7 +128,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                     Image(
                         bitmap = remember(qr) { qr.asImageBitmap() },
                         contentDescription = stringResource(R.string.cd_qr_code),
-                        modifier = Modifier.size(200.dp),
+                        modifier = Modifier.size(170.dp),
                         contentScale = ContentScale.Fit,
                     )
                 }
@@ -137,8 +142,9 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                 }
             }
 
+            // Scrolls when the screen is short; moving focus down brings each field into view.
             Column(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm)) {
@@ -166,14 +172,18 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                     }
                     LiveTvSourceType.Xtream -> {
                         LiveTvTextField(xtreamServer, { xtreamServer = it }, stringResource(R.string.live_tv_xtream_server_hint))
-                        LiveTvTextField(xtreamUser, { xtreamUser = it }, stringResource(R.string.live_tv_username_hint), keyboardType = KeyboardType.Text)
-                        LiveTvTextField(xtreamPassword, { xtreamPassword = it }, stringResource(R.string.live_tv_password_hint), password = true)
+                        Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm)) {
+                            LiveTvTextField(xtreamUser, { xtreamUser = it }, stringResource(R.string.live_tv_username_hint), Modifier.weight(1f), keyboardType = KeyboardType.Text)
+                            LiveTvTextField(xtreamPassword, { xtreamPassword = it }, stringResource(R.string.live_tv_password_hint), Modifier.weight(1f), password = true)
+                        }
                     }
                     LiveTvSourceType.Stalker -> {
                         LiveTvTextField(stalkerPortal, { stalkerPortal = it }, stringResource(R.string.live_tv_stalker_portal_hint))
                         LiveTvTextField(stalkerMac, { stalkerMac = it }, stringResource(R.string.live_tv_stalker_mac_hint), keyboardType = KeyboardType.Ascii)
-                        LiveTvTextField(stalkerUser, { stalkerUser = it }, stringResource(R.string.live_tv_optional_username_hint), keyboardType = KeyboardType.Text)
-                        LiveTvTextField(stalkerPassword, { stalkerPassword = it }, stringResource(R.string.live_tv_optional_password_hint), password = true)
+                        Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm)) {
+                            LiveTvTextField(stalkerUser, { stalkerUser = it }, stringResource(R.string.live_tv_optional_username_hint), Modifier.weight(1f), keyboardType = KeyboardType.Text)
+                            LiveTvTextField(stalkerPassword, { stalkerPassword = it }, stringResource(R.string.live_tv_optional_password_hint), Modifier.weight(1f), password = true)
+                        }
                     }
                 }
 
