@@ -126,6 +126,15 @@ class SeekPreviewState internal constructor(
                 }
                 try {
                     emit(opened)
+                    // Keyframes are only decoded while paused or scrubbing: decoding during
+                    // playback made the video judder. Buffering counts as playing.
+                    controller.uiState
+                        .map { state ->
+                            val scrubbing = state.pendingPreviewSeekPosition != null || state.showSeekOverlay
+                            (state.isPlaying || state.isBuffering) && !scrubbing
+                        }
+                        .distinctUntilChanged()
+                        .collect { active -> opened.playbackActive = active }
                     awaitCancellation()
                 } finally {
                     LocalPreviewSources.close(source, opened)
