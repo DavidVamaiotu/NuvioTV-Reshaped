@@ -9,12 +9,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Whether Live TV shows in the menu. Off by default. */
+/** Whether Live TV shows in the menu (off by default), and whether its list previews channels (on). */
 object LiveTvPreferences {
     private const val KEY_ENABLED = "live_tv_enabled"
+    private const val KEY_PREVIEWS = "live_tv_previews"
 
     private val _enabled = MutableStateFlow(false)
     val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
+
+    private val _previews = MutableStateFlow(true)
+    /** A small live picture of the focused channel in the list. */
+    val previews: StateFlow<Boolean> = _previews.asStateFlow()
 
     @Volatile
     private var loaded = false
@@ -23,7 +28,9 @@ object LiveTvPreferences {
         if (loaded) return
         synchronized(this) {
             if (loaded) return
-            _enabled.value = prefs(context).getBoolean(KEY_ENABLED, false)
+            val prefs = prefs(context)
+            _enabled.value = prefs.getBoolean(KEY_ENABLED, false)
+            _previews.value = prefs.getBoolean(KEY_PREVIEWS, true)
             loaded = true
         }
     }
@@ -32,6 +39,12 @@ object LiveTvPreferences {
         _enabled.value = enabled
         loaded = true
         prefs(context).edit().putBoolean(KEY_ENABLED, enabled).apply()
+    }
+
+    fun setPreviews(context: Context, enabled: Boolean) {
+        ensureLoaded(context)
+        _previews.value = enabled
+        prefs(context).edit().putBoolean(KEY_PREVIEWS, enabled).apply()
     }
 
     // Its own tiny file: this is read on the main thread when the menu is built.
@@ -44,6 +57,14 @@ object LiveTvPreferences {
 fun rememberLiveTvEnabled(): Boolean {
     LiveTvPreferences.ensureLoaded(LocalContext.current)
     val enabled by LiveTvPreferences.enabled.collectAsState()
+    return enabled
+}
+
+/** The channel preview setting as Compose state. */
+@Composable
+fun rememberLiveTvPreviewsEnabled(): Boolean {
+    LiveTvPreferences.ensureLoaded(LocalContext.current)
+    val enabled by LiveTvPreferences.previews.collectAsState()
     return enabled
 }
 

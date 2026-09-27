@@ -22,19 +22,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -80,7 +84,9 @@ internal fun LiveTvPillButton(
 
 /**
  * A one-line text field for the remote: the card takes focus without opening the keyboard;
- * OK opens it.
+ * OK opens it. The arrows always leave the field (left and right once the cursor is at that
+ * end): Compose only does this for input devices that report a D-pad, so remotes that arrive
+ * as a keyboard or through HDMI-CEC used to be stuck in the field.
  */
 @Composable
 internal fun LiveTvTextField(
@@ -95,6 +101,10 @@ internal fun LiveTvTextField(
     var focused by remember { mutableStateOf(false) }
     val inputFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    // The field keeps its own cursor; the text itself follows [value].
+    var fieldValue by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    if (fieldValue.text != value) fieldValue = TextFieldValue(value, TextRange(value.length))
     val shape = RoundedCornerShape(12.dp)
     Card(
         onClick = { inputFocusRequester.requestFocus(); keyboardController?.show() },
@@ -114,16 +124,37 @@ internal fun LiveTvTextField(
     ) {
         Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
             BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
+                value = fieldValue,
+                onValueChange = { next ->
+                    fieldValue = next
+                    if (next.text != value) onValueChange(next.text)
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(inputFocusRequester)
-                    .onKeyEvent { event ->
-                        val isCenterDown = event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_DPAD_CENTER &&
-                            event.nativeKeyEvent.action == KeyEvent.ACTION_DOWN
-                        if (isCenterDown) keyboardController?.show()
-                        isCenterDown
+                    .onPreviewKeyEvent { event ->
+                        val native = event.nativeKeyEvent
+                        if (native.action != KeyEvent.ACTION_DOWN) {
+                            // The matching key-up of a handled press must not reach the field either.
+                            return@onPreviewKeyEvent native.keyCode in DPAD_ARROWS
+                        }
+                        val selection = fieldValue.selection
+                        val direction = when (native.keyCode) {
+                            KeyEvent.KEYCODE_DPAD_UP -> FocusDirection.Up
+                            KeyEvent.KEYCODE_DPAD_DOWN -> FocusDirection.Down
+                            KeyEvent.KEYCODE_DPAD_LEFT -> if (selection.collapsed && selection.start == 0) FocusDirection.Left else null
+                            KeyEvent.KEYCODE_DPAD_RIGHT ->
+                                if (selection.collapsed && selection.end == fieldValue.text.length) FocusDirection.Right else null
+                            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                                keyboardController?.show()
+                                return@onPreviewKeyEvent true
+                            }
+                            else -> return@onPreviewKeyEvent false
+                        } ?: return@onPreviewKeyEvent false
+                        keyboardController?.hide()
+                        // Nothing that way (the top of the screen): stay, rather than typing an arrow.
+                        focusManager.moveFocus(direction)
+                        true
                     },
                 singleLine = true,
                 visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
@@ -149,6 +180,10 @@ internal fun LiveTvTextField(
         }
     }
 }
+
+private val DPAD_ARROWS = intArrayOf(
+    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+)
 
 /**
  * A channel logo, decoded at the size it is drawn (channel logos are often large PNGs). Falls back

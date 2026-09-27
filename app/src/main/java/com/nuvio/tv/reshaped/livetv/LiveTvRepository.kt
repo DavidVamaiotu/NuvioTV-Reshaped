@@ -9,6 +9,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,12 +20,17 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 /**
  * Live TV's channel list, guide, favorites and last channel for the active profile. It lives for
  * the app's process, so coming back from the player shows the list as it was, without a reload.
  * Loads run in its own scope: leaving the screen does not cancel them.
+ *
+ * Several sources can be saved; their channels show as one list, in the order the sources were
+ * added. A source that fails to load keeps the channels it had.
  */
 object LiveTvRepository {
     private const val TAG = "LiveTv"
@@ -33,6 +41,8 @@ object LiveTvRepository {
     private const val EPG_MIN_READ_GAP_MS = 60L * 60 * 1000
     /** A guide that could not be read is tried again sooner. */
     private const val EPG_RETRY_MS = 30L * 60 * 1000
+    /** Sources loaded at once on a refresh: each holds a connection and a parse buffer. */
+    private const val PARALLEL_SOURCES = 2
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _uiState = MutableStateFlow(LiveTvUiState())
@@ -46,10 +56,16 @@ object LiveTvRepository {
     private var loadedProfileId: Int? = null
     private var loadJob: Job? = null
     private var epgJob: Job? = null
+    @Volatile private var epgGeneration = 0
+    private var epgKey: Pair<List<String>, Set<String>>? = null
+
+    /** What each source loaded last. Only touched from [publish] and the loads, which run one at a time. */
+    private class LoadedSource(val channels: List<LiveTvChannel>, val epgUrls: List<String>)
+    private val loaded = HashMap<String, LoadedSource>()
 
     /**
      * Makes the state match [profileId]: the first call (or a profile switch) reads the saved
-     * source and loads its channels; later calls for the same profile do nothing.
+     * sources and loads their channels; later calls for the same profile do nothing.
      */
     fun ensureLoaded(context: Context, profileId: Int) {
         if (loadedProfileId == profileId) return
@@ -63,54 +79,86 @@ object LiveTvRepository {
             val store = withContext(Dispatchers.IO) {
                 LiveTvStorage(appContext, profileId).also { it.favoriteUrls() } // first read parses the file
             }
+            val sources = withContext(Dispatchers.IO) { store.sources() }
             storage = store
+            synchronized(loaded) { loaded.clear() }
             _uiState.value = LiveTvUiState(
-                sourceType = store.sourceType(),
-                sourceUrl = store.sourceUrl(),
-                stalkerSettings = store.stalkerSettings(),
-                xtreamSettings = store.xtreamSettings(),
+                sources = sources,
                 favoriteUrls = store.favoriteUrls(),
+                hiddenGroups = store.hiddenGroups(),
                 recentChannel = store.recentChannel(),
             )
-            reloadSaved(store)
+            reloadAll()
         }
     }
 
-    /** Loads the saved source again (the Refresh button). */
+    /** Loads every saved source again (the Refresh button). */
     fun refresh() {
-        val store = storage ?: return
-        launchLoad { reloadSaved(store) }
+        if (storage == null) return
+        launchLoad { reloadAll() }
     }
 
-    private suspend fun reloadSaved(store: LiveTvStorage) {
-        val state = _uiState.value
-        when {
-            state.sourceType == LiveTvSourceType.Xtream && state.xtreamSettings.isConfigured ->
-                loadXtreamNow(state.xtreamSettings)
-            state.sourceType == LiveTvSourceType.Stalker && state.stalkerSettings.isConfigured ->
-                loadStalkerNow(state.stalkerSettings)
-            state.sourceType == LiveTvSourceType.M3u && store.hasPlaylistFile() ->
-                loadPlaylistFileNow(state.sourceUrl)
-            state.sourceType == LiveTvSourceType.M3u && state.sourceUrl.isHttpUrl() ->
-                loadM3uUrlNow(state.sourceUrl)
-            else -> _uiState.update { it.copy(isLoading = false) }
+    private suspend fun reloadAll() {
+        val sources = _uiState.value.sources
+        if (sources.isEmpty()) {
+            _uiState.update { it.copy(isLoading = false) }
+            return
         }
+        startLoading()
+        val permits = Semaphore(PARALLEL_SOURCES)
+        val results = coroutineScope {
+            sources.map { source ->
+                async {
+                    permits.withPermit {
+                        source.id to try {
+                            Result.success(loadSource(source))
+                        } catch (cancel: CancellationException) {
+                            throw cancel
+                        } catch (error: Exception) {
+                            Log.w(TAG, "Live TV source ${source.type} failed", error)
+                            Result.failure(error)
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+        val errors = HashMap<String, LiveTvError>()
+        synchronized(loaded) {
+            results.forEach { (id, result) ->
+                result.onSuccess { loaded[id] = it.first }
+                val error = result.exceptionOrNull()?.let { (it as? LiveTvException)?.error ?: fallbackError(sources, id) }
+                    ?: result.getOrNull()?.second
+                if (error != null) errors[id] = error
+            }
+        }
+        publish(errors)
     }
 
-    fun loadM3uUrl(url: String) = launchLoad { loadM3uUrlNow(url.trim()) }
+    fun loadM3uUrl(url: String) {
+        val trimmed = url.trim()
+        launchAdd(LiveTvSource("", LiveTvSourceType.M3u, trimmed))
+    }
 
-    fun loadXtream(settings: LiveTvXtreamSettings) = launchLoad { loadXtreamNow(settings.normalized()) }
+    fun loadXtream(settings: LiveTvXtreamSettings) {
+        val normalized = settings.normalized()
+        launchAdd(LiveTvSource("", LiveTvSourceType.Xtream, normalized.serverUrl, xtream = normalized))
+    }
 
-    fun loadStalker(settings: LiveTvStalkerSettings) = launchLoad { loadStalkerNow(settings.normalized()) }
+    fun loadStalker(settings: LiveTvStalkerSettings) {
+        val normalized = settings.normalized()
+        launchAdd(LiveTvSource("", LiveTvSourceType.Stalker, normalized.portalUrl, stalker = normalized))
+    }
 
     /**
-     * Saves a playlist sent from a phone, then shows it. Blocking (the upload server's thread):
-     * [input] is copied to a file first so it is never held in memory as a whole.
+     * Saves a playlist sent from a phone as a source, then shows it. Blocking (the upload
+     * server's thread): [input] is copied to a file first so it is never held in memory as a whole.
      */
     fun importPlaylist(fileName: String, input: InputStream, maxBytes: Long): Boolean {
         val store = storage ?: return false
+        val name = fileName.trim().ifBlank { "M3U playlist" }
+        val candidate = withExistingId(LiveTvSource("", LiveTvSourceType.M3u, name), store)
         val saved = runCatching {
-            store.savePlaylistFile { temp ->
+            store.savePlaylistFile(candidate.id) { temp ->
                 temp.outputStream().use { out ->
                     val buffer = ByteArray(64 * 1024)
                     var total = 0L
@@ -125,28 +173,41 @@ object LiveTvRepository {
             }
         }.isSuccess
         if (!saved) return false
-        launchLoad { loadPlaylistFileNow(fileName.trim().ifBlank { "M3U playlist" }) }
+        launchAdd(candidate)
         return true
     }
 
-    /** Removes the active source and its channels; saved provider logins stay. */
-    fun disconnect() {
+    /** Removes one source and its channels. */
+    fun removeSource(sourceId: String) {
         val store = storage ?: return
+        val sources = _uiState.value.sources.filterNot { it.id == sourceId }
+        if (sources.size == _uiState.value.sources.size) return
         loadJob?.cancel()
-        stopEpg()
         LiveTvStalker.clearSession()
+        synchronized(loaded) { loaded.remove(sourceId) }
+        _uiState.update { it.copy(sources = sources, isLoading = false, error = null) }
         scope.launch(Dispatchers.IO) {
-            store.clearSource()
-            guideDir().deleteRecursively()
+            store.saveSources(sources)
+            store.deletePlaylistFile(sourceId)
         }
-        _uiState.update {
-            LiveTvUiState(
-                stalkerSettings = it.stalkerSettings,
-                xtreamSettings = it.xtreamSettings,
-                favoriteUrls = it.favoriteUrls,
-                recentChannel = it.recentChannel,
-            )
-        }
+        publish(_uiState.value.sourceErrors - sourceId)
+    }
+
+    /** Shows or hides a category. */
+    fun setGroupHidden(group: String, hidden: Boolean) {
+        val current = _uiState.value.hiddenGroups
+        if ((group in current) == hidden) return
+        saveHiddenGroups(if (hidden) current + group else current - group)
+    }
+
+    /** Shows every category, or hides every one (to then pick the few that are wanted). */
+    fun setAllGroupsHidden(hidden: Boolean) {
+        saveHiddenGroups(if (hidden) _uiState.value.groups.toHashSet() else emptySet())
+    }
+
+    private fun saveHiddenGroups(groups: Set<String>) {
+        _uiState.update { it.copy(hiddenGroups = groups) }
+        storage?.let { store -> scope.launch(Dispatchers.IO) { store.saveHiddenGroups(groups) } }
     }
 
     fun toggleFavorite(channel: LiveTvChannel) {
@@ -178,24 +239,26 @@ object LiveTvRepository {
                 headers = defaultStreamHeaders(recent.streamUrl),
             )
 
-    /**
-     * The channel as the player should open it (Stalker links are created per play), registered
-     * so the player treats it as Live TV, and remembered as the last channel.
-     */
-    suspend fun prepareForPlayback(channel: LiveTvChannel): LiveTvChannel {
-        val state = _uiState.value
-        val playback = if (state.sourceType == LiveTvSourceType.Stalker && channel.stalkerCommand != null) {
-            try {
-                LiveTvStalker.resolve(state.stalkerSettings, channel)
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (error: Exception) {
-                Log.w(TAG, "Stalker link failed, trying the listed link", error)
-                channel
-            }
-        } else {
+    /** The channel with a link that plays now: Stalker links are created per play; others are as listed. */
+    suspend fun playableChannel(channel: LiveTvChannel): LiveTvChannel {
+        val source = _uiState.value.sources.firstOrNull { it.id == channel.sourceId }
+        if (source?.type != LiveTvSourceType.Stalker || channel.stalkerCommand == null) return channel
+        return try {
+            LiveTvStalker.resolve(source.stalker, channel)
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (error: Exception) {
+            Log.w(TAG, "Stalker link failed, trying the listed link", error)
             channel
         }
+    }
+
+    /**
+     * The channel as the player should open it, registered so the player treats it as Live TV,
+     * and remembered as the last channel.
+     */
+    suspend fun prepareForPlayback(channel: LiveTvChannel): LiveTvChannel {
+        val playback = playableChannel(channel)
         LiveTvPlaybackRegistry.register(playback.streamUrl, listUrl = channel.streamUrl)
         recordRecentChannel(channel)
         return playback
@@ -216,128 +279,167 @@ object LiveTvRepository {
 
     // region Loads
 
-    private suspend fun loadM3uUrlNow(url: String) {
-        if (!url.isHttpUrl()) return fail(LiveTvError.InvalidUrl)
-        startLoading()
-        runLoad(LiveTvError.LoadFailed) {
-            val playlist = if (url.looksLikeDirectVideoUrl()) {
-                ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList())
-            } else {
-                LiveTvHttp.stream(url, LIVE_TV_PLAYLIST_HEADERS) { input ->
-                    parseM3uPlaylist(input.bufferedReader().lineSequence())
-                }.let { parsed ->
-                    if (parsed.isHlsStream) ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList()) else parsed
-                }
-            }
-            if (playlist.channels.isEmpty()) throw LiveTvException(LiveTvError.NoChannels)
-            storage?.let { store ->
-                withContext(Dispatchers.IO) {
-                    store.deletePlaylistFile()
-                    store.saveM3uSource(url)
-                }
-            }
-            showChannels(LiveTvSourceType.M3u, url, playlist.channels, playlist.epgUrls)
-        }
+    /** A source being added keeps the id of a saved one that is the same source, so it replaces it. */
+    private fun withExistingId(candidate: LiveTvSource, store: LiveTvStorage): LiveTvSource {
+        val existing = _uiState.value.sources.firstOrNull { it.identity == candidate.identity }
+        return candidate.copy(id = existing?.id ?: store.newSourceId())
     }
 
-    private suspend fun loadPlaylistFileNow(displayName: String) {
+    /**
+     * Loads a new source (or a saved one entered again) and adds it once it listed channels; a
+     * failed attempt changes nothing but the error shown.
+     */
+    private fun launchAdd(input: LiveTvSource) {
         val store = storage ?: return
-        startLoading()
-        runLoad(LiveTvError.FileNoChannels) {
-            val file: File = store.playlistFile() ?: throw LiveTvException(LiveTvError.FileEmpty)
-            val playlist = withContext(Dispatchers.IO) {
-                file.bufferedReader().useLines { parseM3uPlaylist(it) }
-            }
-            if (playlist.channels.isEmpty()) {
-                withContext(Dispatchers.IO) { store.deletePlaylistFile() }
-                throw LiveTvException(LiveTvError.FileNoChannels)
-            }
-            withContext(Dispatchers.IO) { store.saveM3uSource(displayName) }
-            showChannels(LiveTvSourceType.M3u, displayName, playlist.channels, playlist.epgUrls)
+        val validation = validate(input)
+        if (validation != null) {
+            _uiState.update { it.copy(error = validation, isLoading = false) }
+            return
         }
-    }
-
-    private suspend fun loadXtreamNow(settings: LiveTvXtreamSettings) {
-        if (!settings.isConfigured) return fail(LiveTvError.XtreamRequired)
-        if (!settings.serverUrl.isHttpUrl()) return fail(LiveTvError.XtreamInvalidUrl)
-        _uiState.update { it.copy(xtreamSettings = settings) }
-        startLoading()
-        runLoad(LiveTvError.XtreamFailed) {
-            val channels = LiveTvXtream.channels(settings)
-            if (channels.isEmpty()) throw LiveTvException(LiveTvError.XtreamNoChannels)
-            storage?.let { store ->
-                withContext(Dispatchers.IO) {
-                    store.deletePlaylistFile()
-                    store.saveXtream(settings)
+        val candidate = if (input.id.isBlank()) withExistingId(input, store) else input
+        val isNew = _uiState.value.sources.none { it.id == candidate.id }
+        launchLoad {
+            startLoading()
+            try {
+                val (result, notice) = loadSource(candidate)
+                synchronized(loaded) { loaded[candidate.id] = result }
+                val sources = _uiState.value.sources.let { current ->
+                    if (isNew) current + candidate else current.map { if (it.id == candidate.id) candidate else it }
                 }
-            }
-            // Xtream providers publish their guide at xmltv.php.
-            val epg = "${settings.serverUrl}/xmltv.php?username=${settings.username.urlEncoded()}&password=${settings.password.urlEncoded()}"
-            showChannels(LiveTvSourceType.Xtream, settings.serverUrl, channels, listOf(epg))
-        }
-    }
-
-    private suspend fun loadStalkerNow(settings: LiveTvStalkerSettings) {
-        if (!settings.isConfigured) return fail(LiveTvError.StalkerRequired)
-        if (!settings.portalUrl.isHttpUrl()) return fail(LiveTvError.StalkerInvalidUrl)
-        _uiState.update { it.copy(stalkerSettings = settings) }
-        startLoading()
-        runLoad(LiveTvError.StalkerFailed) {
-            val (channels, incomplete) = LiveTvStalker.channels(settings)
-            if (channels.isEmpty()) throw LiveTvException(LiveTvError.StalkerNoChannels)
-            storage?.let { store ->
+                _uiState.update { it.copy(sources = sources) }
                 withContext(Dispatchers.IO) {
-                    store.deletePlaylistFile()
-                    store.saveStalker(settings)
+                    store.saveSources(sources)
+                    if (candidate.type != LiveTvSourceType.M3u || candidate.url.isHttpUrl()) store.deletePlaylistFile(candidate.id)
                 }
+                val errors = _uiState.value.sourceErrors - candidate.id
+                publish(if (notice != null) errors + (candidate.id to notice) else errors)
+                if (notice != null) _uiState.update { it.copy(error = notice) }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (error: Exception) {
+                Log.w(TAG, "Live TV source could not be added", error)
+                if (isNew && candidate.type == LiveTvSourceType.M3u && !candidate.url.isHttpUrl()) {
+                    withContext(Dispatchers.IO) { store.deletePlaylistFile(candidate.id) }
+                }
+                fail((error as? LiveTvException)?.error ?: fallbackError(candidate.type))
             }
-            showChannels(LiveTvSourceType.Stalker, settings.portalUrl, channels, emptyList())
-            if (incomplete) _uiState.update { it.copy(error = LiveTvError.StalkerIncomplete) }
         }
     }
 
-    /** The shown source changes only once the new one loaded, so a failed attempt keeps the list. */
+    private fun validate(source: LiveTvSource): LiveTvError? = when (source.type) {
+        LiveTvSourceType.M3u -> if (source.url.isBlank()) LiveTvError.InvalidUrl else null
+        LiveTvSourceType.Xtream -> when {
+            !source.xtream.isConfigured -> LiveTvError.XtreamRequired
+            !source.xtream.serverUrl.isHttpUrl() -> LiveTvError.XtreamInvalidUrl
+            else -> null
+        }
+        LiveTvSourceType.Stalker -> when {
+            !source.stalker.isConfigured -> LiveTvError.StalkerRequired
+            !source.stalker.portalUrl.isHttpUrl() -> LiveTvError.StalkerInvalidUrl
+            else -> null
+        }
+    }
+
+    private fun fallbackError(sources: List<LiveTvSource>, id: String): LiveTvError =
+        fallbackError(sources.firstOrNull { it.id == id }?.type ?: LiveTvSourceType.M3u)
+
+    private fun fallbackError(type: LiveTvSourceType): LiveTvError = when (type) {
+        LiveTvSourceType.M3u -> LiveTvError.LoadFailed
+        LiveTvSourceType.Xtream -> LiveTvError.XtreamFailed
+        LiveTvSourceType.Stalker -> LiveTvError.StalkerFailed
+    }
+
+    /** One source's channels (tagged with the source) and guide links, plus a notice for a partial load. */
+    private suspend fun loadSource(source: LiveTvSource): Pair<LoadedSource, LiveTvError?> {
+        var notice: LiveTvError? = null
+        val (channels, epgUrls) = when (source.type) {
+            LiveTvSourceType.M3u -> {
+                val file = withContext(Dispatchers.IO) { storage?.playlistFile(source.id) }
+                val playlist = when {
+                    file != null -> withContext(Dispatchers.IO) { file.bufferedReader().useLines { parseM3uPlaylist(it) } }
+                    source.url.isHttpUrl() -> fetchM3u(source.url)
+                    else -> throw LiveTvException(if (source.url.startsWith("http", ignoreCase = true)) LiveTvError.InvalidUrl else LiveTvError.FileEmpty)
+                }
+                if (playlist.channels.isEmpty()) {
+                    throw LiveTvException(if (file != null) LiveTvError.FileNoChannels else LiveTvError.NoChannels)
+                }
+                playlist.channels to playlist.epgUrls
+            }
+            LiveTvSourceType.Xtream -> {
+                val settings = source.xtream
+                val channels = LiveTvXtream.channels(settings)
+                if (channels.isEmpty()) throw LiveTvException(LiveTvError.XtreamNoChannels)
+                // Xtream providers publish their guide at xmltv.php.
+                channels to listOf("${settings.serverUrl}/xmltv.php?username=${settings.username.urlEncoded()}&password=${settings.password.urlEncoded()}")
+            }
+            LiveTvSourceType.Stalker -> {
+                val (channels, incomplete) = LiveTvStalker.channels(source.stalker)
+                if (channels.isEmpty()) throw LiveTvException(LiveTvError.StalkerNoChannels)
+                if (incomplete) notice = LiveTvError.StalkerIncomplete
+                channels to emptyList()
+            }
+        }
+        // Ids only need to be unique within a source; the list keys on them across all of them.
+        val tagged = ArrayList<LiveTvChannel>(channels.size)
+        channels.forEach { tagged += it.copy(id = "${source.id}/${it.id}", sourceId = source.id) }
+        return LoadedSource(tagged, epgUrls) to notice
+    }
+
+    private suspend fun fetchM3u(url: String): ParsedM3uPlaylist {
+        if (url.looksLikeDirectVideoUrl()) return ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList())
+        val parsed = LiveTvHttp.stream(url, LIVE_TV_PLAYLIST_HEADERS) { input ->
+            parseM3uPlaylist(input.bufferedReader().lineSequence())
+        }
+        return if (parsed.isHlsStream) ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList()) else parsed
+    }
+
+    /** The shown channels change only once a load finished, so a failed attempt keeps the list. */
     private fun startLoading() {
         _uiState.update { it.copy(isLoading = true, error = null) }
     }
 
-    private suspend fun runLoad(fallback: LiveTvError, block: suspend () -> Unit) {
-        try {
-            block()
-        } catch (cancel: CancellationException) {
-            throw cancel
-        } catch (error: Exception) {
-            Log.w(TAG, "Live TV load failed", error)
-            fail((error as? LiveTvException)?.error ?: fallback)
-        }
-    }
-
     private fun fail(error: LiveTvError) {
-        _uiState.update { it.copy(isLoading = false, isLoaded = it.channels.isNotEmpty(), error = error) }
+        _uiState.update { it.copy(isLoading = false, isLoaded = it.channels.isNotEmpty() || it.sources.isNotEmpty(), error = error) }
     }
 
-    private fun showChannels(
-        type: LiveTvSourceType,
-        sourceUrl: String,
-        channels: List<LiveTvChannel>,
-        epgUrls: List<String>,
-    ) {
-        val groups = channels.mapNotNullTo(HashSet()) { it.group.takeIf(String::isNotBlank) }.sortedWith(String.CASE_INSENSITIVE_ORDER)
-        val hasGuide = epgUrls.isNotEmpty() && channels.any { !it.tvgId.isNullOrBlank() }
+    /** Shows the channels of every saved source as one list, and (re)starts the guide when its inputs changed. */
+    private fun publish(errors: Map<String, LiveTvError>) {
+        val sources = _uiState.value.sources
+        val parts = synchronized(loaded) { sources.mapNotNull { loaded[it.id] } }
+        val channels = ArrayList<LiveTvChannel>(parts.sumOf { it.channels.size })
+        parts.forEach { channels.addAll(it.channels) }
+        val groupCounts = HashMap<String, Int>()
+        val sourceCounts = HashMap<String, Int>()
+        channels.forEach { channel ->
+            if (channel.group.isNotBlank()) groupCounts[channel.group] = (groupCounts[channel.group] ?: 0) + 1
+            sourceCounts[channel.sourceId] = (sourceCounts[channel.sourceId] ?: 0) + 1
+        }
+        val groups = groupCounts.keys.sortedWith(String.CASE_INSENSITIVE_ORDER)
+        val epgUrls = parts.flatMap { it.epgUrls }.distinct()
+        val tvgIds = channels.mapNotNullTo(LinkedHashSet()) { it.tvgId?.takeIf(String::isNotBlank) }
+        val hasGuide = epgUrls.isNotEmpty() && tvgIds.isNotEmpty()
+        val guideChanged = epgKey != (epgUrls to tvgIds) || epgJob?.isActive != true
         _uiState.update {
             it.copy(
-                sourceType = type,
-                sourceUrl = sourceUrl,
                 channels = channels,
                 groups = groups,
-                currentProgrammes = emptyMap(),
-                isEpgLoading = hasGuide,
+                groupCounts = groupCounts,
+                sourceCounts = sourceCounts,
+                sourceErrors = errors,
+                currentProgrammes = if (hasGuide && !guideChanged) it.currentProgrammes else emptyMap(),
+                isEpgLoading = hasGuide && (guideChanged || it.isEpgLoading),
                 isLoading = false,
                 isLoaded = true,
                 error = null,
             )
         }
-        if (hasGuide) startEpg(sourceUrl, epgUrls, channels)
+        if (!hasGuide) {
+            stopEpg()
+            epgKey = null
+        } else if (guideChanged) {
+            epgKey = epgUrls to tvgIds
+            startEpg(epgUrls, tvgIds)
+        }
     }
 
     // endregion
@@ -345,6 +447,7 @@ object LiveTvRepository {
     // region Guide
 
     private fun stopEpg() {
+        epgGeneration++
         epgJob?.cancel()
         epgJob = null
     }
@@ -355,9 +458,9 @@ object LiveTvRepository {
      * opened again. The guide is saved compressed in the cache, downloaded again every 10 hours,
      * and re-read from there whenever channels run out of kept programmes.
      */
-    private fun startEpg(sourceUrl: String, epgUrls: List<String>, channels: List<LiveTvChannel>) {
+    private fun startEpg(epgUrls: List<String>, tvgIds: Set<String>) {
         stopEpg()
-        val tvgIds = channels.mapNotNullTo(LinkedHashSet()) { it.tvgId?.takeIf(String::isNotBlank) }
+        val generation = epgGeneration
         val channelIds = tvgIds.mapTo(HashSet()) { it.lowercase() }
         val guideFiles = epgUrls.map { File(guideDir(), "guide_${Integer.toHexString(it.hashCode())}.xml.gz") }
         epgJob = scope.launch {
@@ -386,13 +489,13 @@ object LiveTvRepository {
                 val current = currentProgrammes(schedule, tvgIds, nowMs)
                 _uiState.update { state ->
                     when {
-                        state.sourceUrl != sourceUrl -> state
+                        epgGeneration != generation -> state
                         state.currentProgrammes != current || state.isEpgLoading ->
                             state.copy(currentProgrammes = current, isEpgLoading = false)
                         else -> state
                     }
                 }
-                if (_uiState.value.sourceUrl != sourceUrl) return@launch
+                if (epgGeneration != generation) return@launch
                 delay(EPG_TICK_MS)
             }
         }

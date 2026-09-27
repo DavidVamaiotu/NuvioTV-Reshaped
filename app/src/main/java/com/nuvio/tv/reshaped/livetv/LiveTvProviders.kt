@@ -93,10 +93,11 @@ internal object LiveTvStalker {
     private const val MAX_PAGES = 500
     private const val PARALLEL_PAGES = 4
 
-    @Volatile private var cachedSession: StalkerSession? = null
+    /** One session per portal login, so several Stalker sources do not keep renewing each other's. */
+    private val sessions = java.util.concurrent.ConcurrentHashMap<LiveTvStalkerSettings, StalkerSession>()
 
     fun clearSession() {
-        cachedSession = null
+        sessions.clear()
     }
 
     /** The portal's channels; [StalkerChannels.incomplete] when some pages still failed after a retry. */
@@ -131,14 +132,14 @@ internal object LiveTvStalker {
      * with a cached session is retried once after a fresh handshake.
      */
     private suspend fun <T> withSession(settings: LiveTvStalkerSettings, block: suspend (StalkerSession) -> T): T {
-        val cached = cachedSession?.takeIf { it.settings == settings }
+        val cached = sessions[settings]
         if (cached != null) {
             try {
                 return block(cached)
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (_: Exception) {
-                if (cachedSession === cached) cachedSession = null
+                sessions.remove(settings, cached)
             }
         }
         return block(handshake(settings))
@@ -150,7 +151,7 @@ internal object LiveTvStalker {
         // Many portals only list channels after the device profile was requested with the token.
         runCatching { request(settings, token, "stb", "get_profile") }
             .onFailure { if (it is CancellationException) throw it }
-        return StalkerSession(settings, token).also { cachedSession = it }
+        return StalkerSession(settings, token).also { sessions[settings] = it }
     }
 
     private suspend fun genres(session: StalkerSession): Map<String, String> =
