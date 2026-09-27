@@ -1,5 +1,6 @@
 package com.nuvio.tv.reshaped.livetv
 
+import android.util.Log
 import android.util.JsonReader
 import android.util.JsonToken
 import java.io.InputStream
@@ -81,6 +82,8 @@ internal fun LiveTvStalkerSettings.normalized(): LiveTvStalkerSettings = copy(
     password = password.trim(),
 )
 
+internal data class StalkerChannels(val channels: List<LiveTvChannel>, val incomplete: Boolean)
+
 private class StalkerSession(val settings: LiveTvStalkerSettings, val token: String) {
     /** Built once per session and shared by every channel, not copied into each. */
     var playbackHeaders: Map<String, String>? = null
@@ -96,7 +99,8 @@ internal object LiveTvStalker {
         cachedSession = null
     }
 
-    suspend fun channels(settings: LiveTvStalkerSettings): List<LiveTvChannel> = withSession(settings) { session ->
+    /** The portal's channels; [StalkerChannels.incomplete] when some pages still failed after a retry. */
+    suspend fun channels(settings: LiveTvStalkerSettings): StalkerChannels = withSession(settings) { session ->
         val genres = genres(session)
         var index = 0
         val toChannel: (Map<String, String>) -> LiveTvChannel? = { fields -> fields.toChannel(session, genres, index++) }
@@ -104,7 +108,8 @@ internal object LiveTvStalker {
         val all = runCatching { dataObjects(session, "itv", "get_all_channels", toChannel) }
             .getOrElse { if (it is CancellationException) throw it else emptyList() }
         val seen = HashSet<String>()
-        ArrayList((all.ifEmpty { orderedPages(session, toChannel) }).filter { seen.add(it.id.ifBlank { it.streamUrl }) })
+        val result = if (all.isNotEmpty()) StalkerChannels(all, incomplete = false) else orderedPages(session, toChannel)
+        result.copy(channels = ArrayList(result.channels.filter { seen.add(it.id.ifBlank { it.streamUrl }) }))
     }
 
     /** A playable link for a list entry: Stalker links are created per play and expire. */
@@ -158,7 +163,7 @@ internal object LiveTvStalker {
     private suspend fun orderedPages(
         session: StalkerSession,
         toChannel: (Map<String, String>) -> LiveTvChannel?,
-    ): List<LiveTvChannel> {
+    ): StalkerChannels {
         // Pages load a few at a time, so the mapper is shared across threads.
         val mapper: (Map<String, String>) -> LiveTvChannel? = { synchronized(this) { toChannel(it) } }
         suspend fun page(number: Int): StalkerPage<LiveTvChannel> =
@@ -168,7 +173,8 @@ internal object LiveTvStalker {
             ) { input -> readStalkerPage(input, mapper) }
 
         val first = page(1)
-        if (first.entries.isEmpty()) return emptyList()
+        if (first.entries.isEmpty()) return StalkerChannels(emptyList(), incomplete = false)
+        var failedPages = 0
         val entries = ArrayList(first.entries)
         val perPage = first.maxPageItems?.takeIf { it > 0 } ?: first.entries.size
         val total = first.totalItems
@@ -178,8 +184,14 @@ internal object LiveTvStalker {
                 coroutineScope {
                     numbers.map { number ->
                         async {
+                            // A portal that drops a page under load usually serves it on a second try.
                             runCatching { page(number).entries }
-                                .getOrElse { if (it is CancellationException) throw it else emptyList() }
+                                .recoverCatching { if (it is CancellationException) throw it else page(number).entries }
+                                .getOrElse {
+                                    if (it is CancellationException) throw it
+                                    synchronized(entries) { failedPages++ }
+                                    emptyList()
+                                }
                         }
                     }.awaitAll()
                 }.forEach(entries::addAll)
@@ -191,7 +203,8 @@ internal object LiveTvStalker {
                 entries += data
             }
         }
-        return entries
+        if (failedPages > 0) Log.w("LiveTv", "Stalker: $failedPages pages could not be loaded")
+        return StalkerChannels(entries, incomplete = failedPages > 0)
     }
 
     private fun Map<String, String>.toChannel(
@@ -381,6 +394,8 @@ private fun JsonReader.nextScalar(): String? = when (peek()) {
 enum class LiveTvError {
     InvalidUrl, NoChannels, LoadFailed, FileEmpty, FileNoChannels,
     StalkerRequired, StalkerInvalidUrl, StalkerNoChannels, StalkerFailed, StalkerToken,
+    /** The list loaded, but some of the portal's pages did not: a notice, not a failed load. */
+    StalkerIncomplete,
     XtreamRequired, XtreamInvalidUrl, XtreamNoChannels, XtreamFailed,
 }
 

@@ -37,6 +37,7 @@ import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.core.qr.QrCodeGenerator
 import com.nuvio.tv.core.server.DeviceIpAddress
+import com.nuvio.tv.reshaped.livetv.LiveTvError
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvSetupServer
 import com.nuvio.tv.reshaped.livetv.LiveTvSourceType
@@ -71,7 +72,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
     LaunchedEffect(uiState.isLoading, uiState.error) {
         if (uiState.isLoading) {
             sawLoading = true
-        } else if (sawLoading && uiState.error == null && uiState.channels.isNotEmpty()) {
+        } else if (sawLoading && (uiState.error == null || uiState.error == LiveTvError.StalkerIncomplete) && uiState.channels.isNotEmpty()) {
             onDismiss()
         }
     }

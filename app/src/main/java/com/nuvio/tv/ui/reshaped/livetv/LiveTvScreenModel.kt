@@ -104,6 +104,7 @@ internal fun LiveTvError.message(context: Context): String = context.getString(
         LiveTvError.StalkerNoChannels -> R.string.live_tv_error_stalker_no_channels
         LiveTvError.StalkerFailed -> R.string.live_tv_error_stalker_failed
         LiveTvError.StalkerToken -> R.string.live_tv_error_stalker_token
+        LiveTvError.StalkerIncomplete -> R.string.live_tv_error_stalker_incomplete
         LiveTvError.XtreamRequired -> R.string.live_tv_error_xtream_required
         LiveTvError.XtreamInvalidUrl -> R.string.live_tv_error_xtream_invalid_url
         LiveTvError.XtreamNoChannels -> R.string.live_tv_error_xtream_no_channels
