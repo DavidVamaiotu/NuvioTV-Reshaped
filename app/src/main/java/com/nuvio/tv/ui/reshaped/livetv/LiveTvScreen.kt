@@ -26,6 +26,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,6 +38,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -93,7 +98,7 @@ fun LiveTvScreen(
     var showSourceDialog by remember { mutableStateOf(false) }
     var launching by remember { mutableStateOf(false) }
     val channelListState = rememberLazyListState()
-    val firstChannelFocus = remember { FocusRequester() }
+    val channelFocus = remember { FocusRequester() }
 
     val filter = when (filterKey) {
         FILTER_ALL -> LiveTvFilter.All
@@ -101,14 +106,16 @@ fun LiveTvScreen(
         else -> LiveTvFilter.Group(filterKey)
     }
     // Filtered off the main thread: lists can hold tens of thousands of channels.
-    var visibleChannels by remember { mutableStateOf<List<LiveTvChannel>>(emptyList()) }
+    val filterInput = LiveTvFilterInput(uiState.channels, uiState.favoriteUrls, filterKey, query)
+    val visibleChannels = viewModel.visibleChannels
+    val filtering = !viewModel.isFilteredFor(filterInput)
     LaunchedEffect(uiState.channels, uiState.favoriteUrls, filterKey, query) {
+        if (viewModel.isFilteredFor(filterInput)) return@LaunchedEffect
         if (query.isNotEmpty()) delay(200) // typing
-        val channels = uiState.channels
-        val favorites = uiState.favoriteUrls
+        val favorites = filterInput.favoriteUrls
         val needle = query.trim()
-        visibleChannels = withContext(Dispatchers.Default) {
-            channels.filter { channel ->
+        val filtered = withContext(Dispatchers.Default) {
+            filterInput.channels.filter { channel ->
                 when (filter) {
                     LiveTvFilter.All -> true
                     LiveTvFilter.Favorites -> channel.streamUrl in favorites
@@ -116,8 +123,35 @@ fun LiveTvScreen(
                 } && (needle.isEmpty() || channel.name.contains(needle, ignoreCase = true))
             }
         }
+        viewModel.setVisible(filterInput, filtered)
     }
-    LaunchedEffect(filterKey) { channelListState.scrollToItem(0) }
+    // Back to the top only when the category changes, not each time the screen comes back.
+    var scrolledForKey by rememberSaveable { mutableStateOf(filterKey) }
+    LaunchedEffect(filterKey) {
+        if (scrolledForKey != filterKey) {
+            scrolledForKey = filterKey
+            channelListState.scrollToItem(0)
+        }
+    }
+
+    // Back from the player: focus the channel last watched (or the first one), scrolled into view.
+    val showsRecentRow = uiState.recentChannel != null && filter == LiveTvFilter.All && query.isEmpty()
+    var focusTargetUrl by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(visibleChannels, filtering) {
+        if (!viewModel.restoreFocusOnReturn || filtering || visibleChannels.isEmpty()) return@LaunchedEffect
+        viewModel.restoreFocusOnReturn = false
+        val index = visibleChannels.indexOfFirst { it.streamUrl == uiState.recentChannel?.streamUrl }.coerceAtLeast(0)
+        focusTargetUrl = visibleChannels[index].streamUrl
+        val itemIndex = index + if (showsRecentRow) 1 else 0
+        val shown = channelListState.layoutInfo.visibleItemsInfo
+        if (shown.none { it.index == itemIndex }) {
+            channelListState.scrollToItem((itemIndex - 2).coerceAtLeast(0))
+        }
+        withFrameNanos { }
+        withFrameNanos { }
+        runCatching { channelFocus.requestFocus() }
+    }
+    val minuteClock = rememberMinuteClock()
 
     val play: (LiveTvChannel) -> Unit = { channel ->
         if (!launching) {
@@ -125,7 +159,9 @@ fun LiveTvScreen(
             scope.launch {
                 try {
                     LiveTvRepository.zapList = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
-                    onPlay(liveTvPlayerRoute(channel, viewModel.profileId))
+                    val route = liveTvPlayerRoute(channel, viewModel.profileId)
+                    viewModel.restoreFocusOnReturn = true
+                    onPlay(route)
                 } finally {
                     launching = false
                 }
@@ -200,11 +236,12 @@ fun LiveTvScreen(
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                         val recent = uiState.recentChannel
-                        if (recent != null && filter == LiveTvFilter.All && query.isEmpty()) {
+                        if (recent != null && showsRecentRow) {
                             item(key = "recent", contentType = "recent") {
                                 LiveTvRecentRow(
                                     recent = recent,
                                     programme = recent.tvgId?.let(uiState.currentProgrammes::get),
+                                    clock = minuteClock,
                                     onClick = { play(LiveTvRepository.channelFor(recent)) },
                                 )
                             }
@@ -213,13 +250,14 @@ fun LiveTvScreen(
                             LiveTvChannelRow(
                                 channel = channel,
                                 programme = channel.tvgId?.let(uiState.currentProgrammes::get),
+                                clock = minuteClock,
                                 isFavorite = channel.streamUrl in uiState.favoriteUrls,
                                 onClick = { play(channel) },
                                 onLongClick = { LiveTvRepository.toggleFavorite(channel) },
-                                modifier = if (channel === visibleChannels.firstOrNull()) Modifier.focusRequester(firstChannelFocus) else Modifier,
+                                modifier = if (channel.streamUrl == focusTargetUrl) Modifier.focusRequester(channelFocus) else Modifier,
                             )
                         }
-                        if (visibleChannels.isEmpty() && uiState.isLoaded && !uiState.isLoading) {
+                        if (visibleChannels.isEmpty() && !filtering && uiState.isLoaded && !uiState.isLoading) {
                             item(key = "empty") {
                                 Text(
                                     text = stringResource(
@@ -322,6 +360,7 @@ private fun LiveTvCategoryItem(label: String, selected: Boolean, onSelect: () ->
 private fun LiveTvRecentRow(
     recent: LiveTvRecentChannel,
     programme: LiveTvProgramme?,
+    clock: State<Long>,
     onClick: () -> Unit,
 ) {
     LiveTvRowCard(onClick = onClick, onLongClick = null, tall = true) { focused ->
@@ -341,7 +380,7 @@ private fun LiveTvRecentRow(
                 overflow = TextOverflow.Ellipsis,
                 color = if (focused) Color.Black else NuvioTheme.colors.TextPrimary,
             )
-            ProgrammeLine(programme, focused)
+            ProgrammeLine(programme, clock, focused)
         }
     }
 }
@@ -350,6 +389,7 @@ private fun LiveTvRecentRow(
 private fun LiveTvChannelRow(
     channel: LiveTvChannel,
     programme: LiveTvProgramme?,
+    clock: State<Long>,
     isFavorite: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -366,7 +406,7 @@ private fun LiveTvChannelRow(
                 overflow = TextOverflow.Ellipsis,
                 color = if (focused) Color.Black else NuvioTheme.colors.TextPrimary,
             )
-            ProgrammeLine(programme, focused, fallback = channel.group)
+            ProgrammeLine(programme, clock, focused, fallback = channel.group)
         }
         if (isFavorite) {
             Icon(
@@ -381,7 +421,7 @@ private fun LiveTvChannelRow(
 
 /** "Now: title · 21:00 – 22:00" with a thin progress bar, or the category when there is no guide. */
 @Composable
-private fun ProgrammeLine(programme: LiveTvProgramme?, focused: Boolean, fallback: String = "") {
+private fun ProgrammeLine(programme: LiveTvProgramme?, clock: State<Long>, focused: Boolean, fallback: String = "") {
     val secondary = if (focused) Color.Black.copy(alpha = 0.65f) else NuvioTheme.colors.TextSecondary
     if (programme == null) {
         if (fallback.isNotBlank()) {
@@ -397,7 +437,7 @@ private fun ProgrammeLine(programme: LiveTvProgramme?, focused: Boolean, fallbac
         overflow = TextOverflow.Ellipsis,
     )
     val span = (programme.stopEpochMs - programme.startEpochMs).coerceAtLeast(1L)
-    val fraction = ((LiveTvClock.nowEpochMs() - programme.startEpochMs).toFloat() / span).coerceIn(0f, 1f)
+    val fill = if (focused) Color.Black else NuvioTheme.colors.TextPrimary
     Box(
         modifier = Modifier
             .padding(top = 5.dp)
@@ -405,14 +445,21 @@ private fun ProgrammeLine(programme: LiveTvProgramme?, focused: Boolean, fallbac
             .fillMaxWidth()
             .height(3.dp)
             .clip(LiveTvPillShape)
-            .background(if (focused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.12f)),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(fraction)
-                .background(if (focused) Color.Black else NuvioTheme.colors.TextPrimary),
-        )
+            .background(if (focused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.12f))
+            // Read at draw time: the minute tick redraws the bar without recomposing the row.
+            .drawBehind {
+                val fraction = ((clock.value - programme.startEpochMs).toFloat() / span).coerceIn(0f, 1f)
+                drawRect(fill, size = Size(size.width * fraction, size.height))
+            },
+    )
+}
+
+/** The time, updated on each minute. */
+@Composable
+private fun rememberMinuteClock(): State<Long> = produceState(LiveTvClock.nowEpochMs()) {
+    while (true) {
+        delay(60_000L - value % 60_000L)
+        value = LiveTvClock.nowEpochMs()
     }
 }
 

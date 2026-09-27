@@ -81,7 +81,10 @@ internal fun LiveTvStalkerSettings.normalized(): LiveTvStalkerSettings = copy(
     password = password.trim(),
 )
 
-private class StalkerSession(val settings: LiveTvStalkerSettings, val token: String)
+private class StalkerSession(val settings: LiveTvStalkerSettings, val token: String) {
+    /** Built once per session and shared by every channel, not copied into each. */
+    var playbackHeaders: Map<String, String>? = null
+}
 
 internal object LiveTvStalker {
     private const val MAX_PAGES = 500
@@ -254,7 +257,7 @@ internal object LiveTvStalker {
     }
 
     private fun playbackHeaders(session: StalkerSession): Map<String, String> =
-        baseHeaders(session.settings) + tokenHeader(session.token)
+        session.playbackHeaders ?: (baseHeaders(session.settings) + tokenHeader(session.token)).also { session.playbackHeaders = it }
 
     private fun baseHeaders(settings: LiveTvStalkerSettings): Map<String, String> = mapOf(
         "User-Agent" to "Mozilla/5.0 (QtEmbedded; U; Linux; MAG254; en) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 4 rev: 2721 Mobile Safari/533.3",

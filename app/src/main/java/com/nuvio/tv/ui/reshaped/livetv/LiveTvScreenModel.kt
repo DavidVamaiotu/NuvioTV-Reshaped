@@ -1,6 +1,9 @@
 package com.nuvio.tv.ui.reshaped.livetv
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nuvio.tv.R
@@ -32,6 +35,36 @@ class LiveTvScreenModel @Inject constructor(
     }
 
     val profileId: Int get() = profileManager.activeProfileId.value
+
+    /**
+     * The filtered list, kept here so coming back from the player shows it at once (no empty
+     * frame, no refilter) with the list where it was.
+     */
+    var visibleChannels by mutableStateOf<List<LiveTvChannel>>(emptyList())
+        private set
+    private var filteredFor: LiveTvFilterInput? = null
+
+    fun isFilteredFor(input: LiveTvFilterInput): Boolean = filteredFor?.sameAs(input) == true
+
+    fun setVisible(input: LiveTvFilterInput, channels: List<LiveTvChannel>) {
+        filteredFor = input
+        visibleChannels = channels
+    }
+
+    /** Set when a channel starts playing: on return, focus goes back to the channel last watched. */
+    var restoreFocusOnReturn = false
+}
+
+/** What the visible list was filtered from; lists are compared by identity, so this is cheap. */
+class LiveTvFilterInput(
+    val channels: List<LiveTvChannel>,
+    val favoriteUrls: Set<String>,
+    val filterKey: String,
+    val query: String,
+) {
+    fun sameAs(other: LiveTvFilterInput): Boolean =
+        channels === other.channels && favoriteUrls === other.favoriteUrls &&
+            filterKey == other.filterKey && query == other.query
 }
 
 /**

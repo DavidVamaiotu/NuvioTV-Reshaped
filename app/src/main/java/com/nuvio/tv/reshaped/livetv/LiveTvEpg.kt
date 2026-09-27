@@ -19,17 +19,17 @@ import org.xmlpull.v1.XmlPullParser
 internal typealias LiveTvSchedule = Map<String, List<LiveTvProgramme>>
 
 private const val EPG_LOOKAHEAD_MS = 12L * 60 * 60 * 1000
-private const val EPG_MAX_PER_CHANNEL = 4
+internal const val EPG_MAX_PER_CHANNEL = 4
 private const val CANCEL_CHECK_EVENTS = 4096
 private const val RELAXED_FEATURE = "http://xmlpull.org/v1/doc/features.html#relaxed"
 
 /**
- * Reads the XMLTV guide at [url] (plain or gzip) through a pull parser, keeping only programmes
- * of [channelIds] (lower case) that have not ended and start within the next hours. Memory stays
+ * Reads a saved XMLTV guide (plain or gzip) through a pull parser, keeping only programmes of
+ * [channelIds] (lower case) that have not ended and start within the next hours. Memory stays
  * flat however large the guide is; guides of 100+ MB are common.
  */
-internal suspend fun loadXmlTvSchedule(url: String, channelIds: Set<String>, nowEpochMs: Long): LiveTvSchedule =
-    LiveTvHttp.stream(url, LIVE_TV_STREAM_HEADERS) { input ->
+internal suspend fun readXmlTvSchedule(file: java.io.File, channelIds: Set<String>, nowEpochMs: Long): LiveTvSchedule =
+    LiveTvHttp.readFile(file) { input ->
         val builder = LiveTvScheduleBuilder(channelIds, nowEpochMs)
         // A malformed tail (unknown entity, cut download) keeps what was read before it.
         try {
@@ -128,6 +128,19 @@ internal class LiveTvScheduleBuilder(
     }
 
     fun build(): LiveTvSchedule = entries.mapValues { (_, list) -> list.sortedBy { it.startEpochMs } }
+}
+
+/**
+ * When the guide must be read again: when the first channel whose kept programmes were cut at
+ * [EPG_MAX_PER_CHANNEL] reaches the end of them, so "now playing" never runs dry. Channels whose
+ * guide simply ends there gain nothing from reading it sooner.
+ */
+internal fun nextScheduleReadAt(schedule: LiveTvSchedule, nowEpochMs: Long, minGapMs: Long, maxGapMs: Long): Long {
+    val runsOut = schedule.values
+        .filter { it.size >= EPG_MAX_PER_CHANNEL }
+        .minOfOrNull { it.last().stopEpochMs }
+        ?: (nowEpochMs + maxGapMs)
+    return runsOut.coerceIn(nowEpochMs + minGapMs, nowEpochMs + maxGapMs)
 }
 
 /** The programme on air at [nowEpochMs] for each channel id in [tvgIds] (as the playlist spells it). */

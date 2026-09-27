@@ -48,6 +48,7 @@ class LiveTvPlaylistParserTest {
             """.trimIndent(),
         )
         assertEquals(listOf("A"), playlist.channels.map { it.name })
+        assertEquals(listOf("m0"), playlist.channels.map { it.id })
     }
 
     @Test
@@ -70,5 +71,20 @@ class LiveTvPlaylistParserTest {
         assertEquals("c", LiveTvRepository.neighbour(channels, "a", -1)?.streamUrl)
         assertEquals("a", LiveTvRepository.neighbour(channels, "c", 1)?.streamUrl)
         assertEquals("a", LiveTvRepository.neighbour(channels, "missing", 1)?.streamUrl)
+    }
+
+    @Test
+    fun guideIsReadAgainWhenAFullChannelRunsOut() {
+        val hour = 60L * 60 * 1000
+        fun slots(count: Int, length: Long) = (0 until count).map {
+            LiveTvProgramme(title = "p$it", startEpochMs = it * length, stopEpochMs = (it + 1) * length, timeLabel = "")
+        }
+        val schedule = mapOf(
+            "short" to slots(EPG_MAX_PER_CHANNEL, hour / 2), // runs out after 2 h
+            "ending" to slots(1, hour / 4), // the guide itself ends: no reason to read sooner
+        )
+        assertEquals(2 * hour, nextScheduleReadAt(schedule, 0L, hour, 10 * hour))
+        assertEquals(hour, nextScheduleReadAt(mapOf("tiny" to slots(EPG_MAX_PER_CHANNEL, hour / 10)), 0L, hour, 10 * hour))
+        assertEquals(10 * hour, nextScheduleReadAt(emptyMap(), 0L, hour, 10 * hour))
     }
 }

@@ -169,7 +169,8 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         val progressiveUpstreamFactory = com.nuvio.tv.ui.screens.player.seekbuffer.SeekReadAhead.wrap(context, url, progressive = !isHls && !isDash, upstream = networkUpstreamFactory) // Nuvio RS hook: disk read-ahead (Seek buffer)
 
         // 2. VOD disk cache (opt-in).
-        val useVodCache = ENABLE_VOD_CACHE && vodCacheEnabled && !isHls && !isDash && shouldUseVodCache(url)
+        val useVodCache = ENABLE_VOD_CACHE && vodCacheEnabled && !isHls && !isDash && shouldUseVodCache(url) &&
+            !com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url) // Nuvio RS hook: Live TV is never cached
         val previousVodCacheActive = currentVodCacheActive
         currentVodCacheUrl = url
         currentVodCacheResolvedUrl = null
