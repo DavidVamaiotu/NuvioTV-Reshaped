@@ -84,6 +84,9 @@ internal fun PillNavScaffold(
         currentRoute != com.nuvio.tv.reshaped.livetv.LIVE_TV_ROUTE
     val hiddenUnlessFocused = currentRoute == Screen.Search.route
     val state = remember { PillNavBarState() }
+    // Liquid glass on capable TVs only. The screen is recorded only while the pill is on it, never during
+    // playback; the pill slides out over the last recording.
+    val glassBackdrop = rememberPillGlassBackdrop()
     val focusRequesters = remember { HashMap<String, FocusRequester>() }
     val requesterFor = remember<(String) -> FocusRequester> {
         { key: String -> focusRequesters.getOrPut(key) { FocusRequester() } }
@@ -193,6 +196,7 @@ internal fun PillNavScaffold(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .pillGlassSource(glassBackdrop?.takeIf { showBar })
                 .onPreviewKeyEvent { keyEvent ->
                     if (keyEvent.key == Key.Back) {
                         // Long-press Back on a root screen jumps straight to the pill, past the screens' own Back.
@@ -292,6 +296,7 @@ internal fun PillNavScaffold(
                     }
                 },
                 onExitUp = { focusManager.moveFocus(FocusDirection.Up) },
+                backdrop = glassBackdrop,
             )
         }
     }

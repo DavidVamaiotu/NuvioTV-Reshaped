@@ -1,5 +1,9 @@
 package com.nuvio.tv.ui.reshaped.pillnav
 
+import android.graphics.RenderEffect
+import android.graphics.RuntimeShader
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -7,8 +11,6 @@ import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -20,7 +22,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -42,6 +43,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asComposeRenderEffect
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -89,8 +95,9 @@ internal object PillNavTokens {
     const val focusedScale = 1.08f
 }
 
-// Frosted glass without a live blur: a dense tinted fill with a lighter top sheen reads as frost over any
-// backdrop and costs one cached gradient draw, where a blur would re-render the whole screen every frame.
+// Two tiers. With a [PillGlassBackdrop] (Android 13+, 3 GB+ RAM) the pill is liquid glass that bends the screen
+// behind it. Everywhere else it is static glass: a dense tinted fill, a rim lit from the top left and a darker
+// lens edge that give it thickness, all cached draws with no sampling of what is behind the pill.
 private val GlassBaseColor = Color(0xFF1C1C1E)
 private val GlassFocusedColor = Color(0xFF2C2C30)
 
@@ -152,6 +159,7 @@ internal fun PillNavigationBar(
     onExitDown: () -> Unit,
     onExitUp: () -> Unit,
     modifier: Modifier = Modifier,
+    backdrop: PillGlassBackdrop? = null,
 ) {
     val barFocused = state.hasFocus
     val hideTarget = if (hidden && !barFocused) 1f else 0f
@@ -192,16 +200,15 @@ internal fun PillNavigationBar(
         animationSpec = tween(NuvioMotion.tokens.durations.fast),
         label = "pill_nav_glass",
     )
-    val rimBrush = remember(accent, barFocused) {
-        Brush.verticalGradient(
-            listOf(
-                accent.copy(alpha = if (barFocused) 0.85f else 0.50f),
-                Color.White.copy(alpha = if (barFocused) 0.12f else 0.06f),
-                accent.copy(alpha = if (barFocused) 0.40f else 0.20f),
-            )
-        )
-    }
-    val shape = RoundedCornerShape(percent = 50)
+    val refracts = backdrop != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+    val focusFraction = animateFloatAsState(
+        targetValue = if (barFocused) 1f else 0f,
+        animationSpec = tween(NuvioMotion.tokens.durations.fast),
+        label = "pill_nav_glass_focus",
+    )
+    val innerPaddingPx = with(density) { PillNavTokens.innerPadding.toPx() }
+    val rowHeightPx = with(density) { (PillNavTokens.barHeight - PillNavTokens.innerPadding * 2).toPx() }
+    var barOrigin by remember { mutableStateOf(Offset.Zero) }
 
     Box(
         modifier = modifier
@@ -221,19 +228,42 @@ internal fun PillNavigationBar(
                     scaleX = 1f - 0.05f * h
                     scaleY = 1f - 0.05f * h
                 }
-                .drawBehind {
-                    drawRoundRect(color = glassColor.value, cornerRadius = CornerRadius(size.minDimension / 2f))
-                }
-                .then(if (frosted) Modifier.background(FrostSheen, shape) else Modifier)
-                .border(width = if (barFocused) 1.5.dp else 1.dp, brush = rimBrush, shape = shape),
+                .then(
+                    if (refracts) {
+                        Modifier.onGloballyPositioned { barOrigin = it.positionInRoot() }
+                    } else {
+                        Modifier
+                            .drawWithCache {
+                                val glass = StaticGlassPaint.create(this, accent, barFocused)
+                                onDrawBehind {
+                                    drawRoundRect(color = glassColor.value, cornerRadius = CornerRadius(size.minDimension / 2f))
+                                    if (frosted) drawRoundRect(brush = FrostSheen, cornerRadius = CornerRadius(size.minDimension / 2f))
+                                    drawStaticGlassEdge(glass)
+                                }
+                            }
+                    }
+                ),
         ) {
+            if (refracts && backdrop != null) {
+                LiquidPillGlass(
+                    backdrop = backdrop,
+                    origin = { barOrigin },
+                    lens = {
+                        if (!showLens || !indicator.placed) null
+                        else indicator.bounds(rowHeightPx).translate(innerPaddingPx, innerPaddingPx)
+                    },
+                    focus = { focusFraction.value },
+                    tint = accent,
+                    modifier = Modifier.matchParentSize(),
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxHeight()
                     .padding(PillNavTokens.innerPadding)
                     .drawWithCache {
                         // Lens brushes and stroke are built once per size/focus change, not on every animation frame.
-                        val lens = LensPaint.create(this, brighter = barFocused)
+                        val lens = LensPaint.create(this, brighter = barFocused, refracts = refracts)
                         onDrawBehind {
                             if (barFocused && selectedBounds != null && lensKey != selectedKey) {
                                 drawSelectedMarker(selectedBounds)
@@ -408,6 +438,13 @@ private class LiquidIndicator {
 
     /** 0 at rest, towards 1 while stretched in flight. */
     fun stretch(): Float = ((right.value - left.value) / restWidth - 1f).coerceIn(0f, 1.5f) / 1.5f
+
+    /** The lens in row coordinates, thinner while stretched in flight. */
+    fun bounds(rowHeight: Float): Rect {
+        val height = rowHeight * (1f - 0.16f * stretch())
+        val top = (rowHeight - height) / 2f
+        return Rect(left.value, top, right.value, top + height)
+    }
 }
 
 private fun DrawScope.drawSelectedMarker(bounds: Pair<Float, Float>) {
@@ -420,10 +457,11 @@ private fun DrawScope.drawSelectedMarker(bounds: Pair<Float, Float>) {
 }
 
 /** Cached paint for the glass lens; gradients span the whole row height so they survive the in-flight squash. */
-private class LensPaint(val fill: Brush, val rim: Brush, val rimStroke: Stroke, val rimWidth: Float) {
+private class LensPaint(val fill: Brush, val rim: Brush?, val rimStroke: Stroke, val rimWidth: Float) {
     companion object {
-        fun create(scope: androidx.compose.ui.draw.CacheDrawScope, brighter: Boolean): LensPaint {
-            val boost = if (brighter) 1.4f else 1f
+        fun create(scope: androidx.compose.ui.draw.CacheDrawScope, brighter: Boolean, refracts: Boolean): LensPaint {
+            // Liquid glass draws the lens and its rim in the shader; this only adds a whisper of frost on top.
+            val boost = (if (brighter) 1.4f else 1f) * (if (refracts) 0.35f else 1f)
             val h = scope.size.height
             val rimWidth = with(scope) { 1.dp.toPx() }
             return LensPaint(
@@ -434,12 +472,13 @@ private class LensPaint(val fill: Brush, val rim: Brush, val rimStroke: Stroke, 
                     startY = 0f,
                     endY = h,
                 ),
-                rim = Brush.verticalGradient(
+                // Lit from the top left like the pill's own rim.
+                rim = if (refracts) null else Brush.linearGradient(
                     0f to Color.White.copy(alpha = (0.62f * boost).coerceAtMost(1f)),
                     0.5f to Color.White.copy(alpha = 0.08f),
                     1f to Color.White.copy(alpha = 0.28f * boost),
-                    startY = 0f,
-                    endY = h,
+                    start = Offset.Zero,
+                    end = Offset(h * 2.5f, h),
                 ),
                 rimStroke = Stroke(rimWidth),
                 rimWidth = rimWidth,
@@ -464,9 +503,10 @@ private fun DrawScope.drawLiquidIndicator(indicator: LiquidIndicator, paint: Len
         size = Size(width, height),
         cornerRadius = CornerRadius(height / 2f),
     )
+    val rimBrush = paint.rim ?: return
     val rim = paint.rimWidth
     drawRoundRect(
-        brush = paint.rim,
+        brush = rimBrush,
         topLeft = Offset(left + rim / 2f, top + rim / 2f),
         size = Size(width - rim, height - rim),
         cornerRadius = CornerRadius((height - rim) / 2f),
@@ -480,3 +520,104 @@ private val FrostSheen = Brush.verticalGradient(
     0.5f to Color.White.copy(alpha = 0.03f),
     1f to Color.Transparent,
 )
+
+/** Static glass edge: a rim lit from the top left with a dim echo bottom right, over a darker inner lens band. */
+private class StaticGlassPaint(val rim: Brush, val rimWidth: Float, val band: Brush, val bandWidth: Float) {
+    companion object {
+        fun create(scope: androidx.compose.ui.draw.CacheDrawScope, accent: Color, focused: Boolean): StaticGlassPaint {
+            val light = if (focused) lerp(Color.White, accent, 0.35f) else Color.White
+            val h = scope.size.height
+            return StaticGlassPaint(
+                rim = Brush.linearGradient(
+                    0f to light.copy(alpha = if (focused) 0.70f else 0.46f),
+                    0.45f to Color.White.copy(alpha = if (focused) 0.08f else 0.04f),
+                    1f to light.copy(alpha = if (focused) 0.30f else 0.18f),
+                    start = Offset.Zero,
+                    end = Offset(h * 3f, h),
+                ),
+                rimWidth = with(scope) { (if (focused) 1.5.dp else 1.dp).toPx() },
+                band = Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    0.6f to Color.Black.copy(alpha = 0.06f),
+                    1f to Color.Black.copy(alpha = 0.20f),
+                    startY = 0f,
+                    endY = h,
+                ),
+                bandWidth = with(scope) { 3.dp.toPx() },
+            )
+        }
+    }
+}
+
+private fun DrawScope.drawStaticGlassEdge(paint: StaticGlassPaint) {
+    val band = paint.bandWidth
+    val rim = paint.rimWidth
+    val inset = rim + band / 2f
+    drawRoundRect(
+        brush = paint.band,
+        topLeft = Offset(inset, inset),
+        size = Size(size.width - inset * 2f, size.height - inset * 2f),
+        cornerRadius = CornerRadius((size.height - inset * 2f) / 2f),
+        style = Stroke(band),
+    )
+    drawRoundRect(
+        brush = paint.rim,
+        topLeft = Offset(rim / 2f, rim / 2f),
+        size = Size(size.width - rim, size.height - rim),
+        cornerRadius = CornerRadius((size.height - rim) / 2f),
+        style = Stroke(rim),
+    )
+}
+
+/**
+ * Liquid glass over the recorded screen (Android 13+): the backdrop is replayed under the pill, lined up with the
+ * screen, on top of the glass base colour (so holes such as video surfaces read as dark glass), and bent by
+ * [PillGlassShader] in one pass over the pill's own area.
+ */
+@Composable
+private fun LiquidPillGlass(
+    backdrop: PillGlassBackdrop,
+    origin: () -> Offset,
+    lens: () -> Rect?,
+    focus: () -> Float,
+    tint: Color,
+    modifier: Modifier,
+) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    LiquidPillGlassApi33(backdrop, origin, lens, focus, tint, modifier)
+}
+
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+@Composable
+private fun LiquidPillGlassApi33(
+    backdrop: PillGlassBackdrop,
+    origin: () -> Offset,
+    lens: () -> Rect?,
+    focus: () -> Float,
+    tint: Color,
+    modifier: Modifier,
+) {
+    val shader = remember { RuntimeShader(PillGlassShader) }
+    Box(
+        modifier
+            .graphicsLayer {
+                shader.setFloatUniform("resolution", size.width, size.height)
+                shader.setFloatUniform("density", density)
+                shader.setFloatUniform("outset", 0f)
+                shader.setFloatUniform("tint", tint.red, tint.green, tint.blue)
+                val bounds = lens()
+                if (bounds != null) {
+                    shader.setFloatUniform("lens", bounds.left, bounds.top, bounds.right, bounds.bottom)
+                } else {
+                    shader.setFloatUniform("lens", 0f, 0f, 0f, 0f)
+                }
+                shader.setFloatUniform("focus", focus())
+                renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "backdrop").asComposeRenderEffect()
+            }
+            .drawBehind {
+                backdrop.version // Redraw whenever the screen behind was re-recorded.
+                drawRect(GlassBaseColor)
+                with(backdrop) { drawAligned(origin()) }
+            },
+    )
+}
