@@ -30,13 +30,15 @@ internal object GeminiTranslationClient {
         model: String,
         targetLanguageName: String,
         srtChunk: String,
-        retries: Int = 2,
+        retries: Int = 3,
     ): Result<String> = withContext(Dispatchers.IO) {
         var lastException: Throwable? = null
 
         for (attempt in 0..retries) {
             if (attempt > 0) {
-                delay(1000L * attempt)
+                // Exponential backoff: 2s, 4s, 8s...
+                val backoffTime = 2000L * (1 shl (attempt - 1))
+                delay(backoffTime)
             }
             try {
                 val result = executeRequest(apiKey, model, targetLanguageName, srtChunk)

@@ -60,44 +60,47 @@ internal object GeminiSubtitleService {
 
             // Chunk cues
             val chunks = cues.chunked(CUES_PER_CHUNK)
-            val translatedCues = mutableListOf<SubtitleSyncCue>()
+            
+            // Process chunks in parallel to drastically reduce total waiting time
+            val deferredChunks = chunks.mapIndexed { index, chunk ->
+                kotlinx.coroutines.async {
+                    val chunkStartIndex = (index * CUES_PER_CHUNK) + 1
+                    val srtChunk = formatCuesToSrt(chunk, chunkStartIndex)
 
-            for ((index, chunk) in chunks.withIndex()) {
-                val chunkStartIndex = (index * CUES_PER_CHUNK) + 1
-                val srtChunk = formatCuesToSrt(chunk, chunkStartIndex)
+                    val translationChunkResult = GeminiTranslationClient.translateSrtChunk(
+                        apiKey = apiKey,
+                        model = model,
+                        targetLanguageName = targetLanguageName,
+                        srtChunk = srtChunk,
+                    )
 
-                val translationChunkResult = GeminiTranslationClient.translateSrtChunk(
-                    apiKey = apiKey,
-                    model = model,
-                    targetLanguageName = targetLanguageName,
-                    srtChunk = srtChunk,
-                )
+                    val translatedChunkText = translationChunkResult.getOrThrow()
+                    val parsedChunkCues = PlayerSubtitleCueParser.parseFromText(translatedChunkText, "chunk.srt")
 
-                val translatedChunkText = translationChunkResult.getOrThrow()
-                val parsedChunkCues = PlayerSubtitleCueParser.parseFromText(translatedChunkText, "chunk.srt")
-
-                if (parsedChunkCues.size == chunk.size) {
-                    // Perfect 1:1 match; preserve original timestamps
-                    for (i in chunk.indices) {
-                        translatedCues.add(
-                            SubtitleSyncCue(
-                                startTimeMs = chunk[i].startTimeMs,
-                                endTimeMs = chunk[i].endTimeMs,
-                                text = parsedChunkCues[i].text,
+                    val translatedCuesForChunk = mutableListOf<SubtitleSyncCue>()
+                    if (parsedChunkCues.size == chunk.size) {
+                        // Perfect 1:1 match; preserve original timestamps
+                        for (i in chunk.indices) {
+                            translatedCuesForChunk.add(
+                                SubtitleSyncCue(
+                                    startTimeMs = chunk[i].startTimeMs,
+                                    endTimeMs = chunk[i].endTimeMs,
+                                    text = parsedChunkCues[i].text,
+                                )
                             )
-                        )
+                        }
+                    } else if (parsedChunkCues.isNotEmpty()) {
+                        translatedCuesForChunk.addAll(parsedChunkCues)
+                    } else {
+                        translatedCuesForChunk.addAll(chunk)
                     }
-                } else if (parsedChunkCues.isNotEmpty()) {
-                    // Fallback to parsed cues from Gemini response
-                    translatedCues.addAll(parsedChunkCues)
-                } else {
-                    // In the unlikely event parsing failed, keep original chunk
-                    translatedCues.addAll(chunk)
+                    
+                    onProgress(0.05f + (0.90f * (index + 1).toFloat() / chunks.size.toFloat()))
+                    translatedCuesForChunk
                 }
-
-                val progress = 0.05f + (0.90f * (index + 1).toFloat() / chunks.size.toFloat())
-                onProgress(progress)
             }
+
+            val translatedCues = deferredChunks.kotlinx.coroutines.awaitAll().flatten()
 
             // Build full SRT
             val fullSrt = formatCuesToSrt(translatedCues, 1)
