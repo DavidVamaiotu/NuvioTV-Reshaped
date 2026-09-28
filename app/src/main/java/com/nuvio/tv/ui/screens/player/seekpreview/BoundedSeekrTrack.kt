@@ -42,7 +42,7 @@ internal object BoundedSeekr {
     }
 }
 
-internal class BoundedSeekrTrack(
+class BoundedSeekrTrack internal constructor(
     private val track: PreviewTrack,
     private val sheets: BoundedSheetCache,
 ) {
