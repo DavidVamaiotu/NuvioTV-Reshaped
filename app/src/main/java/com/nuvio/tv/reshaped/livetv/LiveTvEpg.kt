@@ -137,7 +137,7 @@ private fun XmlPullParser.skipElement() {
 
 /** From a channel's START_TAG: its names and logo, leaving the parser on its END_TAG. */
 private fun XmlPullParser.readChannel(channelId: String, builder: LiveTvScheduleBuilder) {
-    var names: ArrayList<String>? = null
+    val names = ArrayList<String>(2)
     var icon: String? = null
     var depth = 1
     while (depth > 0) {
@@ -145,7 +145,7 @@ private fun XmlPullParser.readChannel(channelId: String, builder: LiveTvSchedule
             XmlPullParser.START_TAG -> when {
                 depth == 1 && name.equals("display-name", ignoreCase = true) -> {
                     val text = nextText().trim()
-                    if (text.isNotEmpty()) (names ?: ArrayList<String>(2).also { names = it }) += text
+                    if (text.isNotEmpty()) names.add(text)
                 }
                 depth == 1 && name.equals("icon", ignoreCase = true) -> {
                     if (icon == null) icon = getAttributeValue(null, "src")?.trim()?.takeIf(String::isHttpUrl)
@@ -157,7 +157,7 @@ private fun XmlPullParser.readChannel(channelId: String, builder: LiveTvSchedule
             XmlPullParser.END_DOCUMENT -> return
         }
     }
-    builder.channel(channelId, names.orEmpty(), icon)
+    builder.channel(channelId, names, icon)
 }
 
 /** From a programme's START_TAG: its first title, leaving the parser on the programme's END_TAG. */
