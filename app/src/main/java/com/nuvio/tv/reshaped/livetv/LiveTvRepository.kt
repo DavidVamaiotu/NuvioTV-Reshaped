@@ -70,7 +70,7 @@ object LiveTvRepository {
     @Volatile private var keptSchedule: LiveTvSchedule = emptyMap()
     private var epgKey: Pair<List<String>, Set<String>>? = null
     /** How much guide is kept per channel; less on low-memory TVs. */
-    @Volatile var guideWindow: LiveTvGuideWindow = LiveTvGuideWindow.Regular
+    @Volatile internal var guideWindow: LiveTvGuideWindow = LiveTvGuideWindow.Regular
         private set
     /** Set by Refresh: the next guide read downloads every guide again, however recent its saved copy. */
     @Volatile private var forceGuideDownload = false

@@ -244,7 +244,7 @@ internal object LiveTvStalker {
             name = name,
             streamUrl = streamUrl,
             tvgId = this["xmltv_id"] ?: this["tvg_id"],
-            logoUrl = (this["logo"] ?: this["logo_url"])?.let(session.settings::logoUrl),
+            logoUrl = (this["logo"] ?: this["logo_url"])?.let { session.settings.stalkerLogoUrl(it) },
             group = (this["tv_genre_id"] ?: this["genre_id"])?.let(genres::get).orEmpty(),
             headers = playbackHeaders(session),
             stalkerCommand = command,
@@ -320,7 +320,7 @@ internal object LiveTvStalker {
      * A channel logo as a link. Many portals give only the file name ("1234.png"), served from
      * the portal's own logo folder.
      */
-    private fun LiveTvStalkerSettings.logoUrl(value: String): String? {
+    private fun LiveTvStalkerSettings.stalkerLogoUrl(value: String): String? {
         val logo = value.trim()
         return when {
             logo.isEmpty() -> null
