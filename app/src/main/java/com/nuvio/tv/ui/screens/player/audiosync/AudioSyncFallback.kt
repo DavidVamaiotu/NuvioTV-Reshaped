@@ -24,7 +24,7 @@ import com.nuvio.tv.ui.screens.player.commitPreparedSidecarSubtitle
 import com.nuvio.tv.ui.screens.player.currentSidecarGenerationFor
 import com.nuvio.tv.ui.screens.player.parseSidecarTimedCuesRobust
 import com.nuvio.tv.ui.screens.player.rememberAddonSubtitleSelection
-import com.nuvio.tv.ui.screens.player.setSubtitleDelayMs
+import com.nuvio.tv.ui.screens.player.resetSubtitleDelayForAutoSync
 import com.nuvio.tv.ui.screens.player.audiosync.asr.AsrModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -251,7 +251,7 @@ internal class AudioSyncFallback private constructor(
             runtime._uiState.update { it.copy(selectedAddonSubtitle = subtitle, selectedSubtitleTrackIndex = -1) }
             // Saved only over a subtitle the user chose, as AutoSync does.
             if (runtime.isUserExplicitSubtitleSelection) runtime.rememberAddonSubtitleSelection(subtitle)
-            runtime.setSubtitleDelayMs(targetMs = 0, showOverlay = false)
+            runtime.resetSubtitleDelayForAutoSync()
             // The new session adopts the mapping the switch was decided with.
             controller.startSession(url, cues)
         }
