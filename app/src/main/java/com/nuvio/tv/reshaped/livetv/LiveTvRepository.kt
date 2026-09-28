@@ -135,6 +135,7 @@ object LiveTvRepository {
                 sources = sources,
                 favoriteUrls = store.favoriteUrls(),
                 hiddenGroups = store.hiddenGroups(),
+                groupNames = store.groupNames(),
                 hiddenChannelKeys = hiddenChannels,
                 recentChannel = store.recentChannel(),
                 isLoading = sources.isNotEmpty(),
@@ -302,19 +303,36 @@ object LiveTvRepository {
         storage?.let { store -> scope.launch(writer) { store.saveGroupOrder(reordered) } }
     }
 
+    /**
+     * Gives a category a name of its own (blank goes back to the playlist's name). It
+     * keeps its channels, hiding and place: everything still goes by the playlist's name.
+     */
+    fun renameGroup(group: String, name: String) {
+        val names = _uiState.value.groupNames
+        val next = if (name.isBlank()) names - group else names + (group to name)
+        if (next == names) return
+        _uiState.update { state ->
+            state.copy(groupNames = next).let { if (groupOrder.isEmpty()) it.copy(groups = orderedGroups(it.groupCounts.keys, next)) else it }
+        }
+        storage?.let { store -> scope.launch(writer) { store.saveGroupNames(next) } }
+    }
+
     /** Back to A to Z. */
     fun resetGroupOrder() {
         groupOrder = emptyList()
-        _uiState.update { it.copy(groups = orderedGroups(it.groupCounts.keys)) }
+        _uiState.update { it.copy(groups = orderedGroups(it.groupCounts.keys, it.groupNames)) }
         storage?.let { store -> scope.launch(writer) { store.saveGroupOrder(emptyList()) } }
     }
 
     /** [names] in the viewer's order, then the ones it does not have yet, A to Z, with "Uncategorised" last. */
-    private fun orderedGroups(names: Set<String>): List<String> {
+    private fun orderedGroups(names: Set<String>, renamed: Map<String, String> = _uiState.value.groupNames): List<String> {
         val ordered = groupOrder.filterTo(ArrayList()) { it in names }
         val placed = ordered.toHashSet()
         names.filterNot(placed::contains)
-            .sortedWith(compareBy<String> { it == LIVE_TV_UNGROUPED }.thenBy(String.CASE_INSENSITIVE_ORDER) { it })
+            .sortedWith(
+                compareBy<String> { it == LIVE_TV_UNGROUPED && it !in renamed }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { renamed[it]?.trim() ?: it },
+            )
             .forEach(ordered::add)
         return ordered
     }

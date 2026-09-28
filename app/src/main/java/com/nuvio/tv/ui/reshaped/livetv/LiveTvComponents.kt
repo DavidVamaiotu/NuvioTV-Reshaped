@@ -281,8 +281,12 @@ private fun String.initials(): String =
 
 /** A category's name as shown; channels the playlist gives no category are "Uncategorised". */
 @Composable
-internal fun liveTvGroupLabel(group: String): String =
-    if (group == LIVE_TV_UNGROUPED) stringResource(R.string.live_tv_uncategorised) else group
+internal fun liveTvGroupLabel(group: String, names: Map<String, String> = emptyMap()): String =
+    liveTvGroupName(group, names) ?: if (group == LIVE_TV_UNGROUPED) stringResource(R.string.live_tv_uncategorised) else group
+
+/** The name the viewer gave [group], or null. */
+internal fun liveTvGroupName(group: String, names: Map<String, String>): String? =
+    names[group]?.trim()?.takeIf(String::isNotEmpty)
 
 /** The time, updated on each minute. */
 @Composable

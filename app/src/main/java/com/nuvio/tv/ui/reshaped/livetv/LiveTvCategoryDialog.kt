@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -78,7 +79,7 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
 
     NuvioDialog(
         onDismiss = onDismiss,
-        title = group?.let { liveTvGroupLabel(it) } ?: stringResource(R.string.live_tv_categories_title),
+        title = group?.let { liveTvGroupLabel(it, uiState.groupNames) } ?: stringResource(R.string.live_tv_categories_title),
         subtitle = stringResource(if (group != null) R.string.live_tv_category_channels_description else R.string.live_tv_categories_description),
         width = 640.dp,
         usePlatformDefaultWidth = false,
@@ -132,7 +133,7 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
                     val visible = name !in uiState.hiddenGroups
                     val isMoving = moving == name
                     LiveTvCategoryToggle(
-                        label = liveTvGroupLabel(name),
+                        label = liveTvGroupLabel(name, uiState.groupNames),
                         count = (uiState.groupCounts[name] ?: 0).toString(),
                         visible = visible,
                         moving = isMoving,
@@ -188,6 +189,14 @@ private fun LiveTvCategoryChannels(group: String, uiState: LiveTvUiState, onBack
             back
         },
     ) {
+        // The name the list shows; empty goes back to the playlist's own.
+        LiveTvTextField(
+            value = uiState.groupNames[group].orEmpty(),
+            onValueChange = { LiveTvRepository.renameGroup(group, it) },
+            placeholder = stringResource(R.string.live_tv_category_rename_hint, liveTvGroupLabel(group)),
+            keyboardType = KeyboardType.Text,
+            modifier = Modifier.fillMaxWidth(),
+        )
         val shown = channels.count { it.hideKey !in hidden }
         Row(
             modifier = Modifier.fillMaxWidth(),
