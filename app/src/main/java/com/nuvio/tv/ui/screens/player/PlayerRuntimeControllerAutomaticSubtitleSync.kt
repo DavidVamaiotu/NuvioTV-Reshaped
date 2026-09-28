@@ -45,6 +45,21 @@ private fun PlayerRuntimeController.showAutoSyncToast(
     showAutoSyncMessage(context, kind, message, duration)
 }
 /**
+ * Clears the subtitle delay once AutoSync has retimed the subtitle, like Nuvio's
+ * `setSubtitleDelayMs(0, showOverlay = false)` but without bringing up the player controls:
+ * AutoSync finishes on its own, so nothing on screen should change except its message.
+ */
+internal fun PlayerRuntimeController.resetSubtitleDelayForAutoSync() {
+    hideSubtitleDelayOverlayJob?.cancel()
+    hideSubtitleDelayOverlayJob = null
+    subtitleDelayUs.set(0L)
+    if (isUsingMpvEngine()) mpvView?.setSubtitleDelayMs(0)
+    _uiState.update { it.copy(subtitleDelayMs = 0, showSubtitleDelayOverlay = false) }
+    refreshActiveSubtitleTrackAfterTimingChange()
+    persistTrackPreference()
+}
+
+/**
  * Wraps Nuvio's extractors so AutoSync can observe embedded subtitle timing (output is forwarded
  * unchanged), and starts AutoSync's embedded subtitle index download while the stream opens.
  */
@@ -393,7 +408,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     rememberAddonSubtitleSelection(chosenSubtitle)
                 }
             }
-            setSubtitleDelayMs(targetMs = 0, showOverlay = false)
+            resetSubtitleDelayForAutoSync()
             AutoSyncSyncedSubtitle.mark(chosenSubtitle.url)
 
             val timeline = resolved.timeline
