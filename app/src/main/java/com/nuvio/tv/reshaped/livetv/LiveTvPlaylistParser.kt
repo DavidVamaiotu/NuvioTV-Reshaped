@@ -29,7 +29,7 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
             line.isEmpty() -> Unit
             line.startsWith("#EXTM3U", ignoreCase = true) -> {
                 val attributes = parseM3uAttributes(line)
-                listOfNotNull(attributes["url-tvg"], attributes["x-tvg-url"])
+                listOfNotNull(attributes["url-tvg"], attributes["x-tvg-url"], attributes["tvg-url"])
                     .flatMap { it.split(',', ';') }
                     .map(String::trim)
                     .filter { it.isHttpUrl() }

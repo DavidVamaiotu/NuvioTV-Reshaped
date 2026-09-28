@@ -48,15 +48,17 @@ internal object LiveTvHttp {
      * compressed quickly on the way), so a 100+ MB guide takes a few MB on the TV's storage.
      * The old file stays until the new one is complete.
      */
-    suspend fun download(url: String, headers: Map<String, String>, target: File) {
+    suspend fun download(url: String, headers: Map<String, String>, target: File, readTimeoutSeconds: Long = 0L) {
         runInterruptible(Dispatchers.IO) {
+            // Some panels build their guide on request and send nothing for a minute or more.
+            val http = if (readTimeoutSeconds > 0) client.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build() else client
             val request = Request.Builder().url(url).apply {
                 headers.forEach { (name, value) -> header(name, value) }
             }.build()
             target.parentFile?.mkdirs()
             val temp = File(target.path + ".part")
             try {
-                client.newCall(request).execute().use { response ->
+                http.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
                     val body = response.body ?: throw IOException("Empty response")
                     BufferedInputStream(body.byteStream(), BUFFER_BYTES).use { buffered ->
@@ -95,6 +97,9 @@ internal object LiveTvHttp {
     }
 
     private const val BUFFER_BYTES = 64 * 1024
+
+    /** How long a guide download may wait for data (see [download]). */
+    const val GUIDE_READ_TIMEOUT_S = 120L
 
     /** Lowest compression: XML still shrinks about tenfold, at little CPU on a weak TV. */
     private class FastGzipOutputStream(out: java.io.OutputStream) : GZIPOutputStream(out, BUFFER_BYTES) {

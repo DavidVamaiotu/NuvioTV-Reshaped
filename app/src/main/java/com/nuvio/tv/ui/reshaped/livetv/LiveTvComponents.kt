@@ -57,6 +57,8 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import coil3.network.NetworkHeaders
+import coil3.network.httpHeaders
 import coil3.request.ImageRequest
 import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
@@ -232,6 +234,8 @@ internal fun LiveTvLogo(
                     ImageRequest.Builder(context)
                         .data(url)
                         .size(width.roundToPx(), height.roundToPx())
+                        // IPTV panels often serve logos only to player-like clients, as they do streams.
+                        .httpHeaders(LOGO_HEADERS)
                         .build()
                 }
             }
@@ -247,6 +251,8 @@ internal fun LiveTvLogo(
         }
     }
 }
+
+private val LOGO_HEADERS = NetworkHeaders.Builder().set("User-Agent", "VLC/3.0.0 LibVLC/3.0.0").build()
 
 private fun String.initials(): String =
     split(' ', '-', '_', '.').filter { it.isNotBlank() && it.first().isLetterOrDigit() }

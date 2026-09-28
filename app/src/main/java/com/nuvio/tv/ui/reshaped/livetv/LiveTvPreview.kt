@@ -2,7 +2,6 @@
 
 package com.nuvio.tv.ui.reshaped.livetv
 
-import android.app.ActivityManager
 import android.content.Context
 import android.view.TextureView
 import androidx.compose.animation.Crossfade
@@ -59,6 +58,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
+import com.nuvio.tv.reshaped.livetv.LiveTvDevice
 import com.nuvio.tv.reshaped.livetv.LiveTvHttp
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
@@ -80,7 +80,7 @@ private const val PREVIEW_DELAY_MS = 700L
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 internal class LiveTvPreviewPlayer(private val context: Context) {
-    private val lowMemory = isLowMemoryTv(context)
+    private val lowMemory = LiveTvDevice.isLowMemory(context)
     private var player: ExoPlayer? = null
     private var surface: TextureView? = null
     private var current: LiveTvChannel? = null
@@ -218,15 +218,6 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
 
     private companion object {
         const val PREVIEW_USER_AGENT = "VLC/3.0.0 LibVLC/3.0.0"
-        /** Boxes that report under this much memory (2 GB models report less than 2 GB) get the lighter preview. */
-        const val LOW_MEMORY_BYTES = 2_560L * 1024 * 1024
-
-        fun isLowMemoryTv(context: Context): Boolean {
-            val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return true
-            if (manager.isLowRamDevice) return true
-            val info = ActivityManager.MemoryInfo().also(manager::getMemoryInfo)
-            return info.totalMem in 1 until LOW_MEMORY_BYTES
-        }
     }
 }
 
@@ -238,6 +229,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
 internal fun LiveTvPreviewPanel(
     preview: LiveTvPreviewPlayer,
     channel: LiveTvChannel?,
+    logo: String?,
     programme: LiveTvProgramme?,
     clock: State<Long>,
     sourceLabel: String?,
@@ -273,7 +265,7 @@ internal fun LiveTvPreviewPanel(
             contentAlignment = Alignment.Center,
         ) {
             if (channel != null) {
-                LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 128.dp, height = 76.dp)
+                LiveTvLogo(url = logo, name = channel.name, width = 128.dp, height = 76.dp)
             }
             val context = LocalContext.current
             val textureView = remember { TextureView(context) }
@@ -328,7 +320,7 @@ internal fun LiveTvPreviewPanel(
                         modifier = Modifier.padding(top = 4.dp),
                     )
                     Text(
-                        text = "${programme.timeLabel}  ·  ${liveTvTimeLeft(programme, clock)}",
+                        text = "${LiveTvClock.formatSpan(programme)}  ·  ${liveTvTimeLeft(programme, clock)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = NuvioTheme.colors.TextTertiary,
                         modifier = Modifier.padding(top = 2.dp),

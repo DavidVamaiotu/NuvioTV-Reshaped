@@ -200,15 +200,54 @@ fun LiveTvScreen(
     // beside it during the navigation.
     LaunchedEffect(started) { if (!started) launching = false }
 
-    val play: (LiveTvChannel) -> Unit = { channel ->
+    // Unfavouriting a channel in Favorites removes its row: focus moves to the next one (or the
+    // category when none is left) instead of falling back to the top of the categories, whose
+    // focus would switch the list to All channels.
+    var refocusAfterRemoval by remember { mutableStateOf(false) }
+    val categoryFocus = remember { FocusRequester() }
+    LaunchedEffect(visibleChannels, filtering) {
+        if (!refocusAfterRemoval || filtering) return@LaunchedEffect
+        refocusAfterRemoval = false
+        val target = if (visibleChannels.any { it.streamUrl == focusTargetUrl }) channelFocus else categoryFocus
+        repeat(10) {
+            withFrameNanos { }
+            if (runCatching { target.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
+    }
+    val toggleFavorite: (LiveTvChannel) -> Unit = { channel ->
+        if (filter == LiveTvFilter.Favorites && channel.streamUrl in uiState.favoriteUrls) {
+            val index = visibleChannels.indexOfFirst { it.streamUrl == channel.streamUrl }
+            focusTargetUrl = (visibleChannels.getOrNull(index + 1) ?: visibleChannels.getOrNull(index - 1))?.streamUrl
+            refocusAfterRemoval = true
+        }
+        LiveTvRepository.toggleFavorite(channel)
+    }
+
+    val play: (LiveTvChannel, Boolean) -> Unit = { channel, fromRecent ->
         if (!launching) {
             launching = true
             // The player needs the decoder and, with one-connection providers, the connection.
             preview.release()
             scope.launch {
                 try {
-                    val list = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
-                    LiveTvRepository.setZapList(list, folderKey = filterKey.takeIf { query.isBlank() })
+                    if (fromRecent) {
+                        // The last channel is listed above every category: in the player, the
+                        // categories open on its own, and zapping stays in it, as when it was picked there.
+                        val state = uiState
+                        val group = channel.group
+                        val shown = group !in state.hiddenGroups && channel.hideKey !in state.hiddenChannelKeys
+                        val list = if (!shown) {
+                            emptyList()
+                        } else {
+                            withContext(Dispatchers.Default) {
+                                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelKeys, group)
+                            }
+                        }
+                        LiveTvRepository.setZapList(list, folderKey = group.takeIf { list.isNotEmpty() })
+                    } else {
+                        val list = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
+                        LiveTvRepository.setZapList(list, folderKey = filterKey.takeIf { query.isBlank() })
+                    }
                     val route = liveTvPlayerRoute(channel, viewModel.profileId)
                     viewModel.restoreFocusOnReturn = true
                     onPlay(route)
@@ -241,6 +280,7 @@ fun LiveTvScreen(
                     sources = if (uiState.sources.size > 1) uiState.sources else emptyList(),
                     groups = visibleGroups,
                     selectedKey = filterKey,
+                    selectedFocus = categoryFocus,
                     onSelect = { filterKey = it },
                     modifier = Modifier.width(if (previewsEnabled) 220.dp else 260.dp).fillMaxHeight(),
                 )
@@ -312,9 +352,10 @@ fun LiveTvScreen(
                                 item(key = "recent", contentType = "recent") {
                                     LiveTvRecentRow(
                                         recent = recent,
-                                        programme = recent.tvgId?.let(uiState.currentProgrammes::get),
+                                        logo = recent.logoUrl ?: uiState.guideLogos[recent.guideKey],
+                                        programme = uiState.currentProgrammes[recent.guideKey],
                                         clock = minuteClock,
-                                        onClick = { play(LiveTvRepository.channelFor(recent)) },
+                                        onClick = { play(LiveTvRepository.channelFor(recent), true) },
                                         onFocused = { focusedChannel = LiveTvRepository.channelFor(recent) },
                                     )
                                 }
@@ -322,11 +363,12 @@ fun LiveTvScreen(
                             items(visibleChannels, key = { it.id }, contentType = { "channel" }) { channel ->
                                 LiveTvChannelRow(
                                     channel = channel,
-                                    programme = channel.tvgId?.let(uiState.currentProgrammes::get),
+                                    logo = uiState.logoFor(channel),
+                                    programme = uiState.currentProgrammes[channel.guideKey],
                                     clock = minuteClock,
                                     isFavorite = channel.streamUrl in uiState.favoriteUrls,
-                                    onClick = { play(channel) },
-                                    onLongClick = { LiveTvRepository.toggleFavorite(channel) },
+                                    onClick = { play(channel, false) },
+                                    onLongClick = { toggleFavorite(channel) },
                                     onFocused = { focusedChannel = channel },
                                     modifier = if (channel.streamUrl == focusTargetUrl) Modifier.focusRequester(channelFocus) else Modifier,
                                 )
@@ -349,7 +391,8 @@ fun LiveTvScreen(
                             LiveTvPreviewPanel(
                                 preview = preview,
                                 channel = shownChannel,
-                                programme = shownChannel?.tvgId?.let(uiState.currentProgrammes::get),
+                                logo = shownChannel?.let(uiState::logoFor),
+                                programme = shownChannel?.guideKey?.let(uiState.currentProgrammes::get),
                                 clock = minuteClock,
                                 sourceLabel = if (uiState.sources.size > 1) {
                                     uiState.sources.firstOrNull { it.id == shownChannel?.sourceId }?.label
@@ -381,9 +424,11 @@ private fun LiveTvCategoryColumn(
     sources: List<LiveTvSource>,
     groups: List<String>,
     selectedKey: String,
+    selectedFocus: FocusRequester,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val selectedModifier = Modifier.focusRequester(selectedFocus)
     Column(modifier = modifier) {
         Text(
             text = stringResource(R.string.live_tv_title),
@@ -404,15 +449,15 @@ private fun LiveTvCategoryColumn(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             item(key = FILTER_ALL) {
-                LiveTvCategoryItem(stringResource(R.string.live_tv_all_channels), selectedKey == FILTER_ALL) { onSelect(FILTER_ALL) }
+                LiveTvCategoryItem(stringResource(R.string.live_tv_all_channels), selectedKey == FILTER_ALL, selectedModifier) { onSelect(FILTER_ALL) }
             }
             item(key = FILTER_FAVORITES) {
-                LiveTvCategoryItem(stringResource(R.string.live_tv_favorites), selectedKey == FILTER_FAVORITES) { onSelect(FILTER_FAVORITES) }
+                LiveTvCategoryItem(stringResource(R.string.live_tv_favorites), selectedKey == FILTER_FAVORITES, selectedModifier) { onSelect(FILTER_FAVORITES) }
             }
             // With several sources, each can be browsed on its own.
             items(sources, key = { FILTER_SOURCE_PREFIX + it.id }) { source ->
                 val key = FILTER_SOURCE_PREFIX + source.id
-                LiveTvCategoryItem(source.label, selectedKey == key) { onSelect(key) }
+                LiveTvCategoryItem(source.label, selectedKey == key, selectedModifier) { onSelect(key) }
             }
             if (sources.isNotEmpty()) {
                 item(key = "\u0000divider") {
@@ -426,7 +471,7 @@ private fun LiveTvCategoryColumn(
                 }
             }
             items(groups, key = { it }) { group ->
-                LiveTvCategoryItem(liveTvGroupLabel(group), selectedKey == group) { onSelect(group) }
+                LiveTvCategoryItem(liveTvGroupLabel(group), selectedKey == group, selectedModifier) { onSelect(group) }
             }
         }
     }
@@ -434,7 +479,7 @@ private fun LiveTvCategoryColumn(
 
 /** A category: selecting happens on focus, like Netflix's genre rail, so the list follows the remote. */
 @Composable
-private fun LiveTvCategoryItem(label: String, selected: Boolean, onSelect: () -> Unit) {
+private fun LiveTvCategoryItem(label: String, selected: Boolean, selectedModifier: Modifier, onSelect: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     LaunchedEffect(focused) {
         if (focused && !selected) {
@@ -445,7 +490,7 @@ private fun LiveTvCategoryItem(label: String, selected: Boolean, onSelect: () ->
     val shape = RoundedCornerShape(12.dp)
     Card(
         onClick = onSelect,
-        modifier = Modifier
+        modifier = (if (selected) selectedModifier else Modifier)
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused },
         shape = CardDefaults.shape(shape),
@@ -470,13 +515,14 @@ private fun LiveTvCategoryItem(label: String, selected: Boolean, onSelect: () ->
 @Composable
 private fun LiveTvRecentRow(
     recent: LiveTvRecentChannel,
+    logo: String?,
     programme: LiveTvProgramme?,
     clock: State<Long>,
     onClick: () -> Unit,
     onFocused: () -> Unit,
 ) {
     LiveTvRowCard(onClick = onClick, onLongClick = null, tall = true, onFocused = onFocused) { focused ->
-        LiveTvLogo(url = recent.logoUrl, name = recent.name, width = 96.dp, height = 60.dp)
+        LiveTvLogo(url = logo, name = recent.name, width = 96.dp, height = 60.dp)
         Column(modifier = Modifier.weight(1f).padding(start = NuvioTheme.spacing.md)) {
             Text(
                 text = stringResource(R.string.live_tv_continue).uppercase(),
@@ -500,6 +546,7 @@ private fun LiveTvRecentRow(
 @Composable
 private fun LiveTvChannelRow(
     channel: LiveTvChannel,
+    logo: String?,
     programme: LiveTvProgramme?,
     clock: State<Long>,
     isFavorite: Boolean,
@@ -509,7 +556,7 @@ private fun LiveTvChannelRow(
     modifier: Modifier = Modifier,
 ) {
     LiveTvRowCard(onClick = onClick, onLongClick = onLongClick, tall = false, onFocused = onFocused, modifier = modifier) { focused ->
-        LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 72.dp, height = 44.dp)
+        LiveTvLogo(url = logo, name = channel.name, width = 72.dp, height = 44.dp)
         Column(modifier = Modifier.weight(1f).padding(start = NuvioTheme.spacing.md)) {
             Text(
                 text = channel.name,
