@@ -625,7 +625,12 @@ internal class AudioSubtitleSyncController(
     fun setReferenceSubtitles(list: List<ReferenceCandidate>) {
         candidates = list
         // Load the speech model while the viewer is still choosing, so it is ready for the pick.
-        if (enabled && list.isNotEmpty() && AsrModel.isReady(appContext)) ensureRecognizer()
+        // Not while AutoSync is still deciding (listening before a session): most of those runs
+        // never need it, and on 2 GB TVs it would compete with AutoSync for memory. The session
+        // loads it on takeover; speech heard meanwhile waits in the recognition queue.
+        if (enabled && list.isNotEmpty() && AsrModel.isReady(appContext) && (session != null || !listensBeforeSession)) {
+            ensureRecognizer()
+        }
         // Download the likeliest English references now so a later pick is instant.
         englishCandidates().take(PREFETCH_REFERENCES).forEach { fetchReference(it, onReady = null) }
         // Subtitles listed after the pick join the running search.

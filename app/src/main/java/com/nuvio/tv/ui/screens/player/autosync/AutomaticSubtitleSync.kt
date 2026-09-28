@@ -172,6 +172,12 @@ internal object AutomaticSubtitleSync {
         sourceHeaders: Map<String, String> = emptyMap(),
         /** A follow-up search in another language: log into the current debug session. */
         continueDebugSession: Boolean = false,
+        /**
+         * Whether the playing stream has any text track: false once the player has read the
+         * stream's track list and found none, null while it is not known yet. False ends the wait
+         * for embedded cues at once, since none can arrive.
+         */
+        streamHasTextTracks: (suspend () -> Boolean?)? = null,
     ): AutoSyncResolvedTimeline? {
         Unit
         val aggressiveMode = AutoSyncPreferences.aggressiveMode.value
@@ -603,6 +609,7 @@ internal object AutomaticSubtitleSync {
                         else -> LIVE_REFERENCE_WAIT_MS
                     },
                     allowSparseLiveReference = useSparseLiveReference,
+                    streamHasTextTracks = streamHasTextTracks,
                 )
                 referenceTracks = liveSelection.primary
                 forcedFallbackTracks = liveSelection.forcedFallback
@@ -1934,6 +1941,7 @@ internal object AutomaticSubtitleSync {
         target: List<SubtitleSyncCue>,
         waitMs: Long = LIVE_REFERENCE_WAIT_MS,
         allowSparseLiveReference: Boolean = false,
+        streamHasTextTracks: (suspend () -> Boolean?)? = null,
     ): ReferenceSelection {
         val targetSpan = referenceSpanMs(target).coerceAtLeast(1L)
         val started = SystemClock.elapsedRealtime()
@@ -2009,6 +2017,12 @@ internal object AutomaticSubtitleSync {
 
             val elapsedMs = SystemClock.elapsedRealtime() - started
             if (elapsedMs >= waitMs) break
+            if (prepared.isEmpty() && streamHasTextTracks?.let { runCatching { it() }.getOrNull() } == false) {
+                AutoSyncDebugLog.info {
+                    "stream has no text tracks; live wait ended after ${elapsedMs}ms"
+                }
+                break
+            }
             delay(minOf(LIVE_REFERENCE_POLL_MS, waitMs - elapsedMs))
         }
 
