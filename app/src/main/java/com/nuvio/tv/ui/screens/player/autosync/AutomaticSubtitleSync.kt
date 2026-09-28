@@ -2502,6 +2502,13 @@ internal object EmbeddedSubtitleCueStore {
         var generation = 0L
         synchronized(lock) {
             generation = (generations[sourceKey] ?: 0L) + 1L
+            // Only the player's current stream is ever read again (a return to an earlier one
+            // resets it anyway), so cues of earlier streams are dropped rather than kept for the
+            // whole app session. Generation counters are kept so they never repeat.
+            sources.keys.retainAll { it == sourceKey }
+            retainedGenerations.keys.retainAll { it == sourceKey }
+            lastSeekTargetMs.keys.retainAll { it == sourceKey }
+            lastSeekWallMs.keys.retainAll { it == sourceKey }
             sources[sourceKey] = linkedMapOf()
             retainedGenerations.remove(sourceKey)
             generations[sourceKey] = generation

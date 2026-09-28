@@ -10,6 +10,7 @@ import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSources
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalSeekPreviewSettings
 import com.nuvio.tv.ui.screens.player.seekpreview.local.localSeekPreviewCacheKey
 import androidx.media3.exoplayer.SeekParameters
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -262,7 +263,7 @@ class SeekPreviewState internal constructor(
     fun adjustOffset(deltaMs: Int) = setOffset(_offsetMs.value + deltaMs)
 
     init {
-        synchronized(states) { states[controller] = this }
+        synchronized(states) { states[controller] = WeakReference(this) }
     }
 
     /**
@@ -277,9 +278,11 @@ class SeekPreviewState internal constructor(
 
     internal companion object {
         private val PreviewCommitSeek = SeekParameters(3_000_000L, 3_000_000L)
-        private val states = WeakHashMap<PlayerRuntimeController, SeekPreviewState>()
+        // The value is weak too: the state references its controller, so a strong value would keep
+        // the key, and with it every finished player session, alive for the whole app session.
+        private val states = WeakHashMap<PlayerRuntimeController, WeakReference<SeekPreviewState>>()
 
         fun forController(controller: PlayerRuntimeController): SeekPreviewState? =
-            synchronized(states) { states[controller] }
+            synchronized(states) { states[controller]?.get() }
     }
 }
