@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: playback performance fixes (AutoSync hot path, preview tap, Seekr sheet memory)
+# Release trigger: playback performance fixes (Seekr memory, session cleanup, adaptive audio sync connections)
 
 
 on:

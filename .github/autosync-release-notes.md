@@ -1,3 +1,4 @@
 - **Lighter seek previews on low-memory TVs.** Seekr thumbnails no longer keep every image of the film in memory for the whole session. Only the ones around where you scrub stay ready, which saves tens of MB on long films. Thumbnails look and appear the same as before.
-- **Smoother playback while AutoSync works.** The player no longer waits on AutoSync's background work, and AutoSync reuses its calculations instead of redoing them. Sync results are unchanged.
-- **Less wasted work for on-device previews.** When the preview spool is full during playback, frames that would be thrown away are no longer copied.
+- **Memory is given back after each episode.** Finished playback sessions and subtitles of earlier streams are released instead of piling up, so long viewing sessions stay smooth on 2 GB TVs.
+- **Audio sync is gentler on your connection.** It now samples the film over one extra connection and adds more only when your host accepts them and playback has buffered enough (at most two on 2 GB TVs). Sync results are unchanged.
+- **Smoother playback while AutoSync works.** The player no longer waits on AutoSync's background work, AutoSync reuses its calculations, and its status updates cost far less. Sync results are unchanged.
