@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: Live TV fixes and Now/Next card, seek preview sync, seek buffer fixes
+# Release trigger: playback performance fixes (AutoSync hot path, preview tap, Seekr sheet memory)
 
 
 on:

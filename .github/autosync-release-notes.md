@@ -1,5 +1,3 @@
-- **Live TV channels start reliably.** Xtream channels use your provider's own panel link in the format your account allows, a briefly refused channel is retried a few times, channels with occasional keyframes start straight away, and frame rate matching no longer probes the channel before it plays.
-- **Now and Next with OK.** Pressing OK while watching a channel shows what's on now, how far along it is and what's next. Press OK again for the controls; OK never pauses live TV.
-- **Cleaner channel logos.** The loading screen shows the new channel's logo as soon as you switch, and initials no longer show through transparent logos.
-- **Seek previews match where you land.** Preview frames show the exact moment they were taken from, and confirming a seek lands on the frame you saw.
-- **Seek buffer is now off by default.** Playback uses Nuvio's own buffering unless you pick a size in Settings > Nuvio Reshaped. When it is on, a failed link no longer keeps retrying on the error screen, and it never opens two connections to the same link.
+- **Lighter seek previews on low-memory TVs.** Seekr thumbnails no longer keep every image of the film in memory for the whole session. Only the ones around where you scrub stay ready, which saves tens of MB on long films. Thumbnails look and appear the same as before.
+- **Smoother playback while AutoSync works.** The player no longer waits on AutoSync's background work, and AutoSync reuses its calculations instead of redoing them. Sync results are unchanged.
+- **Less wasted work for on-device previews.** When the preview spool is full during playback, frames that would be thrown away are no longer copied.
