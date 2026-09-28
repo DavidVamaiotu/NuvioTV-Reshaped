@@ -13,6 +13,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -33,6 +34,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
@@ -55,6 +57,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
@@ -118,6 +123,27 @@ internal class LiveTvPlayerState(
 
     private var switchJob: Job? = null
 
+    /** The channel focused in the panel, which ▶ opens the programme guide on. */
+    internal var panelFocusedUrl: String? = null
+    /** The programme guide over the player (▶ from the channel list), or null. */
+    var guide by mutableStateOf<LiveTvGuideState?>(null)
+        private set
+
+    private fun openGuide() {
+        val channels = panelChannels
+        if (channels.isEmpty()) return
+        val start = channels.indexOfFirst { it.streamUrl == (panelFocusedUrl ?: currentListUrl) }.coerceAtLeast(0)
+        guide = LiveTvGuideState(
+            channels = channels,
+            startIndex = start,
+            onPlay = { channel ->
+                guide = null
+                pickFromPanel(channel)
+            },
+            onClose = { guide = null },
+        )
+    }
+
     /** The Now/Next card OK shows over the picture; OK again opens the controls. Never pauses. */
     var infoOpen by mutableStateOf(false)
         private set
@@ -139,6 +165,9 @@ internal class LiveTvPlayerState(
         infoJob = null
         infoOpen = false
     }
+
+    /** The player, for the details the Now/Next card shows. */
+    internal val player: PlayerRuntimeController get() = controller
 
     /** Whether the player is showing a Live TV channel (read on each key; a memory lookup). */
     fun isActive(): Boolean = LiveTvPlaybackRegistry.isLiveTv(controller.currentStreamUrl)
@@ -173,6 +202,11 @@ internal class LiveTvPlayerState(
             uiState.showSpeedDialog || uiState.showSubtitleDelayOverlay || uiState.showSubtitleTimingDialog ||
             uiState.showMoreDialog || uiState.showStreamInfoOverlay
         val down = event.action == KeyEvent.ACTION_DOWN
+        // The guide takes every key while it is open; the player behind it sees none.
+        guide?.let { open ->
+            open.onKey(event)
+            return true
+        }
         if (panelOpen && foldersOpen) {
             return when (event.keyCode) {
                 // Back to the channels, which show the category last focused.
@@ -186,8 +220,12 @@ internal class LiveTvPlayerState(
         }
         if (panelOpen) {
             return when (event.keyCode) {
-                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                     if (!down) closePanel()
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (down && event.repeatCount == 0) openGuide()
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -261,6 +299,7 @@ internal class LiveTvPlayerState(
 
     private fun openPanel() {
         hideInfo()
+        panelFocusedUrl = null
         folderJob?.cancel()
         panelFolderKey = null
         val (channels, folderKey) = zapTarget()
@@ -298,7 +337,7 @@ internal class LiveTvPlayerState(
         bannerKey++
         closePanel()
         // The loading screen and pause screen show the player's logo: the new channel's, from the first press.
-        controller._uiState.update { it.copy(title = channel.name, logo = channel.logoUrl) }
+        controller._uiState.update { it.copy(title = channel.name, logo = LiveTvRepository.uiState.value.logoFor(channel)) }
         // Quick presses land on the last channel only.
         switchJob?.cancel()
         switchJob = scope.launch {
@@ -317,6 +356,7 @@ internal class LiveTvPlayerState(
 
     internal fun closePanel() {
         if (!panelOpen) return
+        guide = null
         panelOpen = false
         foldersOpen = false
         runCatching { containerFocusRequester.requestFocus() }
@@ -366,8 +406,20 @@ internal fun LiveTvPlayerOverlay(state: LiveTvPlayerState, uiState: PlayerUiStat
 @Composable
 private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiState: PlayerUiState) {
     LaunchedEffect(Unit) { state.syncCurrent() }
+    // Live TV lets go of its channels while unseen (the app in the background for a while):
+    // back on a channel, they load again so zapping and the channel list work.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        LiveTvRepository.reloadIfReleased()
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_START) LiveTvRepository.reloadIfReleased() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LiveTvFrameRateMatch(state, uiState)
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(liveState.isLoaded, liveState.isLoading, liveState.hasSource) {
+        if (!liveState.isLoaded && !liveState.isLoading && !liveState.hasSource) LiveTvRepository.reloadIfReleased()
+    }
     val clock = rememberLiveTvMinuteClock()
     // Numbered within the list being zapped (a category keeps its own 1, 2, 3...).
     val zapList = remember(state.currentListUrl, liveState.shownChannels) { state.zapList() }
@@ -390,13 +442,15 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         current?.let { channel ->
             LiveTvBanner(
                 channel = channel,
-                programme = channel.tvgId?.let(liveState.currentProgrammes::get),
+                logo = liveState.logoFor(channel),
+                programme = liveState.currentProgrammes[channel.guideKey],
                 number = currentIndex + 1,
                 clock = clock,
             )
         }
     }
 
+    val details by rememberLiveTvStreamDetails(state.player, state.infoOpen)
     AnimatedVisibility(
         visible = state.infoOpen && current != null && !uiState.showControls && !state.panelOpen,
         enter = slideInVertically { it / 3 } + fadeIn(),
@@ -406,7 +460,9 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         current?.let { channel ->
             LiveTvInfoCard(
                 channel = channel,
-                now = channel.tvgId?.let(liveState.currentProgrammes::get),
+                logo = liveState.logoFor(channel),
+                details = details,
+                now = liveState.currentProgrammes[channel.guideKey],
                 number = currentIndex + 1,
                 clock = clock,
             )
@@ -421,17 +477,30 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
     ) {
         LiveTvChannelPanel(state, liveState.currentProgrammes, clock)
     }
+
+    AnimatedVisibility(
+        visible = state.guide != null,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = Modifier.fillMaxSize().zIndex(4f),
+    ) {
+        // Keeps the last guide drawn while it fades out.
+        val guide = remember { mutableStateOf<LiveTvGuideState?>(null) }
+        state.guide?.let { guide.value = it }
+        guide.value?.let { LiveTvGuide(it, takeFocus = false) }
+    }
 }
 
 @Composable
-private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {
+private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {
     Row(
         modifier = Modifier
             .padding(start = 48.dp, top = 40.dp)
             .widthIn(max = 640.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(Color.Black.copy(alpha = 0.72f))
-            .padding(horizontal = 20.dp, vertical = 16.dp),
+            .background(Color.Black.copy(alpha = 0.66f))
+            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(20.dp))
+            .padding(horizontal = 18.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (number > 0) {
@@ -443,7 +512,7 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
                 modifier = Modifier.padding(end = 16.dp),
             )
         }
-        LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 88.dp, height = 54.dp)
+        LiveTvLogo(url = logo, name = channel.name, width = 88.dp, height = 54.dp)
         Column(modifier = Modifier.padding(start = 16.dp)) {
             Text(
                 text = channel.name,
@@ -470,7 +539,7 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
                         modifier = Modifier.width(220.dp),
                     )
                     Text(
-                        text = "${programme.timeLabel}  ·  ${liveTvTimeLeft(programme, clock)}",
+                        text = "${LiveTvClock.formatSpan(programme)}  ·  ${liveTvTimeLeft(programme, clock)}",
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White.copy(alpha = 0.6f),
                         maxLines = 1,
@@ -488,22 +557,34 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
     }
 }
 
-/** The Now/Next card OK shows: the channel, what is on with how far it has got, and what follows. */
+/**
+ * The Now/Next card OK shows: the channel with its picture and sound (resolution, frame rate,
+ * codecs), what is on with how far it has got, and what follows.
+ */
 @Composable
-private fun LiveTvInfoCard(channel: LiveTvChannel, now: LiveTvProgramme?, number: Int, clock: State<Long>) {
+private fun LiveTvInfoCard(
+    channel: LiveTvChannel,
+    logo: String?,
+    details: LiveTvStreamDetails,
+    now: LiveTvProgramme?,
+    number: Int,
+    clock: State<Long>,
+) {
     // Read once per minute tick: the kept guide is a map lookup.
-    val next = remember(channel.tvgId, now, clock.value / 60_000L) { LiveTvRepository.nextProgramme(channel.tvgId) }
+    val next = remember(channel.guideKey, now, clock.value / 60_000L) { LiveTvRepository.nextProgramme(channel.guideKey) }
+    val shape = RoundedCornerShape(22.dp)
     Row(
         modifier = Modifier
-            .padding(start = 48.dp, end = 48.dp, bottom = 40.dp)
-            .widthIn(max = 920.dp)
+            .padding(start = 48.dp, end = 48.dp, bottom = 36.dp)
+            .widthIn(max = 880.dp)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color.Black.copy(alpha = 0.74f))
-            .padding(horizontal = 24.dp, vertical = 20.dp),
+            .clip(shape)
+            .background(Color.Black.copy(alpha = 0.66f))
+            .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
+            .padding(horizontal = 22.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 112.dp, height = 68.dp)
+        LiveTvLogo(url = logo, name = channel.name, width = 104.dp, height = 64.dp)
         Column(modifier = Modifier.weight(1f).padding(start = 20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (number > 0) {
@@ -522,7 +603,11 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, now: LiveTvProgramme?, number
                     color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+                details.labels.forEach { label ->
+                    LiveTvDetailChip(label, modifier = Modifier.padding(start = 8.dp))
+                }
             }
             if (now == null) {
                 Text(
@@ -540,8 +625,8 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, now: LiveTvProgramme?, number
                         color = Color.Black,
                         modifier = Modifier
                             .clip(LiveTvPillShape)
-                            .background(Color.White)
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                            .background(Color.White.copy(alpha = 0.92f))
+                            .padding(horizontal = 7.dp, vertical = 1.dp),
                     )
                     Text(
                         text = now.title,
@@ -559,10 +644,10 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, now: LiveTvProgramme?, number
                         clock = clock,
                         fill = Color.White,
                         track = Color.White.copy(alpha = 0.18f),
-                        modifier = Modifier.width(260.dp),
+                        modifier = Modifier.width(240.dp),
                     )
                     Text(
-                        text = "${now.timeLabel}  ·  ${liveTvTimeLeft(now, clock)}",
+                        text = "${LiveTvClock.formatSpan(now)}  ·  ${liveTvTimeLeft(now, clock)}",
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White.copy(alpha = 0.6f),
                         maxLines = 1,
@@ -583,11 +668,26 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, now: LiveTvProgramme?, number
             Text(
                 text = stringResource(R.string.live_tv_info_hint),
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.45f),
+                color = Color.White.copy(alpha = 0.42f),
                 modifier = Modifier.padding(top = 10.dp),
             )
         }
     }
+}
+
+/** A quiet outlined tag: "1080p", "50 fps". */
+@Composable
+private fun LiveTvDetailChip(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Medium,
+        color = Color.White.copy(alpha = 0.82f),
+        maxLines = 1,
+        modifier = modifier
+            .border(1.dp, Color.White.copy(alpha = 0.24f), LiveTvPillShape)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    )
 }
 
 @Composable
@@ -685,9 +785,9 @@ private fun FolderRow(
     Card(
         onClick = onClick,
         modifier = modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
-        shape = CardDefaults.shape(RoundedCornerShape(12.dp)),
+        shape = CardDefaults.shape(RoundedCornerShape(10.dp)),
         colors = CardDefaults.colors(
-            containerColor = if (selected) Color.White.copy(alpha = 0.12f) else Color.Transparent,
+            containerColor = if (selected) Color.White.copy(alpha = 0.10f) else Color.Transparent,
             focusedContainerColor = Color.White,
         ),
         scale = CardDefaults.scale(focusedScale = 1.02f),
@@ -699,7 +799,7 @@ private fun FolderRow(
             color = if (focused) Color.Black else if (selected) Color.White else Color.White.copy(alpha = 0.7f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         )
     }
 }
@@ -767,10 +867,12 @@ private fun LiveTvChannelColumn(
             itemsIndexed(channels, key = { _, channel -> channel.id }, contentType = { _, _ -> "channel" }) { index, channel ->
                 PanelRow(
                     channel = channel,
-                    programme = channel.tvgId?.let(programmes::get),
+                    logo = liveState.logoFor(channel),
+                    programme = programmes[channel.guideKey],
                     playing = channel.streamUrl == state.currentListUrl,
                     clock = clock,
                     onClick = { state.pickFromPanel(channel) },
+                    onFocused = { state.panelFocusedUrl = channel.streamUrl },
                     modifier = if (index == startIndex) Modifier.focusRequester(currentFocus) else Modifier,
                 )
             }
@@ -793,10 +895,12 @@ private fun LiveTvChannelColumn(
 @Composable
 private fun PanelRow(
     channel: LiveTvChannel,
+    logo: String?,
     programme: LiveTvProgramme?,
     playing: Boolean,
     clock: State<Long>,
     onClick: () -> Unit,
+    onFocused: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -804,16 +908,19 @@ private fun PanelRow(
     Card(
         onClick = onClick,
         onLongClick = { LiveTvRepository.toggleFavorite(channel) },
-        modifier = modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
+        modifier = modifier.fillMaxWidth().onFocusChanged {
+            focused = it.isFocused
+            if (it.isFocused) onFocused()
+        },
         shape = CardDefaults.shape(shape),
         colors = CardDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Color.White),
         scale = CardDefaults.scale(focusedScale = 1.02f),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 10.dp),
+            modifier = Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 60.dp, height = 38.dp)
+            LiveTvLogo(url = logo, name = channel.name, width = 60.dp, height = 38.dp)
             Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(
                     text = channel.name,

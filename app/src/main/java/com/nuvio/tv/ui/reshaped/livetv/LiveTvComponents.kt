@@ -6,6 +6,7 @@ import android.view.KeyEvent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -57,6 +58,8 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import coil3.network.NetworkHeaders
+import coil3.network.httpHeaders
 import coil3.request.ImageRequest
 import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
@@ -67,7 +70,7 @@ import kotlinx.coroutines.delay
 
 internal val LiveTvPillShape = RoundedCornerShape(100.dp)
 
-/** A pill button in the app's quiet style: elevated surface, white when focused. */
+/** A compact pill button in the app's quiet style: a faint glass fill and hairline, white when focused. */
 @Composable
 internal fun LiveTvPillButton(
     text: String,
@@ -82,14 +85,19 @@ internal fun LiveTvPillButton(
         modifier = modifier,
         shape = ButtonDefaults.shape(LiveTvPillShape),
         colors = ButtonDefaults.colors(
-            containerColor = if (selected) NuvioTheme.colors.TextPrimary.copy(alpha = 0.16f) else NuvioTheme.colors.BackgroundElevated,
-            contentColor = NuvioTheme.colors.TextPrimary,
+            containerColor = NuvioTheme.colors.TextPrimary.copy(alpha = if (selected) 0.14f else 0.06f),
+            contentColor = NuvioTheme.colors.TextPrimary.copy(alpha = 0.9f),
             focusedContainerColor = NuvioTheme.colors.TextPrimary,
             focusedContentColor = Color.Black,
         ),
-        scale = ButtonDefaults.scale(focusedScale = 1.04f),
+        border = ButtonDefaults.border(
+            border = Border(BorderStroke(1.dp, NuvioTheme.colors.TextPrimary.copy(alpha = 0.10f)), shape = LiveTvPillShape),
+            focusedBorder = Border.None,
+        ),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp),
+        scale = ButtonDefaults.scale(focusedScale = 1.03f),
     ) {
-        Text(text = text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = text, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -123,17 +131,17 @@ internal fun LiveTvTextField(
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused || it.hasFocus },
         colors = CardDefaults.colors(
-            containerColor = NuvioTheme.colors.BackgroundElevated,
-            focusedContainerColor = NuvioTheme.colors.BackgroundElevated,
+            containerColor = NuvioTheme.colors.TextPrimary.copy(alpha = 0.05f),
+            focusedContainerColor = NuvioTheme.colors.TextPrimary.copy(alpha = 0.08f),
         ),
         border = CardDefaults.border(
-            border = Border(BorderStroke(NuvioTheme.spacing.hairline, NuvioTheme.colors.Border), shape = shape),
+            border = Border(BorderStroke(1.dp, NuvioTheme.colors.TextPrimary.copy(alpha = 0.10f)), shape = shape),
             focusedBorder = Border(NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs), shape = shape),
         ),
         shape = CardDefaults.shape(shape),
         scale = CardDefaults.scale(focusedScale = 1f),
     ) {
-        Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Box(modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)) {
             BasicTextField(
                 value = fieldValue,
                 onValueChange = { next ->
@@ -232,6 +240,8 @@ internal fun LiveTvLogo(
                     ImageRequest.Builder(context)
                         .data(url)
                         .size(width.roundToPx(), height.roundToPx())
+                        // IPTV panels often serve logos only to player-like clients, as they do streams.
+                        .httpHeaders(LOGO_HEADERS)
                         .build()
                 }
             }
@@ -247,6 +257,8 @@ internal fun LiveTvLogo(
         }
     }
 }
+
+private val LOGO_HEADERS = NetworkHeaders.Builder().set("User-Agent", "VLC/3.0.0 LibVLC/3.0.0").build()
 
 private fun String.initials(): String =
     split(' ', '-', '_', '.').filter { it.isNotBlank() && it.first().isLetterOrDigit() }

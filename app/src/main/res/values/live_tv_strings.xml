@@ -65,15 +65,21 @@
 
     <string name="live_tv_live_badge">LIVE</string>
     <string name="settings_live_tv_previews_title">Channel previews</string>
-    <string name="settings_live_tv_previews_description">Play a small, muted picture of the channel you are on in the Live TV list</string>
+    <string name="settings_live_tv_previews_description">Play a small picture of the channel you are on in the Live TV list</string>
+    <string name="settings_live_tv_preview_sound_title">Preview sound</string>
+    <string name="settings_live_tv_preview_sound_description">Hear the channel in the preview. It fades in, and stops when you leave the list</string>
 
     <string name="live_tv_player_channels">Channels</string>
-    <string name="live_tv_player_categories_hint">◀ Categories</string>
+    <string name="live_tv_player_categories_hint">◀ Categories  ·  ▶ Guide</string>
     <string name="live_tv_player_hint">▲▼ Switch channel  ·  ◀ Channel list  ·  OK Info</string>
     <string name="live_tv_info_hint">OK Controls  ·  ◀ Channel list  ·  ▲▼ Switch channel</string>
     <string name="live_tv_info_now">Now</string>
     <string name="live_tv_info_next">Next · %1$s</string>
     <string name="live_tv_info_no_guide">No guide for this channel</string>
+    <string name="live_tv_guide">Guide</string>
+    <string name="live_tv_guide_ended">Ended</string>
+    <string name="live_tv_guide_none">No guide</string>
+    <string name="live_tv_guide_hint">OK Watch  ·  CH+/CH− Page  ·  Back Close</string>
 
     <string name="live_tv_error_invalid_url">Enter a valid HTTP or HTTPS playlist link.</string>
     <string name="live_tv_error_no_channels">No playable channels were found in this playlist.</string>

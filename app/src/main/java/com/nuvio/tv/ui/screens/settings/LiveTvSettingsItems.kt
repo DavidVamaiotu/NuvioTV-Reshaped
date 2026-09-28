@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PictureInPicture
 import androidx.compose.runtime.getValue
@@ -18,7 +19,7 @@ import com.nuvio.tv.ui.theme.NuvioTheme
 
 /**
  * "Live TV" row: shows Live TV (IPTV channel lists) in the menu. Off by default. Under it, while
- * Live TV is on, "Channel previews" (on by default).
+ * Live TV is on, "Channel previews" and their sound (both on by default).
  */
 internal fun LazyListScope.liveTvSettingsItems(
     onItemFocused: () -> Unit = {},
@@ -28,6 +29,7 @@ internal fun LazyListScope.liveTvSettingsItems(
         LiveTvPreferences.ensureLoaded(context)
         val checked by LiveTvPreferences.enabled.collectAsStateWithLifecycle()
         val previews by LiveTvPreferences.previews.collectAsStateWithLifecycle()
+        val previewSound by LiveTvPreferences.previewSound.collectAsStateWithLifecycle()
 
         // One item, so the previews row adds no list spacing while it is hidden.
         Column(verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md)) {
@@ -48,6 +50,16 @@ internal fun LazyListScope.liveTvSettingsItems(
                     onCheckedChange = { LiveTvPreferences.setPreviews(context, it) },
                     onFocused = onItemFocused,
                 )
+                if (previews) {
+                    ToggleSettingsItem(
+                        icon = Icons.AutoMirrored.Filled.VolumeUp,
+                        title = stringResource(R.string.settings_live_tv_preview_sound_title),
+                        subtitle = stringResource(R.string.settings_live_tv_preview_sound_description),
+                        isChecked = previewSound,
+                        onCheckedChange = { LiveTvPreferences.setPreviewSound(context, it) },
+                        onFocused = onItemFocused,
+                    )
+                }
             }
         }
     }
