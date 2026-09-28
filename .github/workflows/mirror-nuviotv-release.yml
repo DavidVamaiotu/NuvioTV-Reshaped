@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: AutoSync dense dialogue offset fix
+# Release trigger: Live TV fixes and Now/Next card, seek preview sync, seek buffer fixes
 
 
 on:

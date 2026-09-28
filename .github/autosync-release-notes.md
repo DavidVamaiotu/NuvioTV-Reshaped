@@ -1,1 +1,5 @@
-- **AutoSync keeps in-sync subtitles in sync.** On episodes with dense, back-to-back dialogue, AutoSync could move a subtitle that already matched by up to 1.5 seconds. It now checks where the lines actually start, so it picks the exact offset.
+- **Live TV channels start reliably.** Xtream channels use your provider's own panel link in the format your account allows, a briefly refused channel is retried a few times, channels with occasional keyframes start straight away, and frame rate matching no longer probes the channel before it plays.
+- **Now and Next with OK.** Pressing OK while watching a channel shows what's on now, how far along it is and what's next. Press OK again for the controls; OK never pauses live TV.
+- **Cleaner channel logos.** The loading screen shows the new channel's logo as soon as you switch, and initials no longer show through transparent logos.
+- **Seek previews match where you land.** Preview frames show the exact moment they were taken from, and confirming a seek lands on the frame you saw.
+- **Seek buffer is now off by default.** Playback uses Nuvio's own buffering unless you pick a size in Settings > Nuvio Reshaped. When it is on, a failed link no longer keeps retrying on the error screen, and it never opens two connections to the same link.
