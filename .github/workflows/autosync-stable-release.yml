@@ -186,16 +186,20 @@ jobs:
           KEY_PASSWORD: ${{ secrets.AUTOSYNC_KEY_PASSWORD }}
         run: |
           set -e
-          KEYSTORE_PATH="$RUNNER_TEMP/autosync-release.jks"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null
 
-          {
-            echo "NUVIO_RELEASE_STORE_FILE=$KEYSTORE_PATH"
-            echo "NUVIO_RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
-            echo "NUVIO_RELEASE_KEY_ALIAS=$KEY_ALIAS"
-            echo "NUVIO_RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
-          } >> "$GITHUB_ENV"
+          if [[ -n "$KEYSTORE_BASE64" && -n "$STORE_PASSWORD" ]]; then
+            KEYSTORE_PATH="$RUNNER_TEMP/autosync-release.jks"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+            keytool -list -keystore "$KEYSTORE_PATH" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null
+            {
+              echo "NUVIO_RELEASE_STORE_FILE=$KEYSTORE_PATH"
+              echo "NUVIO_RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+              echo "NUVIO_RELEASE_KEY_ALIAS=$KEY_ALIAS"
+              echo "NUVIO_RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          else
+            echo "CI_USE_DEBUG_SIGNING=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Stamp stable AutoSync version
         env:
