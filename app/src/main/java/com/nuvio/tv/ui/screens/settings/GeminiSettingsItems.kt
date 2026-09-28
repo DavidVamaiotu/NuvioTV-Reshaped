@@ -741,3 +741,4 @@ private fun GeminiCustomModelDialog(
             inputFocusRequester.requestFocus()
         }
     }
+}
