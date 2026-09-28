@@ -37,6 +37,17 @@ class LiveTvScreenModel @Inject constructor(
     val profileId: Int get() = profileManager.activeProfileId.value
 
     /**
+     * Called as the screen opens: Live TV lets go of its channels after a while unused, and this
+     * model can outlive that (a saved back stack entry), so it loads them again when needed.
+     */
+    fun ensureLoaded() {
+        if (LiveTvRepository.ensureLoaded(context, profileId)) {
+            filteredFor = null
+            visibleChannels = emptyList()
+        }
+    }
+
+    /**
      * The filtered list, kept here so coming back from the player shows it at once (no empty
      * frame, no refilter) with the list where it was.
      */

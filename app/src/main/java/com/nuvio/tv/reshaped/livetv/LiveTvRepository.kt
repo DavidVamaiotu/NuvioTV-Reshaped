@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Live TV's channel list, guide, favorites and last channel for the active profile. It lives for
@@ -41,6 +42,11 @@ object LiveTvRepository {
     private const val EPG_MIN_READ_GAP_MS = 60L * 60 * 1000
     /** A guide that could not be read is tried again sooner. */
     private const val EPG_RETRY_MS = 30L * 60 * 1000
+    /**
+     * How long Live TV may go unseen (no list, no Live TV channel in the player) before its
+     * channels and guide are let go. Coming back after that loads them again.
+     */
+    private const val IDLE_RELEASE_MS = 5L * 60 * 1000
     /** Sources loaded at once on a refresh: each holds a connection and a parse buffer. */
     private const val PARALLEL_SOURCES = 2
 
@@ -62,8 +68,11 @@ object LiveTvRepository {
 
     private lateinit var appContext: Context
     @Volatile private var storage: LiveTvStorage? = null
-    private var loadedProfileId: Int? = null
+    @Volatile private var loadedProfileId: Int? = null
+    /** The profile last loaded, kept after a release so the player can load it again. */
+    @Volatile private var lastProfileId: Int? = null
     private var profileJob: Job? = null
+    private var idleJob: Job? = null
     private var epgJob: Job? = null
     @Volatile private var epgGeneration = 0
     /** The guide programmes kept for each [LiveTvChannel.guideKey], for "up next" and the guide. */
@@ -95,13 +104,15 @@ object LiveTvRepository {
     private val loaded = HashMap<String, LoadedSource>()
 
     /**
-     * Makes the state match [profileId]: the first call (or a profile switch) reads the saved
-     * sources and loads their channels; later calls for the same profile do nothing.
+     * Makes the state match [profileId]: the first call (or a profile switch, or the first after
+     * Live TV was let go while unused) reads the saved sources and loads their channels; later
+     * calls for the same profile do nothing. Returns true when it started a load.
      */
-    fun ensureLoaded(context: Context, profileId: Int) {
-        if (loadedProfileId == profileId) return
+    fun ensureLoaded(context: Context, profileId: Int): Boolean {
+        if (loadedProfileId == profileId) return false
         appContext = context.applicationContext
         loadedProfileId = profileId
+        lastProfileId = profileId
         profileJob?.cancel()
         cancelAllLoads()
         LiveTvStalker.clearSession()
@@ -130,6 +141,56 @@ object LiveTvRepository {
             )
             sources.forEach { launchSourceLoad(it, adding = false) }
         }
+        watchIdle()
+        return true
+    }
+
+    /**
+     * Lets go of everything Live TV holds (channels, guide, loads, the zap list) once nothing
+     * has shown it for [IDLE_RELEASE_MS]: after going back to Home, only the saved files remain.
+     * The list and a Live TV channel in the player both count as showing it.
+     */
+    private fun watchIdle() {
+        if (idleJob?.isActive == true) return
+        idleJob = scope.launch {
+            while (isActive) {
+                _uiState.subscriptionCount.first { it == 0 }
+                val back = withTimeoutOrNull(IDLE_RELEASE_MS) { _uiState.subscriptionCount.first { it > 0 } }
+                if (back != null) continue
+                val released = withContext(serial) {
+                    if (_uiState.subscriptionCount.value > 0) {
+                        false
+                    } else {
+                        releaseAll()
+                        true
+                    }
+                }
+                if (released) return@launch
+            }
+        }
+    }
+
+    /** Loads Live TV again if it was let go while unused (the player coming back to a channel). */
+    fun reloadIfReleased() {
+        if (loadedProfileId != null || !::appContext.isInitialized) return
+        val profileId = lastProfileId ?: return
+        ensureLoaded(appContext, profileId)
+    }
+
+    /** Runs on [serial]. */
+    private fun releaseAll() {
+        profileJob?.cancel()
+        profileJob = null
+        cancelAllLoads()
+        stopEpg()
+        epgKey = null
+        loaded.clear()
+        zapList = emptyList()
+        zapFolderKey = null
+        storage = null
+        LiveTvStalker.clearSession()
+        loadedProfileId = null
+        _uiState.value = LiveTvUiState()
     }
 
     /** Loads every saved source again (the Refresh button). */
