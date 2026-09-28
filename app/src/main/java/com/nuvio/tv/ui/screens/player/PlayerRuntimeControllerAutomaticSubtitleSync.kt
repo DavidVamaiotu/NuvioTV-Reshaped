@@ -174,7 +174,8 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         .build()
     val audioFallback = AudioSyncFallback.of(this)
-    audioFallback?.arm()
+    // Like AutoSync itself: a subtitle the user picked is only synced, never swapped.
+    audioFallback?.arm(mayReplaceSubtitle = candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH)
 
     automaticSubtitleSyncJob = scope.launch {
         launch {
