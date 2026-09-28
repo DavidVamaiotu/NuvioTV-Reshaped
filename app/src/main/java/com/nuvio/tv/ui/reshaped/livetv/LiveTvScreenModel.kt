@@ -98,7 +98,7 @@ internal suspend fun liveTvPlayerRoute(channel: LiveTvChannel, profileId: Int): 
         contentType = LIVE_TV_CONTENT_TYPE,
         logo = LiveTvRepository.uiState.value.logoFor(channel),
         addonName = LIVE_TV_ADDON_NAME,
-        streamDescription = channel.group.takeIf(String::isNotBlank),
+        streamDescription = (liveTvGroupName(channel.group, LiveTvRepository.uiState.value.groupNames) ?: channel.group).takeIf(String::isNotBlank),
         profileId = profileId,
     )
 }
