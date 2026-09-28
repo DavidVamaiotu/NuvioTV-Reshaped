@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: one-time seek buffer reset to Nuvio default
+# Release trigger: Live TV guide, preview sound, category renaming and fixes
 
 
 on:
