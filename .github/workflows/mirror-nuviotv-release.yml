@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: AutoSync finds embedded subtitles again on the first playback
+# Release trigger: Fix Gemini subtitle coroutines and robust debug signing verification
 
 
 on:

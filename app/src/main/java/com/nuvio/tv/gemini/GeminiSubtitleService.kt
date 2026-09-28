@@ -5,6 +5,9 @@ import android.util.Log
 import com.nuvio.tv.ui.screens.player.PlayerSubtitleCueParser
 import com.nuvio.tv.ui.screens.player.SubtitleSyncCue
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
@@ -60,47 +63,48 @@ internal object GeminiSubtitleService {
 
             // Chunk cues
             val chunks = cues.chunked(CUES_PER_CHUNK)
-            
+
             // Process chunks in parallel to drastically reduce total waiting time
-            val deferredChunks = chunks.mapIndexed { index, chunk ->
-                kotlinx.coroutines.async {
-                    val chunkStartIndex = (index * CUES_PER_CHUNK) + 1
-                    val srtChunk = formatCuesToSrt(chunk, chunkStartIndex)
+            val translatedCues = coroutineScope {
+                val deferredChunks = chunks.mapIndexed { index, chunk ->
+                    async {
+                        val chunkStartIndex = (index * CUES_PER_CHUNK) + 1
+                        val srtChunk = formatCuesToSrt(chunk, chunkStartIndex)
 
-                    val translationChunkResult = GeminiTranslationClient.translateSrtChunk(
-                        apiKey = apiKey,
-                        model = model,
-                        targetLanguageName = targetLanguageName,
-                        srtChunk = srtChunk,
-                    )
+                        val translationChunkResult = GeminiTranslationClient.translateSrtChunk(
+                            apiKey = apiKey,
+                            model = model,
+                            targetLanguageName = targetLanguageName,
+                            srtChunk = srtChunk,
+                        )
 
-                    val translatedChunkText = translationChunkResult.getOrThrow()
-                    val parsedChunkCues = PlayerSubtitleCueParser.parseFromText(translatedChunkText, "chunk.srt")
+                        val translatedChunkText = translationChunkResult.getOrThrow()
+                        val parsedChunkCues = PlayerSubtitleCueParser.parseFromText(translatedChunkText, "chunk.srt")
 
-                    val translatedCuesForChunk = mutableListOf<SubtitleSyncCue>()
-                    if (parsedChunkCues.size == chunk.size) {
-                        // Perfect 1:1 match; preserve original timestamps
-                        for (i in chunk.indices) {
-                            translatedCuesForChunk.add(
-                                SubtitleSyncCue(
-                                    startTimeMs = chunk[i].startTimeMs,
-                                    endTimeMs = chunk[i].endTimeMs,
-                                    text = parsedChunkCues[i].text,
+                        val translatedCuesForChunk = mutableListOf<SubtitleSyncCue>()
+                        if (parsedChunkCues.size == chunk.size) {
+                            // Perfect 1:1 match; preserve original timestamps
+                            for (i in chunk.indices) {
+                                translatedCuesForChunk.add(
+                                    SubtitleSyncCue(
+                                        startTimeMs = chunk[i].startTimeMs,
+                                        endTimeMs = chunk[i].endTimeMs,
+                                        text = parsedChunkCues[i].text,
+                                    )
                                 )
-                            )
+                            }
+                        } else if (parsedChunkCues.isNotEmpty()) {
+                            translatedCuesForChunk.addAll(parsedChunkCues)
+                        } else {
+                            translatedCuesForChunk.addAll(chunk)
                         }
-                    } else if (parsedChunkCues.isNotEmpty()) {
-                        translatedCuesForChunk.addAll(parsedChunkCues)
-                    } else {
-                        translatedCuesForChunk.addAll(chunk)
-                    }
-                    
-                    onProgress(0.05f + (0.90f * (index + 1).toFloat() / chunks.size.toFloat()))
-                    translatedCuesForChunk
-                }
-            }
 
-            val translatedCues = deferredChunks.kotlinx.coroutines.awaitAll().flatten()
+                        onProgress(0.05f + (0.90f * (index + 1).toFloat() / chunks.size.toFloat()))
+                        translatedCuesForChunk
+                    }
+                }
+                deferredChunks.awaitAll().flatten()
+            }
 
             // Build full SRT
             val fullSrt = formatCuesToSrt(translatedCues, 1)
