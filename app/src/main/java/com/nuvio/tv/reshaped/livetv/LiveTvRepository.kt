@@ -69,6 +69,9 @@ object LiveTvRepository {
     /** The guide programmes kept for each [LiveTvChannel.guideKey], for "up next" and the guide. */
     @Volatile private var keptSchedule: LiveTvSchedule = emptyMap()
     private var epgKey: Pair<List<String>, Set<String>>? = null
+    /** How much guide is kept per channel; less on low-memory TVs. */
+    @Volatile var guideWindow: LiveTvGuideWindow = LiveTvGuideWindow.Regular
+        private set
     /** Set by Refresh: the next guide read downloads every guide again, however recent its saved copy. */
     @Volatile private var forceGuideDownload = false
     /** The viewer's category order; empty for A to Z. */
@@ -596,6 +599,7 @@ object LiveTvRepository {
         val generation = epgGeneration
         val guideFiles = epgUrls.map { File(guideDir(), "guide_${Integer.toHexString(it.hashCode())}.xml.gz") }
         val window = if (LiveTvDevice.isLowMemory(appContext)) LiveTvGuideWindow.LowMemory else LiveTvGuideWindow.Regular
+        guideWindow = window
         epgJob = scope.launch {
             withContext(Dispatchers.IO) {
                 // Guides of an earlier source.
@@ -634,7 +638,14 @@ object LiveTvRepository {
                     }
                     nextReadAtMs = if (failed) minOf(regular, nowMs + EPG_RETRY_MS) else regular
                     _uiState.update { state ->
-                        if (epgGeneration != generation || state.guideLogos == logos) state else state.copy(guideLogos = logos)
+                        if (epgGeneration != generation) {
+                            state
+                        } else {
+                            state.copy(
+                                guideLogos = if (state.guideLogos == logos) state.guideLogos else logos,
+                                guideVersion = state.guideVersion + 1,
+                            )
+                        }
                     }
                 }
                 val current = currentProgrammes(schedule, guideKeys, nowMs)

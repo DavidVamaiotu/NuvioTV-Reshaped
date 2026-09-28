@@ -119,6 +119,27 @@ internal class LiveTvPlayerState(
 
     private var switchJob: Job? = null
 
+    /** The channel focused in the panel, which ▶ opens the programme guide on. */
+    internal var panelFocusedUrl: String? = null
+    /** The programme guide over the player (▶ from the channel list), or null. */
+    var guide by mutableStateOf<LiveTvGuideState?>(null)
+        private set
+
+    private fun openGuide() {
+        val channels = panelChannels
+        if (channels.isEmpty()) return
+        val start = channels.indexOfFirst { it.streamUrl == (panelFocusedUrl ?: currentListUrl) }.coerceAtLeast(0)
+        guide = LiveTvGuideState(
+            channels = channels,
+            startIndex = start,
+            onPlay = { channel ->
+                guide = null
+                pickFromPanel(channel)
+            },
+            onClose = { guide = null },
+        )
+    }
+
     /** The Now/Next card OK shows over the picture; OK again opens the controls. Never pauses. */
     var infoOpen by mutableStateOf(false)
         private set
@@ -177,6 +198,11 @@ internal class LiveTvPlayerState(
             uiState.showSpeedDialog || uiState.showSubtitleDelayOverlay || uiState.showSubtitleTimingDialog ||
             uiState.showMoreDialog || uiState.showStreamInfoOverlay
         val down = event.action == KeyEvent.ACTION_DOWN
+        // The guide takes every key while it is open; the player behind it sees none.
+        guide?.let { open ->
+            open.onKey(event)
+            return true
+        }
         if (panelOpen && foldersOpen) {
             return when (event.keyCode) {
                 // Back to the channels, which show the category last focused.
@@ -190,8 +216,12 @@ internal class LiveTvPlayerState(
         }
         if (panelOpen) {
             return when (event.keyCode) {
-                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                     if (!down) closePanel()
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (down && event.repeatCount == 0) openGuide()
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -265,6 +295,7 @@ internal class LiveTvPlayerState(
 
     private fun openPanel() {
         hideInfo()
+        panelFocusedUrl = null
         folderJob?.cancel()
         panelFolderKey = null
         val (channels, folderKey) = zapTarget()
@@ -321,6 +352,7 @@ internal class LiveTvPlayerState(
 
     internal fun closePanel() {
         if (!panelOpen) return
+        guide = null
         panelOpen = false
         foldersOpen = false
         runCatching { containerFocusRequester.requestFocus() }
@@ -428,6 +460,18 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         modifier = Modifier.align(Alignment.CenterStart).zIndex(3f),
     ) {
         LiveTvChannelPanel(state, liveState.currentProgrammes, clock)
+    }
+
+    AnimatedVisibility(
+        visible = state.guide != null,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = Modifier.fillMaxSize().zIndex(4f),
+    ) {
+        // Keeps the last guide drawn while it fades out.
+        val guide = remember { mutableStateOf<LiveTvGuideState?>(null) }
+        state.guide?.let { guide.value = it }
+        guide.value?.let { LiveTvGuide(it, takeFocus = false) }
     }
 }
 
@@ -812,6 +856,7 @@ private fun LiveTvChannelColumn(
                     playing = channel.streamUrl == state.currentListUrl,
                     clock = clock,
                     onClick = { state.pickFromPanel(channel) },
+                    onFocused = { state.panelFocusedUrl = channel.streamUrl },
                     modifier = if (index == startIndex) Modifier.focusRequester(currentFocus) else Modifier,
                 )
             }
@@ -839,6 +884,7 @@ private fun PanelRow(
     playing: Boolean,
     clock: State<Long>,
     onClick: () -> Unit,
+    onFocused: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -846,7 +892,10 @@ private fun PanelRow(
     Card(
         onClick = onClick,
         onLongClick = { LiveTvRepository.toggleFavorite(channel) },
-        modifier = modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
+        modifier = modifier.fillMaxWidth().onFocusChanged {
+            focused = it.isFocused
+            if (it.isFocused) onFocused()
+        },
         shape = CardDefaults.shape(shape),
         colors = CardDefaults.colors(containerColor = Color.Transparent, focusedContainerColor = Color.White),
         scale = CardDefaults.scale(focusedScale = 1.02f),

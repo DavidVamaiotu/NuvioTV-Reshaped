@@ -128,6 +128,8 @@ data class LiveTvUiState(
     val currentProgrammes: Map<String, LiveTvProgramme> = emptyMap(),
     /** [LiveTvChannel.guideKey] to the guide's logo, for channels the playlist gives none. */
     val guideLogos: Map<String, String> = emptyMap(),
+    /** Goes up each time the kept guide is read again, so the programme guide redraws. */
+    val guideVersion: Int = 0,
     val recentChannel: LiveTvRecentChannel? = null,
     val favoriteUrls: Set<String> = emptySet(),
     val isEpgLoading: Boolean = false,
