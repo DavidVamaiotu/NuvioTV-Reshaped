@@ -103,9 +103,16 @@ internal class LiveTvGuideState(
 
     fun onKey(event: KeyEvent): Boolean {
         if (event.action != KeyEvent.ACTION_DOWN) {
-            // The release of a key acted on must not reach anything else.
             val handled = event.keyCode == handledDown
-            if (handled) handledDown = -1
+            if (handled) {
+                handledDown = -1
+                // OK and Back act on release, as Nuvio's own buttons do, so no release is left
+                // for the screen underneath (Back would leave Live TV, OK would pause the player).
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> channel?.let(onPlay)
+                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> onClose()
+                }
+            }
             return handled || event.keyCode in GUIDE_KEYS
         }
         val acted = when (event.keyCode) {
@@ -115,14 +122,8 @@ internal class LiveTvGuideState(
             KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> moveRow(PAGE)
             KeyEvent.KEYCODE_DPAD_LEFT -> moveProgramme(-1)
             KeyEvent.KEYCODE_DPAD_RIGHT -> moveProgramme(1)
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                if (event.repeatCount == 0) channel?.let(onPlay)
-                true
-            }
-            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                if (event.repeatCount == 0) onClose()
-                true
-            }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> event.repeatCount == 0 || handledDown == event.keyCode
             else -> false
         }
         if (acted) handledDown = event.keyCode
