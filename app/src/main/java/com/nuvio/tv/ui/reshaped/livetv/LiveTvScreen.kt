@@ -487,7 +487,7 @@ private fun LiveTvCategoryItem(label: String, selected: Boolean, selectedModifie
             onSelect()
         }
     }
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(10.dp)
     Card(
         onClick = onSelect,
         modifier = (if (selected) selectedModifier else Modifier)
@@ -495,7 +495,7 @@ private fun LiveTvCategoryItem(label: String, selected: Boolean, selectedModifie
             .onFocusChanged { focused = it.isFocused },
         shape = CardDefaults.shape(shape),
         colors = CardDefaults.colors(
-            containerColor = if (selected) NuvioTheme.colors.TextPrimary.copy(alpha = 0.10f) else Color.Transparent,
+            containerColor = if (selected) NuvioTheme.colors.TextPrimary.copy(alpha = 0.08f) else Color.Transparent,
             focusedContainerColor = NuvioTheme.colors.TextPrimary,
         ),
         scale = CardDefaults.scale(focusedScale = 1.02f),
@@ -507,7 +507,7 @@ private fun LiveTvCategoryItem(label: String, selected: Boolean, selectedModifie
             color = if (focused) Color.Black else if (selected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextSecondary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
         )
     }
 }
@@ -522,7 +522,7 @@ private fun LiveTvRecentRow(
     onFocused: () -> Unit,
 ) {
     LiveTvRowCard(onClick = onClick, onLongClick = null, tall = true, onFocused = onFocused) { focused ->
-        LiveTvLogo(url = logo, name = recent.name, width = 96.dp, height = 60.dp)
+        LiveTvLogo(url = logo, name = recent.name, width = 88.dp, height = 54.dp)
         Column(modifier = Modifier.weight(1f).padding(start = NuvioTheme.spacing.md)) {
             Text(
                 text = stringResource(R.string.live_tv_continue).uppercase(),
@@ -556,7 +556,7 @@ private fun LiveTvChannelRow(
     modifier: Modifier = Modifier,
 ) {
     LiveTvRowCard(onClick = onClick, onLongClick = onLongClick, tall = false, onFocused = onFocused, modifier = modifier) { focused ->
-        LiveTvLogo(url = logo, name = channel.name, width = 72.dp, height = 44.dp)
+        LiveTvLogo(url = logo, name = channel.name, width = 66.dp, height = 40.dp)
         Column(modifier = Modifier.weight(1f).padding(start = NuvioTheme.spacing.md)) {
             Text(
                 text = channel.name,
@@ -624,9 +624,9 @@ private fun LiveTvRowCard(
     content: @Composable androidx.compose.foundation.layout.RowScope.(focused: Boolean) -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(12.dp)
     val container by animateColorAsState(
-        if (focused) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.BackgroundElevated.copy(alpha = 0.55f),
+        if (focused) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextPrimary.copy(alpha = 0.035f),
         label = "liveTvRow",
     )
     Card(
@@ -645,7 +645,7 @@ private fun LiveTvRowCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(if (tall) 84.dp else 64.dp)
+                .height(if (tall) 76.dp else 58.dp)
                 .padding(horizontal = NuvioTheme.spacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
