@@ -36,8 +36,8 @@ jobs:
               tail -n 1 || true
           )"
           if [[ -z "$LATEST_TAG" ]]; then
-            echo "No stable canonical AutoSync release found." >&2
-            exit 1
+            echo "::warning::No stable canonical AutoSync release found in $GITHUB_REPOSITORY; skipping mark latest."
+            exit 0
           fi
 
           gh release edit "$LATEST_TAG" --repo "$GITHUB_REPOSITORY" --latest
