@@ -244,7 +244,7 @@ internal object LiveTvStalker {
             name = name,
             streamUrl = streamUrl,
             tvgId = this["xmltv_id"] ?: this["tvg_id"],
-            logoUrl = (this["logo"] ?: this["logo_url"])?.takeIf(String::isHttp),
+            logoUrl = (this["logo"] ?: this["logo_url"])?.let(session.settings::logoUrl),
             group = (this["tv_genre_id"] ?: this["genre_id"])?.let(genres::get).orEmpty(),
             headers = playbackHeaders(session),
             stalkerCommand = command,
@@ -314,6 +314,38 @@ internal object LiveTvStalker {
             normalized.endsWith("/c", ignoreCase = true) -> normalized.dropLast(2) + "/portal.php"
             else -> "$normalized/portal.php"
         }
+    }
+
+    /**
+     * A channel logo as a link. Many portals give only the file name ("1234.png"), served from
+     * the portal's own logo folder.
+     */
+    private fun LiveTvStalkerSettings.logoUrl(value: String): String? {
+        val logo = value.trim()
+        return when {
+            logo.isEmpty() -> null
+            logo.isHttp() -> logo
+            logo.startsWith("//") -> "http:$logo"
+            logo.startsWith("/") -> portalOrigin()?.let { it + logo }
+            logo.contains("://") -> null
+            else -> portalRoot()?.let { "$it/misc/logos/320/$logo" }
+        }
+    }
+
+    /** `http://host:port` of the portal. */
+    private fun LiveTvStalkerSettings.portalOrigin(): String? {
+        val url = portalUrl.trim()
+        val scheme = url.indexOf("://").takeIf { it > 0 } ?: return null
+        val pathStart = url.indexOf('/', scheme + 3)
+        return if (pathStart < 0) url.trimEnd('/') else url.substring(0, pathStart)
+    }
+
+    /** The portal's folder ("…/stalker_portal"), which holds its logos. */
+    private fun LiveTvStalkerSettings.portalRoot(): String? {
+        val url = portalUrl.trim().substringBefore('?')
+        val marker = url.indexOf("/stalker_portal", ignoreCase = true)
+        if (marker >= 0) return url.substring(0, marker + "/stalker_portal".length)
+        return portalOrigin()?.let { "$it/stalker_portal" }
     }
 
     private fun String.toStalkerPlayableUrl(): String =

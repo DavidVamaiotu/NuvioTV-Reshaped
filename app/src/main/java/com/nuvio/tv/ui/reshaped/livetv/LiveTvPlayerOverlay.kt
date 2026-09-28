@@ -298,7 +298,7 @@ internal class LiveTvPlayerState(
         bannerKey++
         closePanel()
         // The loading screen and pause screen show the player's logo: the new channel's, from the first press.
-        controller._uiState.update { it.copy(title = channel.name, logo = channel.logoUrl) }
+        controller._uiState.update { it.copy(title = channel.name, logo = LiveTvRepository.uiState.value.logoFor(channel)) }
         // Quick presses land on the last channel only.
         switchJob?.cancel()
         switchJob = scope.launch {
@@ -390,7 +390,8 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         current?.let { channel ->
             LiveTvBanner(
                 channel = channel,
-                programme = channel.tvgId?.let(liveState.currentProgrammes::get),
+                logo = liveState.logoFor(channel),
+                programme = liveState.currentProgrammes[channel.guideKey],
                 number = currentIndex + 1,
                 clock = clock,
             )
@@ -406,7 +407,8 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         current?.let { channel ->
             LiveTvInfoCard(
                 channel = channel,
-                now = channel.tvgId?.let(liveState.currentProgrammes::get),
+                logo = liveState.logoFor(channel),
+                now = liveState.currentProgrammes[channel.guideKey],
                 number = currentIndex + 1,
                 clock = clock,
             )
@@ -424,7 +426,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
 }
 
 @Composable
-private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {
+private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {
     Row(
         modifier = Modifier
             .padding(start = 48.dp, top = 40.dp)
@@ -443,7 +445,7 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
                 modifier = Modifier.padding(end = 16.dp),
             )
         }
-        LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 88.dp, height = 54.dp)
+        LiveTvLogo(url = logo, name = channel.name, width = 88.dp, height = 54.dp)
         Column(modifier = Modifier.padding(start = 16.dp)) {
             Text(
                 text = channel.name,
@@ -470,7 +472,7 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
                         modifier = Modifier.width(220.dp),
                     )
                     Text(
-                        text = "${programme.timeLabel}  ·  ${liveTvTimeLeft(programme, clock)}",
+                        text = "${LiveTvClock.formatSpan(programme)}  ·  ${liveTvTimeLeft(programme, clock)}",
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White.copy(alpha = 0.6f),
                         maxLines = 1,
@@ -490,9 +492,9 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
 
 /** The Now/Next card OK shows: the channel, what is on with how far it has got, and what follows. */
 @Composable
-private fun LiveTvInfoCard(channel: LiveTvChannel, now: LiveTvProgramme?, number: Int, clock: State<Long>) {
+private fun LiveTvInfoCard(channel: LiveTvChannel, logo: String?, now: LiveTvProgramme?, number: Int, clock: State<Long>) {
     // Read once per minute tick: the kept guide is a map lookup.
-    val next = remember(channel.tvgId, now, clock.value / 60_000L) { LiveTvRepository.nextProgramme(channel.tvgId) }
+    val next = remember(channel.guideKey, now, clock.value / 60_000L) { LiveTvRepository.nextProgramme(channel.guideKey) }
     Row(
         modifier = Modifier
             .padding(start = 48.dp, end = 48.dp, bottom = 40.dp)
@@ -503,7 +505,7 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, now: LiveTvProgramme?, number
             .padding(horizontal = 24.dp, vertical = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 112.dp, height = 68.dp)
+        LiveTvLogo(url = logo, name = channel.name, width = 112.dp, height = 68.dp)
         Column(modifier = Modifier.weight(1f).padding(start = 20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (number > 0) {
@@ -562,7 +564,7 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, now: LiveTvProgramme?, number
                         modifier = Modifier.width(260.dp),
                     )
                     Text(
-                        text = "${now.timeLabel}  ·  ${liveTvTimeLeft(now, clock)}",
+                        text = "${LiveTvClock.formatSpan(now)}  ·  ${liveTvTimeLeft(now, clock)}",
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White.copy(alpha = 0.6f),
                         maxLines = 1,
@@ -767,7 +769,8 @@ private fun LiveTvChannelColumn(
             itemsIndexed(channels, key = { _, channel -> channel.id }, contentType = { _, _ -> "channel" }) { index, channel ->
                 PanelRow(
                     channel = channel,
-                    programme = channel.tvgId?.let(programmes::get),
+                    logo = liveState.logoFor(channel),
+                    programme = programmes[channel.guideKey],
                     playing = channel.streamUrl == state.currentListUrl,
                     clock = clock,
                     onClick = { state.pickFromPanel(channel) },
@@ -793,6 +796,7 @@ private fun LiveTvChannelColumn(
 @Composable
 private fun PanelRow(
     channel: LiveTvChannel,
+    logo: String?,
     programme: LiveTvProgramme?,
     playing: Boolean,
     clock: State<Long>,
@@ -813,7 +817,7 @@ private fun PanelRow(
             modifier = Modifier.fillMaxWidth().height(64.dp).padding(horizontal = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 60.dp, height = 38.dp)
+            LiveTvLogo(url = logo, name = channel.name, width = 60.dp, height = 38.dp)
             Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(
                     text = channel.name,
