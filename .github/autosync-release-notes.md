@@ -1,1 +1,3 @@
-- **AutoSync keeps in-sync subtitles in sync.** On episodes with dense, back-to-back dialogue, AutoSync could move a subtitle that already matched by up to 1.5 seconds. It now checks where the lines actually start, so it picks the exact offset.
+- **Lighter seek previews on low-memory TVs.** Seekr thumbnails no longer keep every image of the film in memory for the whole session. Only the ones around where you scrub stay ready, which saves tens of MB on long films. Thumbnails look and appear the same as before.
+- **Smoother playback while AutoSync works.** The player no longer waits on AutoSync's background work, and AutoSync reuses its calculations instead of redoing them. Sync results are unchanged.
+- **Less wasted work for on-device previews.** When the preview spool is full during playback, frames that would be thrown away are no longer copied.
