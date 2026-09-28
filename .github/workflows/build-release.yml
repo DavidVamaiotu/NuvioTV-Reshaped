@@ -1,51 +1,44 @@
-name: AutoSync CI
+name: Build & Release Nuvio RS (Gemini AI)
 
 on:
-  push:
-    branches:
-      - subtitle-autosync
-    paths:
-      - "app/**"
-      - "nuvio-exoplayer-engine/**"
-      - "ffmpeg-decoder-downmix/**"
-      - "build.gradle.kts"
-      - "settings.gradle.kts"
-      - "gradle/**"
-      - "gradle.properties"
-      - ".github/workflows/autosync-debug.yml"
-
   workflow_dispatch:
     inputs:
-      build_apk:
-        description: "Build installable APK"
+      tag_name:
+        description: "Release Tag (e.g. v1.1.0-gemini.1)"
+        required: true
+        default: "v1.1.0-gemini.1"
+      create_release:
+        description: "Create a GitHub Release with APKs"
         required: true
         type: boolean
         default: true
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: autosync-ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    name: AutoSync build
+    name: Build Nuvio RS Gemini APKs
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up Java
-        uses: actions/setup-java@v5
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v3
 
       - name: Configure Nuvio services
         env:
@@ -86,41 +79,7 @@ jobs:
 
           cp local.properties local.dev.properties
 
-      - name: Add Seekr API key
-        env:
-          SEEKR_API_KEY: ${{ secrets.SEEKR_API_KEY }}
-        run: |
-          # Seek-preview thumbnails stay off in builds without the secret.
-          if [[ -n "$SEEKR_API_KEY" ]]; then
-            printf '\nSEEKR_API_KEY=%s\n' "$SEEKR_API_KEY" >> local.properties
-          else
-            echo "::warning::SEEKR_API_KEY secret is not set; seek previews are disabled in this build"
-          fi
-
-      - name: Add Trakt credentials
-        env:
-          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
-          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
-        run: |
-          # Trakt login stays unavailable in builds without both secrets.
-          if [[ -n "$TRAKT_CLIENT_ID" && -n "$TRAKT_CLIENT_SECRET" ]]; then
-            printf '\nTRAKT_CLIENT_ID=%s\nTRAKT_CLIENT_SECRET=%s\n' "$TRAKT_CLIENT_ID" "$TRAKT_CLIENT_SECRET" >> local.properties
-          else
-            echo "::warning::TRAKT_CLIENT_ID or TRAKT_CLIENT_SECRET secret is not set; Trakt login is disabled in this build"
-          fi
-
-      - name: Add MDBList client ID
-        env:
-          MDBLIST_CLIENT_ID: ${{ secrets.MDBLIST_CLIENT_ID }}
-        run: |
-          # MDBList sign-in and tracking stay unavailable in builds without the secret.
-          if [[ -n "$MDBLIST_CLIENT_ID" ]]; then
-            printf '\nMDBLIST_CLIENT_ID=%s\n' "$MDBLIST_CLIENT_ID" >> local.properties
-          else
-            echo "::warning::MDBLIST_CLIENT_ID secret is not set; MDBList sign-in is disabled in this build"
-          fi
-
-      - name: Configure persistent AutoSync signing
+      - name: Configure signing
         env:
           KEYSTORE_BASE64: ${{ secrets.AUTOSYNC_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.AUTOSYNC_STORE_PASSWORD }}
@@ -130,7 +89,7 @@ jobs:
           set -e
 
           if [[ -n "$KEYSTORE_BASE64" && -n "$STORE_PASSWORD" ]]; then
-            KEYSTORE_PATH="$RUNNER_TEMP/autosync-release.jks"
+            KEYSTORE_PATH="$RUNNER_TEMP/release.jks"
             printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
             keytool -list -keystore "$KEYSTORE_PATH" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null
             {
@@ -143,17 +102,43 @@ jobs:
             echo "CI_USE_DEBUG_SIGNING=true" >> "$GITHUB_ENV"
           fi
 
-      - name: Build installable APKs
+      - name: Build Release APKs
         run: |
           ./gradlew \
-            :app:assembleFullDebug \
+            :app:assembleFullRelease \
             --build-cache \
             --stacktrace
 
-      - name: Upload APKs
+      - name: Organize release APK assets
+        run: |
+          mkdir -p dist
+          SRC="app/build/outputs/apk/full/release"
+          TAG="${{ inputs.tag_name }}"
+          
+          cp "$SRC/app-full-arm64-v8a-release.apk" "dist/NuvioRS-${TAG}-arm64.apk" || true
+          cp "$SRC/app-full-armeabi-v7a-release.apk" "dist/NuvioRS-${TAG}-arm32.apk" || true
+          cp "$SRC/app-full-x86_64-release.apk" "dist/NuvioRS-${TAG}-x64.apk" || true
+          cp "$SRC/app-full-x86-release.apk" "dist/NuvioRS-${TAG}-x32.apk" || true
+          cp "$SRC/app-full-universal-release.apk" "dist/NuvioRS-${TAG}-universal.apk" || true
+          ls -la dist/
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: NuvioRS-Gemini-TV-debug-apks
-          path: app/build/outputs/apk/full/debug/*.apk
-          if-no-files-found: error
-          retention-days: 14
+          name: NuvioRS-${{ inputs.tag_name }}-APKs
+          path: dist/*.apk
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: inputs.create_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag_name }}
+        run: |
+          gh release create "$TAG" dist/*.apk \
+            --title "Nuvio RS $TAG (Gemini AI Translation)" \
+            --notes "### What's New in this Build:
+          - ✨ **Gemini AI Subtitle Translation**: Real-time dialogue translation to your preferred language with Google Gemini.
+          - 📱 **QR Code Setup**: Scan from your phone to paste your Gemini API key seamlessly.
+          - ⚡ **Auto-Translate & Smart Caching**: Instant subtitle translation without rebuffering.
+          - 🔄 **AutoSync & Seek Previews**: All Nuvio RS upstream performance enhancements."
