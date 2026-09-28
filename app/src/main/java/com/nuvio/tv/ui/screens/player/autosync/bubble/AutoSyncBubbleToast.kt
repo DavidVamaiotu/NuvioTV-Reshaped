@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.player.autosync.bubble
 
+import android.os.SystemClock
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
@@ -21,6 +22,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -44,6 +46,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,6 +96,8 @@ private val LiftWithControls = 200.dp
 private const val LIFT_ABOVE_SUBTITLES_FRACTION = 0.20f
 /** While only the droplet shows, the spinner ticks at this slow cadence instead of every frame. */
 private const val IDLE_TICK_MS = 250L
+/** The words' fold-away spring has settled by then; until it has, the bubble animates every frame. */
+private const val FOLD_SETTLE_MS = 800L
 
 /** How long the working bubble keeps its words before settling to just the droplet. */
 private const val WORKING_LABEL_MS = 7_000L
@@ -134,15 +139,19 @@ internal fun BoxScope.AutoSyncBubbleToastHost(controlsVisible: Boolean) {
         label = "autoSyncBubbleLift",
     )
     val colors = BubbleColors(success = NuvioTheme.colors.Success, failure = NuvioTheme.colors.Error)
-    key(current.session) {
-        AutoSyncBubble(
-            message = current,
-            colors = colors,
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .zIndex(2.74f)
-                .offset { IntOffset(0, -lift.value.roundToPx()) },
-        )
+    // A full-width holder keeps the bubble's size changes (the words folding in and out) inside it,
+    // so they never re-lay out the player screen around it on every animation frame.
+    Box(
+        contentAlignment = Alignment.BottomCenter,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .zIndex(2.74f)
+            .offset { IntOffset(0, -lift.value.roundToPx()) },
+    ) {
+        key(current.session) {
+            AutoSyncBubble(message = current, colors = colors, modifier = Modifier)
+        }
     }
 }
 
@@ -161,6 +170,7 @@ private fun AutoSyncBubble(message: AutoSyncBubbleMessage, colors: BubbleColors,
     val leave = remember { Animatable(0f) } // failure or timeout: sinks away
     val clock = remember { mutableFloatStateOf(0f) }
     var labelVisible by remember { mutableStateOf(true) }
+    var labelFoldedAtMs by remember { mutableLongStateOf(0L) }
     var cardOpen by remember { mutableStateOf(false) }
     var leaving by remember { mutableStateOf(false) }
     val tinted = animateFloatAsState(
@@ -175,6 +185,7 @@ private fun AutoSyncBubble(message: AutoSyncBubbleMessage, colors: BubbleColors,
         AutoSyncBubbleToasts.leaving(message.session)
         scope.launch {
             cardOpen = false
+            labelFoldedAtMs = SystemClock.uptimeMillis()
             labelVisible = false
             delay(240)
             leave.animateTo(1f, tween(340, easing = FastOutSlowInEasing))
@@ -193,7 +204,10 @@ private fun AutoSyncBubble(message: AutoSyncBubbleMessage, colors: BubbleColors,
     LaunchedEffect(Unit) {
         val start = withFrameNanos { it }
         while (kindState.value == AutoSyncBubbleKind.Working || settle.value < 1f) {
-            if (!labelVisible && kindState.value == AutoSyncBubbleKind.Working) delay(IDLE_TICK_MS)
+            // Every frame until the words have finished folding away, so the fold stays smooth.
+            val idle = !labelVisible && kindState.value == AutoSyncBubbleKind.Working &&
+                SystemClock.uptimeMillis() - labelFoldedAtMs >= FOLD_SETTLE_MS
+            if (idle) delay(IDLE_TICK_MS)
             withFrameNanos { clock.floatValue = (it - start) / 1_000_000_000f * 0.6f }
         }
     }
@@ -201,6 +215,7 @@ private fun AutoSyncBubble(message: AutoSyncBubbleMessage, colors: BubbleColors,
         if (kind != AutoSyncBubbleKind.Working) return@LaunchedEffect
         labelVisible = true
         delay(WORKING_LABEL_MS)
+        labelFoldedAtMs = SystemClock.uptimeMillis()
         labelVisible = false
         delay(WORKING_TIMEOUT_MS - WORKING_LABEL_MS)
         dismiss()
