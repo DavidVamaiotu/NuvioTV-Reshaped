@@ -3,6 +3,8 @@
 package com.nuvio.tv.ui.reshaped.livetv
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.view.TextureView
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
@@ -20,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -41,6 +44,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -62,6 +66,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvDevice
 import com.nuvio.tv.reshaped.livetv.LiveTvHttp
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
@@ -70,8 +75,9 @@ import kotlinx.coroutines.delay
 private const val PREVIEW_DELAY_MS = 700L
 
 /**
- * One small, muted player for the focused channel's preview. Built for weak TVs: created on the
- * first preview and released when the list is left, no audio decoding, the lowest quality an
+ * One small player for the focused channel's preview. Built for weak TVs: created on the
+ * first preview and released when the list is left, sound only when the viewer wants it
+ * (faded in, never decoded otherwise), the lowest quality an
  * adaptive stream offers and a few seconds of buffer. Loads go through Live TV's own HTTP client,
  * so previews never touch Nuvio's player, its caches or the connection speed learning.
  *
@@ -86,6 +92,39 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     private var current: LiveTvChannel? = null
     private var triedHls = false
 
+    /** Whether the preview plays sound (Nuvio Reshaped settings); the audio track is not even decoded without it. */
+    var soundEnabled: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            player?.let { exo ->
+                exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !value)
+                    .build()
+                exo.setAudioAttributes(exo.audioAttributes, value)
+                if (!value) mute() else if (showingVideo) fadeIn()
+            }
+        }
+    private val handler = Handler(Looper.getMainLooper())
+    private val fadeStep = object : Runnable {
+        override fun run() {
+            val exo = player ?: return
+            exo.volume = (exo.volume + FADE_STEP).coerceAtMost(1f)
+            if (exo.volume < 1f) handler.postDelayed(this, FADE_TICK_MS)
+        }
+    }
+
+    /** Sound rises over a moment rather than starting at full volume as focus lands. */
+    private fun fadeIn() {
+        handler.removeCallbacks(fadeStep)
+        if (soundEnabled) handler.post(fadeStep)
+    }
+
+    private fun mute() {
+        handler.removeCallbacks(fadeStep)
+        player?.volume = 0f
+    }
+
     /** True once the channel shows a picture. */
     var showingVideo by mutableStateOf(false)
         private set
@@ -97,6 +136,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     private val listener = object : Player.Listener {
         override fun onRenderedFirstFrame() {
             showingVideo = true
+            fadeIn()
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -136,6 +176,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     private fun start(channel: LiveTvChannel, hls: Boolean) {
         current = channel
         showingVideo = false
+        mute()
         val exo = player ?: create().also { created ->
             player = created
             surface?.let(created::setVideoTextureView)
@@ -160,6 +201,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     fun stop() {
         current = null
         showingVideo = false
+        mute()
         player?.let { exo ->
             runCatching {
                 exo.stop()
@@ -172,6 +214,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     fun release() {
         current = null
         showingVideo = false
+        handler.removeCallbacks(fadeStep)
         player?.let { exo -> runCatching { exo.release() } }
         player = null
     }
@@ -194,7 +237,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
                     .setForceLowestBitrate(true)
                     .apply { if (lowMemory) setMaxVideoSize(1280, 720) else setMaxVideoSize(1920, 1080) }
                     .setExceedVideoConstraintsIfNecessary(false)
-                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !soundEnabled)
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true),
             )
         }
@@ -211,6 +254,11 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
             .build()
             .apply {
                 volume = 0f
+                // Takes audio focus while it plays sound, and gives it back when released.
+                setAudioAttributes(
+                    AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
+                    soundEnabled,
+                )
                 repeatMode = Player.REPEAT_MODE_OFF
                 addListener(listener)
             }
@@ -218,6 +266,9 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
 
     private companion object {
         const val PREVIEW_USER_AGENT = "VLC/3.0.0 LibVLC/3.0.0"
+        const val FADE_TICK_MS = 40L
+        /** Full volume in about half a second. */
+        const val FADE_STEP = 0.08f
     }
 }
 
@@ -236,6 +287,8 @@ internal fun LiveTvPreviewPanel(
     playVideo: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val sound = rememberLiveTvPreviewSoundEnabled()
+    SideEffect { preview.soundEnabled = sound }
     LaunchedEffect(channel?.id, playVideo) {
         preview.stop()
         if (!playVideo || channel == null) return@LaunchedEffect

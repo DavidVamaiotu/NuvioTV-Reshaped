@@ -65,7 +65,9 @@
 
     <string name="live_tv_live_badge">LIVE</string>
     <string name="settings_live_tv_previews_title">Channel previews</string>
-    <string name="settings_live_tv_previews_description">Play a small, muted picture of the channel you are on in the Live TV list</string>
+    <string name="settings_live_tv_previews_description">Play a small picture of the channel you are on in the Live TV list</string>
+    <string name="settings_live_tv_preview_sound_title">Preview sound</string>
+    <string name="settings_live_tv_preview_sound_description">Hear the channel in the preview. It fades in, and stops when you leave the list</string>
 
     <string name="live_tv_player_channels">Channels</string>
     <string name="live_tv_player_categories_hint">◀ Categories</string>
