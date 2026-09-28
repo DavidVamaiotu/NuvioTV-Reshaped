@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -132,6 +133,7 @@ fun LiveTvScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var showSourceDialog by remember { mutableStateOf(false) }
     var showCategoryDialog by remember { mutableStateOf(false) }
+    var guide by remember { mutableStateOf<LiveTvGuideState?>(null) }
     var launching by remember { mutableStateOf(false) }
     val channelListState = rememberLazyListState()
     val channelFocus = remember { FocusRequester() }
@@ -212,6 +214,19 @@ fun LiveTvScreen(
         repeat(10) {
             withFrameNanos { }
             if (runCatching { target.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
+    }
+    var refocusAfterGuide by remember { mutableStateOf(false) }
+    LaunchedEffect(refocusAfterGuide) {
+        if (!refocusAfterGuide) return@LaunchedEffect
+        refocusAfterGuide = false
+        val index = visibleChannels.indexOfFirst { it.streamUrl == focusTargetUrl }
+        if (index >= 0 && channelListState.layoutInfo.visibleItemsInfo.none { it.key == visibleChannels[index].id }) {
+            channelListState.scrollToItem((index - 2).coerceAtLeast(0))
+        }
+        repeat(10) {
+            withFrameNanos { }
+            if (runCatching { channelFocus.requestFocus() }.isSuccess) return@LaunchedEffect
         }
     }
     val toggleFavorite: (LiveTvChannel) -> Unit = { channel ->
@@ -296,6 +311,29 @@ fun LiveTvScreen(
                             placeholder = stringResource(R.string.live_tv_search),
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
                             modifier = Modifier.weight(1f),
+                        )
+                        LiveTvPillButton(
+                            text = stringResource(R.string.live_tv_guide),
+                            onClick = {
+                                val channels = visibleChannels
+                                if (channels.isNotEmpty()) {
+                                    val start = channels.indexOfFirst { it.streamUrl == focusedChannel?.streamUrl }.coerceAtLeast(0)
+                                    guide = LiveTvGuideState(
+                                        channels = channels,
+                                        startIndex = start,
+                                        onPlay = { channel ->
+                                            guide = null
+                                            play(channel, false)
+                                        },
+                                        onClose = {
+                                            // Back on the list, on the channel the guide ended on.
+                                            focusTargetUrl = guide?.channel?.streamUrl
+                                            guide = null
+                                            refocusAfterGuide = true
+                                        },
+                                    )
+                                }
+                            },
                         )
                         LiveTvPillButton(
                             text = stringResource(R.string.live_tv_refresh),
@@ -399,7 +437,7 @@ fun LiveTvScreen(
                                 } else {
                                     null
                                 },
-                                playVideo = listFocused && started && !launching && !showSourceDialog && !showCategoryDialog,
+                                playVideo = listFocused && started && !launching && !showSourceDialog && !showCategoryDialog && guide == null,
                                 modifier = Modifier.width(300.dp).padding(top = 4.dp),
                             )
                         }
@@ -407,6 +445,8 @@ fun LiveTvScreen(
                 }
             }
         }
+        // Over the whole screen, the pill menu included, as Nuvio's own full-screen pages are.
+        guide?.let { LiveTvGuide(it, takeFocus = true, modifier = Modifier.zIndex(10f)) }
     }
 
     if (showSourceDialog) {
