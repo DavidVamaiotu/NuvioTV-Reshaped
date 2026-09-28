@@ -18,6 +18,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /** Keeps [LiveTvRepository] on the active profile. The list itself lives in the repository. */
@@ -30,6 +31,14 @@ class LiveTvScreenModel @Inject constructor(
         viewModelScope.launch {
             profileManager.activeProfileId.collectLatest { profileId ->
                 LiveTvRepository.ensureLoaded(context, profileId)
+            }
+        }
+        // Live TV let go of its channels while unused: this model, kept on a saved back stack
+        // entry, must not keep them alive. The screen filters again when it opens.
+        viewModelScope.launch {
+            LiveTvRepository.releases.drop(1).collect {
+                filteredFor = null
+                visibleChannels = emptyList()
             }
         }
     }

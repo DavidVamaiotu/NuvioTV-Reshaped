@@ -60,6 +60,13 @@ object LiveTvRepository {
     private val _uiState = MutableStateFlow(LiveTvUiState())
     val uiState: StateFlow<LiveTvUiState> = _uiState.asStateFlow()
 
+    /**
+     * Goes up each time Live TV lets go of its channels while unused, so a screen model kept on a
+     * saved back stack entry drops its copy of the list too (it is rebuilt when the screen opens).
+     */
+    private val _releases = MutableStateFlow(0)
+    val releases: StateFlow<Int> = _releases.asStateFlow()
+
     /** The list the last channel was picked from (a category, favorites, a search): zapping stays in it. */
     @Volatile var zapList: List<LiveTvChannel> = emptyList()
         private set
@@ -202,6 +209,7 @@ object LiveTvRepository {
         LiveTvStalker.clearSession()
         loadedProfileId = null
         _uiState.value = LiveTvUiState()
+        _releases.update { it + 1 }
     }
 
     /** Loads every saved source again (the Refresh button). */

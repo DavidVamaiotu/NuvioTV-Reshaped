@@ -99,10 +99,14 @@ internal class AudioSyncFallback private constructor(
         }
     }
 
-    /** AutoSync started analysing a subtitle: listen meanwhile, so a takeover starts with audio. */
-    fun arm() {
+    /**
+     * AutoSync started analysing a subtitle: listen meanwhile, so a takeover starts with audio.
+     * [mayReplaceSubtitle] is false when the user picked it, so the audio never swaps it for another.
+     */
+    fun arm(mayReplaceSubtitle: Boolean) {
         stop()
         if (!AudioSyncSettings.fallbackEnabled.value) return
+        controller.mayReplaceSubtitle = mayReplaceSubtitle
         controller.enabled = true
         controller.samplingOnMobileData = AudioSyncSettings.samplingOnMobileData.value
         controller.listensBeforeSession = true
