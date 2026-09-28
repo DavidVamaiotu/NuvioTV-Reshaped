@@ -287,7 +287,15 @@ private class ReadAheadSession(val key: String, private val file: File, private 
 
     /** Moves the read-ahead to [position]; what was read ahead elsewhere is dropped. */
     private fun relocate(position: Long) {
+        // The connection at the old place is closed before the filler may open the new one, so a
+        // host that allows one connection per link never sees two (it would refuse the new one).
+        // Closing it also frees a filler stalled on it at once.
         val stale = lock.withLock {
+            if (closed) return
+            activeSource.also { activeSource = null }
+        }
+        stale?.closeQuietly()
+        lock.withLock {
             if (closed) return
             generation++
             windowStart = position
@@ -304,10 +312,7 @@ private class ReadAheadSession(val key: String, private val file: File, private 
                     start()
                 }
             }
-            activeSource.also { activeSource = null }
         }
-        // A connection stalled at the old place would otherwise hold the seek up until it fails.
-        stale?.closeQuietly()
     }
 
     /**
@@ -372,7 +377,10 @@ private class ReadAheadSession(val key: String, private val file: File, private 
         }
         // Off the caller's (possibly main) thread: closing a connection may touch the network.
         if (stale.isNotEmpty()) {
-            Thread({ stale.forEach { it.closeQuietly() } }, "NuvioSeekReadAheadClose").apply { isDaemon = true }.start()
+            closingConnections = Thread({ stale.forEach { it.closeQuietly() } }, "NuvioSeekReadAheadClose").apply {
+                isDaemon = true
+                start()
+            }
         }
         // The filler deletes the file itself once its connection is closed.
         if (!hadFiller) disposeFile()
@@ -392,6 +400,10 @@ private class ReadAheadSession(val key: String, private val file: File, private 
             } catch (failure: IOException) {
                 failDisk(failure)
             }
+            // The player rebuilt for the same stream (Retry, libass, a codec fallback): the last
+            // read-ahead's connection is still being closed, and a one-connection host would refuse
+            // this one while it is open.
+            runCatching { closingConnections?.join(CLOSE_WAIT_MS) }
             var myGeneration = -1
             var position = 0L
             var failures = 0
@@ -449,19 +461,27 @@ private class ReadAheadSession(val key: String, private val file: File, private 
                     val failure = caught as? IOException ?: IOException(caught)
                     dropSource()
                     isDownloading = false
-                    // A refused or missing link will not come back by retrying: tell the player now.
-                    failures = if (isPermanent(failure)) SURFACE_AFTER_FAILURES else failures + 1
                     lock.withLock {
-                        // Brief drops are retried quietly, like a slow network; repeated failures
-                        // reach the player so its own error handling (and error screen) applies.
-                        if (myGeneration == generation && failures >= SURFACE_AFTER_FAILURES) {
+                        // A refused or missing link will not come back by retrying, and an open the
+                        // player is waiting on is its own to retry (its load error policy and Nuvio's
+                        // recovery, as without the read-ahead): tell the player now. Brief drops of a
+                        // connection that was already reading are retried quietly, like a slow
+                        // network; repeated ones reach the player so its error handling applies.
+                        failures = if (isPermanent(failure) || !connected) SURFACE_AFTER_FAILURES else failures + 1
+                        val surfaced = myGeneration == generation && failures >= SURFACE_AFTER_FAILURES
+                        if (surfaced) {
                             error = failure
                             changed.signalAll()
-                        }
-                        val waitMs = minOf(RETRY_BASE_MS shl minOf(failures - 1, 3), RETRY_MAX_MS)
-                        var leftNs = TimeUnit.MILLISECONDS.toNanos(waitMs)
-                        while (!closed && myGeneration == generation && !retryNow && leftNs > 0) {
-                            leftNs = changed.awaitNanos(leftNs)
+                            // Only the player's retry (serve), a move or close() tries again: a stream
+                            // left on the error screen must not keep hitting its host (a rate-limited
+                            // one would stay limited for the next stream).
+                            while (!closed && myGeneration == generation && !retryNow) changed.await()
+                        } else {
+                            val waitMs = minOf(RETRY_BASE_MS shl minOf(failures - 1, 3), RETRY_MAX_MS)
+                            var leftNs = TimeUnit.MILLISECONDS.toNanos(waitMs)
+                            while (!closed && myGeneration == generation && !retryNow && leftNs > 0) {
+                                leftNs = changed.awaitNanos(leftNs)
+                            }
                         }
                         retryNow = false
                     }
@@ -594,6 +614,8 @@ private class ReadAheadSession(val key: String, private val file: File, private 
         const val RETRY_MAX_MS = 8_000L
         // The player's own connect timeout (PlayerPlaybackNetworking).
         const val CONNECT_WAIT_MS = 15_000L
+        // A close only waits for the socket to be released (OkHttp gives it 100 ms).
+        const val CLOSE_WAIT_MS = 1_000L
 
         // The codes the player's own load error policy does not retry either.
         val PERMANENT_HTTP_CODES = setOf(400, 401, 403, 404, 410)
@@ -601,6 +623,9 @@ private class ReadAheadSession(val key: String, private val file: File, private 
 }
 
 private class ReadAheadClosedException : IOException("read-ahead closed")
+
+/** The last closed read-ahead's connections, being closed off the caller's thread. */
+@Volatile private var closingConnections: Thread? = null
 
 /**
  * The player's data source. Every read of the playing stream comes from the ring: an open

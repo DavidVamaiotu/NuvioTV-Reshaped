@@ -17,7 +17,8 @@ internal object SeekBufferSettings {
     /** 0 keeps Nuvio's own behaviour: no read-ahead file, libmpv's own cache sizes. */
     const val NUVIO_DEFAULT_MB = 0
     val optionsMb = listOf(NUVIO_DEFAULT_MB, 256, 512, 1024)
-    private const val DEFAULT_MB = 512
+    // Off unless the user picks a size: the read-ahead is heavy on low-end TVs (full-speed disk writes).
+    private const val DEFAULT_MB = NUVIO_DEFAULT_MB
 
     private const val PREFS_NAME = "nuvio_tv_seek_buffer"
     private const val KEY_BUFFER_MB = "seek_buffer_mb"
