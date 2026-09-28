@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Psychology
@@ -560,6 +561,183 @@ private fun GeminiModelPickerDialog(
                     }
                 }
             }
+            item(key = "custom_model_btn") {
+                val isCustomSelected = models.none { it.id.equals(currentModel.removePrefix("models/"), ignoreCase = true) }
+                var showCustomInput by remember { mutableStateOf(false) }
+
+                Card(
+                    onClick = { showCustomInput = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.colors(
+                        containerColor = if (isCustomSelected) NuvioTheme.colors.Primary.copy(alpha = 0.2f) else NuvioTheme.colors.BackgroundElevated,
+                        focusedContainerColor = NuvioTheme.colors.Primary
+                    ),
+                    border = CardDefaults.border(
+                        border = Border(
+                            border = BorderStroke(NuvioTheme.spacing.hairline, if (isCustomSelected) NuvioTheme.colors.Primary else NuvioTheme.colors.Border),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = if (isCustomSelected) currentModel else "Custom Model",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .background(
+                                            color = Color(0xFF757575).copy(alpha = 0.3f),
+                                            shape = RoundedCornerShape(4.dp)
+                                        )
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "Manual Entry",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "Enter a custom model ID",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = NuvioTheme.colors.TextSecondary
+                            )
+                        }
+                        Icon(
+                            imageVector = if (isCustomSelected) Icons.Default.Check else Icons.Default.Edit,
+                            contentDescription = null,
+                            tint = Color.White
+                        )
+                    }
+                }
+
+                if (showCustomInput) {
+                    GeminiCustomModelDialog(
+                        currentValue = if (isCustomSelected) currentModel else "",
+                        onDismiss = { showCustomInput = false },
+                        onSave = { 
+                            onSelect(it)
+                            showCustomInput = false
+                        }
+                    )
+                }
+            }
         }
     }
 }
+
+@Composable
+private fun GeminiCustomModelDialog(
+    currentValue: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var value by remember(currentValue) { mutableStateOf(currentValue) }
+    var isInputFocused by remember { mutableStateOf(false) }
+    val inputFocusRequester = remember { FocusRequester() }
+
+    NuvioDialog(
+        onDismiss = onDismiss,
+        title = "Custom Model",
+        subtitle = "Enter a valid Gemini or Gemma model ID (e.g. gemini-2.5-flash)",
+        width = 540.dp,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Card(
+                onClick = { inputFocusRequester.requestFocus() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { isInputFocused = it.isFocused || it.hasFocus },
+                colors = CardDefaults.colors(
+                    containerColor = NuvioTheme.colors.BackgroundElevated,
+                    focusedContainerColor = NuvioTheme.colors.BackgroundElevated
+                ),
+                border = CardDefaults.border(
+                    border = Border(
+                        border = BorderStroke(NuvioTheme.spacing.hairline, NuvioTheme.colors.Border),
+                        shape = RoundedCornerShape(10.dp)
+                    ),
+                    focusedBorder = Border(
+                        border = NuvioTheme.focusRing.border(NuvioTheme.spacing.xxs),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                )
+            ) {
+                Box(modifier = Modifier.padding(16.dp)) {
+                    BasicTextField(
+                        value = value,
+                        onValueChange = { value = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(inputFocusRequester)
+                            .onKeyEvent { event ->
+                                if (event.nativeKeyEvent.keyCode == KeyEvent.KEYCODE_ENTER) {
+                                    keyboardController?.hide()
+                                    if (value.isNotBlank()) {
+                                        onSave(value.trim())
+                                    }
+                                    true
+                                } else false
+                            },
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+                        cursorBrush = SolidColor(Color.White),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            keyboardController?.hide()
+                            if (value.isNotBlank()) {
+                                onSave(value.trim())
+                            }
+                        })
+                    )
+                    if (value.isEmpty() && !isInputFocused) {
+                        Text(
+                            text = "Model ID",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = NuvioTheme.colors.TextSecondary
+                        )
+                    }
+                }
+            }
+            
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Button(
+                    onClick = {
+                        keyboardController?.hide()
+                        if (value.isNotBlank()) {
+                            onSave(value.trim())
+                        }
+                    },
+                    enabled = value.isNotBlank(),
+                    colors = ButtonDefaults.colors(
+                        containerColor = NuvioTheme.colors.Primary,
+                        contentColor = Color.White,
+                    )
+                ) {
+                    Text("Save Custom Model")
+                }
+            }
+        }
+        
+        LaunchedEffect(Unit) {
+            inputFocusRequester.requestFocus()
+        }
+    }

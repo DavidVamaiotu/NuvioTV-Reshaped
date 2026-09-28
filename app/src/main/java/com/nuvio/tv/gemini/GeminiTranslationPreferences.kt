@@ -44,20 +44,26 @@ internal object GeminiTranslationPreferences {
     private const val KEY_MODEL = "gemini_model"
     private const val KEY_AUTO_TRANSLATE = "gemini_auto_translate"
 
-    const val DEFAULT_MODEL = "gemini-2.5-flash"
+    const val DEFAULT_MODEL = "gemini-2.5-flash-lite"
 
     val MODEL_OPTIONS = listOf(
-        GeminiModelOption(
-            id = "gemini-2.5-flash",
-            displayName = "Gemini 2.5 Flash",
-            description = "Recommended: Ultra-fast and high-accuracy subtitle translation",
-            badge = "Recommended",
-        ),
         GeminiModelOption(
             id = "gemini-2.5-flash-lite",
             displayName = "Gemini 2.5 Flash-Lite",
             description = "Lowest latency and fastest subtitle turnaround",
             badge = "Fastest",
+        ),
+        GeminiModelOption(
+            id = "gemini-3.1-flash-lite",
+            displayName = "Gemini 3.1 Flash Lite",
+            description = "Ultra-fast low latency subtitle model (Preview)",
+            badge = "v3.1",
+        ),
+        GeminiModelOption(
+            id = "gemini-3.5-flash-lite",
+            displayName = "Gemini 3.5 Flash Lite",
+            description = "Next-generation fastest turnaround model (Preview)",
+            badge = "v3.5",
         ),
         GeminiModelOption(
             id = "gemma-4-26b-a4b-it",
@@ -70,36 +76,6 @@ internal object GeminiTranslationPreferences {
             displayName = "Gemma 4 31B",
             description = "High-parameter 31B open model for deeper context",
             badge = "Gemma Open",
-        ),
-        GeminiModelOption(
-            id = "gemini-1.5-flash",
-            displayName = "Gemini 1.5 Flash",
-            description = "Reliable, consistent speed and high rate limits",
-            badge = "Stable",
-        ),
-        GeminiModelOption(
-            id = "gemini-1.5-flash-8b",
-            displayName = "Gemini 1.5 Flash-8B",
-            description = "Lightweight 8B model for high throughput",
-            badge = "Light",
-        ),
-        GeminiModelOption(
-            id = "gemini-2.0-flash",
-            displayName = "Gemini 2.0 Flash",
-            description = "Next-generation multimodal Flash model",
-            badge = "v2.0",
-        ),
-        GeminiModelOption(
-            id = "gemini-2.5-pro",
-            displayName = "Gemini 2.5 Pro",
-            description = "Highest reasoning quality for idiomatic dialogues (slower)",
-            badge = "Pro",
-        ),
-        GeminiModelOption(
-            id = "gemini-1.5-pro",
-            displayName = "Gemini 1.5 Pro",
-            description = "Deep context analysis for nuanced language",
-            badge = "Legacy Pro",
         ),
     )
 
