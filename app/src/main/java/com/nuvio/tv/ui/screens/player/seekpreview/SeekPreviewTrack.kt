@@ -37,6 +37,13 @@ interface SeekPreviewTrack {
     /** The thumbnail covering [positionMs] (after [offsetMs]) with its cue window, or null. */
     suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail?
 
+    /**
+     * The playing file's keyframe nearest [positionMs] (playback timeline) when one is within
+     * [toleranceMs], read from the file's own index; null when unknown. Seeking onto a keyframe
+     * is both exact and the fastest seek a player can make.
+     */
+    fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? = null
+
     /** Stops background work; the track is not fed again. */
     fun close() = Unit
 }
@@ -95,4 +102,7 @@ internal class HybridSeekPreviewTrack(
         if (own != null && !own.approximate) return own
         return seekr.thumbnailFor(positionMs) ?: own
     }
+
+    override fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? =
+        local.keyframeNear(positionMs, toleranceMs)
 }
