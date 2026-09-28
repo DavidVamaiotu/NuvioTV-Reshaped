@@ -7,7 +7,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -67,6 +66,11 @@ private const val SLOT = 30 * MINUTE
 private val MINUTE_WIDTH = 6.dp
 private val ROW_HEIGHT = 56.dp
 private val CHANNEL_COLUMN = 220.dp
+private val GUIDE_BACKGROUND = Color(0xFF0B0B0D)
+private val CELL = Color(0xFF1A1A1D)
+private val CELL_PAST = Color(0xFF141416)
+private val CELL_NOW = Color(0xFF26262A)
+private val CHANNEL_SELECTED = Color(0xFF2C2C31)
 
 /**
  * The programme guide: channels down, time across, the kept past hours to the next ones.
@@ -205,7 +209,8 @@ internal fun LiveTvGuide(state: LiveTvGuideState, takeFocus: Boolean, modifier: 
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xF20B0B0D))
+            // Solid, as TV guides are: nothing behind it shows through the grid.
+            .background(GUIDE_BACKGROUND)
             .then(
                 if (takeFocus) {
                     Modifier
@@ -360,7 +365,7 @@ private fun GuideRow(
                 .fillMaxHeight()
                 .padding(end = 8.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(if (selectedRow) Color.White.copy(alpha = 0.10f) else Color.Transparent)
+                .background(if (selectedRow) CHANNEL_SELECTED else Color.Transparent)
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -431,11 +436,11 @@ private fun GuideCell(
             .background(
                 when {
                     selected -> Color.White
-                    state == GuideCellState.Now -> Color.White.copy(alpha = 0.11f)
-                    else -> Color.White.copy(alpha = 0.05f)
+                    state == GuideCellState.Now -> CELL_NOW
+                    state == GuideCellState.Past -> CELL_PAST
+                    else -> CELL
                 },
-            )
-            .then(if (selected) Modifier else Modifier.border(1.dp, Color.White.copy(alpha = 0.06f), shape)),
+            ),
         contentAlignment = Alignment.CenterStart,
     ) {
         Text(
@@ -444,8 +449,8 @@ private fun GuideCell(
             fontWeight = if (selected || state == GuideCellState.Now) FontWeight.Medium else FontWeight.Normal,
             color = when {
                 selected -> Color.Black
-                state == GuideCellState.Past -> Color.White.copy(alpha = 0.45f)
-                else -> Color.White.copy(alpha = 0.85f)
+                state == GuideCellState.Past -> Color.White.copy(alpha = 0.5f)
+                else -> Color.White.copy(alpha = 0.9f)
             },
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
