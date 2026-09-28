@@ -116,6 +116,8 @@ data class LiveTvUiState(
     val groupCounts: Map<String, Int> = emptyMap(),
     /** Categories the viewer chose not to see: their channels leave the list, search and zapping. */
     val hiddenGroups: Set<String> = emptySet(),
+    /** Names the viewer gave categories, by the playlist's name. */
+    val groupNames: Map<String, String> = emptyMap(),
     /** Single channels the viewer chose not to see ([LiveTvChannel.hideKey]), inside categories that stay. */
     val hiddenChannelKeys: Set<Long> = emptySet(),
     /** [channels] without hidden categories and channels: what All channels and zapping go through. */

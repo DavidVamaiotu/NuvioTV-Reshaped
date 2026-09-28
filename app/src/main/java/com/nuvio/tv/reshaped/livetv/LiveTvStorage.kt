@@ -192,6 +192,16 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
 
     // endregion
 
+    /** Names the viewer gave categories, by the playlist's name ("" is Uncategorised). */
+    fun groupNames(): Map<String, String> = runCatching {
+        val json = JSONObject(string(GROUP_NAMES) ?: return emptyMap())
+        json.keys().asSequence().associateWith(json::getString).filterValues(String::isNotBlank)
+    }.getOrDefault(emptyMap())
+
+    fun saveGroupNames(names: Map<String, String>) {
+        prefs.edit().putOrRemove(GROUP_NAMES, if (names.isEmpty()) null else JSONObject(names).toString()).apply()
+    }
+
     /** Categories in the order the viewer put them; ones not in it follow, A to Z. */
     fun groupOrder(): List<String> = decodeGroups(GROUP_ORDER).toList()
 
@@ -233,6 +243,7 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         private const val SOURCES = "sources"
         private const val HIDDEN_GROUPS = "hidden_groups"
         private const val GROUP_ORDER = "group_order"
+        private const val GROUP_NAMES = "group_names"
         private const val LEGACY_HIDDEN_CHANNELS = "hidden_channel_urls"
         private const val UNGROUPED_LINE = "\uE000"
         private const val LEGACY_SOURCE_TYPE = "source_type"

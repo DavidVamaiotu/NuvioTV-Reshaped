@@ -287,6 +287,7 @@ internal fun LiveTvPreviewPanel(
     logo: String?,
     programme: LiveTvProgramme?,
     clock: State<Long>,
+    groupName: String?,
     sourceLabel: String?,
     playVideo: Boolean,
     modifier: Modifier = Modifier,
@@ -399,7 +400,7 @@ internal fun LiveTvPreviewPanel(
                         modifier = Modifier.padding(top = 8.dp).fillMaxWidth(),
                     )
                 }
-                val details = listOfNotNull(shown.group.takeIf(String::isNotBlank), sourceLabel).joinToString("  ·  ")
+                val details = listOfNotNull(groupName ?: shown.group.takeIf(String::isNotBlank), sourceLabel).joinToString("  ·  ")
                 if (details.isNotEmpty()) {
                     Text(
                         text = details,

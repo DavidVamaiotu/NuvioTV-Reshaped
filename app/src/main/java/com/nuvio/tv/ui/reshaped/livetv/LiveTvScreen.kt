@@ -341,6 +341,7 @@ fun LiveTvScreen(
                     channelCount = uiState.channels.size,
                     sources = if (uiState.sources.size > 1) uiState.sources else emptyList(),
                     groups = visibleGroups,
+                    groupNames = uiState.groupNames,
                     selectedKey = filterKey,
                     selectedFocus = categoryFocus,
                     onSelect = { filterKey = it },
@@ -433,6 +434,7 @@ fun LiveTvScreen(
                                     programme = uiState.currentProgrammes[channel.guideKey],
                                     clock = minuteClock,
                                     isFavorite = channel.streamUrl in uiState.favoriteUrls,
+                                    groupName = liveTvGroupName(channel.group, uiState.groupNames),
                                     onClick = { play(channel, false) },
                                     onLongClick = { toggleFavorite(channel) },
                                     onFocused = { focusedChannel = channel },
@@ -460,6 +462,7 @@ fun LiveTvScreen(
                                 logo = shownChannel?.let(uiState::logoFor),
                                 programme = shownChannel?.guideKey?.let(uiState.currentProgrammes::get),
                                 clock = minuteClock,
+                                groupName = shownChannel?.let { liveTvGroupName(it.group, uiState.groupNames) },
                                 sourceLabel = if (uiState.sources.size > 1) {
                                     uiState.sources.firstOrNull { it.id == shownChannel?.sourceId }?.label
                                 } else {
@@ -518,6 +521,7 @@ private fun LiveTvCategoryColumn(
     channelCount: Int,
     sources: List<LiveTvSource>,
     groups: List<String>,
+    groupNames: Map<String, String>,
     selectedKey: String,
     selectedFocus: FocusRequester,
     onSelect: (String) -> Unit,
@@ -566,7 +570,7 @@ private fun LiveTvCategoryColumn(
                 }
             }
             items(groups, key = { it }) { group ->
-                LiveTvCategoryItem(liveTvGroupLabel(group), selectedKey == group, selectedModifier) { onSelect(group) }
+                LiveTvCategoryItem(liveTvGroupLabel(group, groupNames), selectedKey == group, selectedModifier) { onSelect(group) }
             }
         }
     }
@@ -645,6 +649,7 @@ private fun LiveTvChannelRow(
     programme: LiveTvProgramme?,
     clock: State<Long>,
     isFavorite: Boolean,
+    groupName: String?,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onFocused: () -> Unit,
@@ -661,7 +666,7 @@ private fun LiveTvChannelRow(
                 overflow = TextOverflow.Ellipsis,
                 color = if (focused) Color.Black else NuvioTheme.colors.TextPrimary,
             )
-            ProgrammeLine(programme, clock, focused, fallback = channel.group)
+            ProgrammeLine(programme, clock, focused, fallback = groupName ?: channel.group)
         }
         if (isFavorite) {
             Icon(
