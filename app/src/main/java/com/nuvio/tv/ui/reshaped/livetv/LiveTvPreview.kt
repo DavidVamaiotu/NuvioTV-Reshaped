@@ -11,8 +11,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -287,6 +290,8 @@ internal fun LiveTvPreviewPanel(
     sourceLabel: String?,
     playVideo: Boolean,
     modifier: Modifier = Modifier,
+    hint: String? = null,
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     val sound = rememberLiveTvPreviewSoundEnabled()
     SideEffect { preview.soundEnabled = sound }
@@ -352,6 +357,13 @@ internal fun LiveTvPreviewPanel(
                     .padding(horizontal = 8.dp, vertical = 2.dp),
             )
         }
+        // Right under the picture, where TV channel lists put what can be done with it.
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = NuvioTheme.spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            content = actions,
+        )
 
         Crossfade(targetState = channel to programme, animationSpec = tween(180), label = "liveTvPreviewInfo") { (shown, programme) ->
             if (shown == null) return@Crossfade
@@ -399,6 +411,14 @@ internal fun LiveTvPreviewPanel(
                     )
                 }
             }
+        }
+        if (hint != null) {
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = NuvioTheme.colors.TextTertiary,
+                modifier = Modifier.padding(top = NuvioTheme.spacing.md, start = 4.dp, end = 4.dp),
+            )
         }
     }
 }

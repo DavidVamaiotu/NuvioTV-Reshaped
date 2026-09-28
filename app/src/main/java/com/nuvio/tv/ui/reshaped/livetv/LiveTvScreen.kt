@@ -23,6 +23,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -42,6 +44,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -62,10 +69,12 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
+import com.nuvio.tv.reshaped.livetv.LiveTvPreferences
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRecentChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvSource
+import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewsEnabled
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.Dispatchers
@@ -156,6 +165,8 @@ fun LiveTvScreen(
     val preview = rememberLiveTvPreviewPlayer()
     var focusedChannel by remember { mutableStateOf<LiveTvChannel?>(null) }
     var listFocused by remember { mutableStateOf(false) }
+    var previewActionsFocused by remember { mutableStateOf(false) }
+    val previewSound = rememberLiveTvPreviewSoundEnabled()
     val started = LocalLifecycleOwner.current.lifecycle.currentStateAsState().value.isAtLeast(Lifecycle.State.STARTED)
     // Under the pill menu the screen starts below it, as Settings does, so the pill never covers the search field.
     val topPadding = if (showBuiltInHeader) NuvioTheme.spacing.xl else 68.dp
@@ -289,6 +300,27 @@ fun LiveTvScreen(
         }
     }
 
+    val openGuide: () -> Unit = {
+        val channels = visibleChannels
+        if (channels.isNotEmpty()) {
+            val start = channels.indexOfFirst { it.streamUrl == focusedChannel?.streamUrl }.coerceAtLeast(0)
+            guide = LiveTvGuideState(
+                channels = channels,
+                startIndex = start,
+                onPlay = { channel ->
+                    guide = null
+                    play(channel, false)
+                },
+                onClose = {
+                    // Back on the list, on the channel the guide ended on.
+                    focusTargetUrl = guide?.channel?.streamUrl
+                    guide = null
+                    refocusAfterGuide = true
+                },
+            )
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -327,36 +359,17 @@ fun LiveTvScreen(
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
                             modifier = Modifier.weight(1f),
                         )
-                        LiveTvPillButton(
-                            text = stringResource(R.string.live_tv_guide),
-                            onClick = {
-                                val channels = visibleChannels
-                                if (channels.isNotEmpty()) {
-                                    val start = channels.indexOfFirst { it.streamUrl == focusedChannel?.streamUrl }.coerceAtLeast(0)
-                                    guide = LiveTvGuideState(
-                                        channels = channels,
-                                        startIndex = start,
-                                        onPlay = { channel ->
-                                            guide = null
-                                            play(channel, false)
-                                        },
-                                        onClose = {
-                                            // Back on the list, on the channel the guide ended on.
-                                            focusTargetUrl = guide?.channel?.streamUrl
-                                            guide = null
-                                            refocusAfterGuide = true
-                                        },
-                                    )
-                                }
-                            },
-                        )
+                        // With previews, Guide sits under the picture instead.
+                        if (!previewsEnabled) {
+                            LiveTvPillButton(text = stringResource(R.string.live_tv_guide), onClick = openGuide)
+                        }
                         LiveTvPillButton(
                             text = stringResource(R.string.live_tv_refresh),
                             onClick = { LiveTvRepository.refresh() },
                             enabled = !uiState.isLoading,
                         )
                         LiveTvPillButton(
-                            text = stringResource(R.string.live_tv_categories),
+                            text = stringResource(R.string.live_tv_edit_categories),
                             onClick = { showCategoryDialog = true },
                         )
                         LiveTvPillButton(
@@ -452,9 +465,36 @@ fun LiveTvScreen(
                                 } else {
                                     null
                                 },
-                                playVideo = listFocused && started && !launching && !showSourceDialog && !showCategoryDialog && guide == null,
-                                modifier = Modifier.width(300.dp).padding(top = 4.dp),
-                            )
+                                // Keeps playing while its buttons have focus, so mute can be heard to work.
+                                playVideo = (listFocused || previewActionsFocused) && started && !launching &&
+                                    !showSourceDialog && !showCategoryDialog && guide == null,
+                                hint = stringResource(R.string.live_tv_favorite_hint),
+                                modifier = Modifier
+                                    .width(300.dp)
+                                    .padding(top = 4.dp)
+                                    .onFocusChanged {
+                                        previewActionsFocused = it.hasFocus
+                                        // ◀ goes back to the channel the preview shows.
+                                        if (it.hasFocus) focusTargetUrl = shownChannel?.streamUrl
+                                    },
+                            ) {
+                                LiveTvPillButton(
+                                    text = stringResource(R.string.live_tv_guide),
+                                    onClick = openGuide,
+                                    modifier = Modifier.onPreviewKeyEvent { event ->
+                                        val back = event.key == Key.DirectionLeft && event.type == KeyEventType.KeyDown
+                                        back && runCatching { channelFocus.requestFocus() }.isSuccess
+                                    },
+                                )
+                                LiveTvPillButton(
+                                    text = "",
+                                    icon = if (previewSound) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                                    iconDescription = stringResource(
+                                        if (previewSound) R.string.live_tv_preview_mute else R.string.live_tv_preview_unmute,
+                                    ),
+                                    onClick = { LiveTvPreferences.setPreviewSound(context, !previewSound) },
+                                )
+                            }
                         }
                     }
                 }
