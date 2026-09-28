@@ -103,6 +103,29 @@ internal class SpeechTimeline {
     }
 
     /**
+     * The first stretch [segments] would return from [fromFrame] (with no frame limit), as its
+     * first..last known frame, without building it: lock-free (see [values]) and stopping where
+     * that stretch ends, so it is cheap enough for a once-a-second status line.
+     */
+    fun firstStretch(fromFrame: Int, joinGapFrames: Int = DEFAULT_JOIN_GAP_FRAMES): IntRange? {
+        if (knownFrames == 0) return null
+        val current = values
+        val end = minOf(current.size, knownEnd)
+        var runStart = -1
+        var lastKnown = -1
+        for (frame in fromFrame.coerceAtLeast(0) until end) {
+            if (current[frame].toInt() == 0) {
+                // A gap this long splits the stretch whatever follows.
+                if (runStart >= 0 && frame - lastKnown >= joinGapFrames) break
+                continue
+            }
+            if (runStart < 0) runStart = frame
+            lastKnown = frame
+        }
+        return if (runStart < 0) null else runStart..lastKnown
+    }
+
+    /**
      * Known audio in [fromFrame, toFrame) as separate stretches: runs of known frames, with unknown
      * gaps shorter than [joinGapFrames] kept inside a stretch (as NaN). At most [maxFrames] frames
      * are returned, keeping the latest stretches. Scattered samples of a film stay cheap to align

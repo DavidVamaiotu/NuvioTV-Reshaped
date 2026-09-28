@@ -289,9 +289,9 @@ internal class AudioSubtitleSyncController(
         }
         // How far the audio around the playhead is known; sampled spots further away don't count.
         val playheadFrame = SpeechTimeline.frameForTimeUs(playbackPositionMs * 1_000L)
-        val aheadSec = timeline.segments(fromFrame = playheadFrame).firstOrNull()
-            ?.takeIf { it.fromFrame <= playheadFrame + NEAR_PLAYHEAD_FRAMES }
-            ?.let { (it.toFrame * SpeechTimeline.FRAME_DURATION_MS / 1_000.0 - playbackPositionMs / 1_000.0).toInt() }
+        val aheadSec = timeline.firstStretch(playheadFrame)
+            ?.takeIf { it.first <= playheadFrame + NEAR_PLAYHEAD_FRAMES }
+            ?.let { ((it.last + 1) * SpeechTimeline.FRAME_DURATION_MS / 1_000.0 - playbackPositionMs / 1_000.0).toInt() }
             ?.coerceAtLeast(0) ?: 0
         val synced = model
         val phase = when {
