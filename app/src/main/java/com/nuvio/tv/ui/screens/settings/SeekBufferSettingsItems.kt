@@ -12,7 +12,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.tv.R
 import com.nuvio.tv.ui.screens.player.seekbuffer.SeekBufferSettings
 
-/** "Seek buffer" row: selecting it cycles Nuvio default / 256 MB / 512 MB / 1 GB. */
+/** "Seek buffer" row: selecting it cycles Nuvio default (the default) / 256 MB / 512 MB / 1 GB. */
 internal fun LazyListScope.seekBufferSettingsItems(
     onItemFocused: () -> Unit = {},
 ) {
