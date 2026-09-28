@@ -1,4 +1,1 @@
-- **Lighter seek previews on low-memory TVs.** Seekr thumbnails no longer keep every image of the film in memory for the whole session. Only the ones around where you scrub stay ready, which saves tens of MB on long films. Thumbnails look and appear the same as before.
-- **Memory is given back after each episode.** Finished playback sessions and subtitles of earlier streams are released instead of piling up, so long viewing sessions stay smooth on 2 GB TVs.
-- **Audio sync is gentler on your connection.** It now samples the film over one extra connection and adds more only when your host accepts them and playback has buffered enough (at most two on 2 GB TVs). Sync results are unchanged.
-- **Smoother playback while AutoSync works.** The player no longer waits on AutoSync's background work, AutoSync reuses its calculations, and its status updates cost far less. Sync results are unchanged.
+- **Seek buffer back on Nuvio default.** This update moves everyone to Nuvio's own buffering once, including anyone who picked a size before, which keeps heavy streams smooth on low-end TVs. If you pick a size in Settings > Nuvio Reshaped afterwards, your choice is kept.
