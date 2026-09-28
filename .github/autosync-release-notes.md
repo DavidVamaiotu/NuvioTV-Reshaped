@@ -1,6 +1,1 @@
-- **Live TV programme guide.** Scroll through past and upcoming programmes for every channel. Open it with Guide under the preview, or ▶ in the player's channel list. Guides also match channels by name, fill in missing logos, work for every source, and load much faster when you come back.
-- **Live TV preview sound.** Previews now play sound, fading in, with a mute button under the preview (also in Settings > Nuvio Reshaped). Previews start sooner too.
-- **Rename categories.** In Live TV, open Edit categories and press ▶ on a category to give it your own name.
-- **Clearer Live TV.** Subtler buttons and rows, a solid guide, and an easier-to-read channel banner and OK info card, which now also shows resolution, frame rate and audio.
-- **Live TV fixes.** Continue watching opens the player's categories on the channel's own group, unfavouriting no longer jumps to All channels, channels without a reported frame rate now match the display, and Live TV frees its memory when you leave it.
-- **AutoSync.** Finishing a sync no longer brings up the player controls, and the sync bubble folds away more smoothly.
+- **Send debug logs to your phone.** Settings > Nuvio Reshaped > Subtitle AutoSync > Send debug logs to phone shows a QR code. Scan it with a phone on the same network to download the latest AutoSync reports and the audio sync log, instead of needing a computer.

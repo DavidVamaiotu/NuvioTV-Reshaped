@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: AutoSync finds embedded subtitles again on the first playback
+# Release trigger: send debug logs to a phone by QR code
 
 
 on:
