@@ -76,7 +76,7 @@ import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
 
 /** How long focus rests on a channel before its preview starts, so scrolling opens no streams. */
-private const val PREVIEW_DELAY_MS = 700L
+private const val PREVIEW_DELAY_MS = 400L
 
 /**
  * One small player for the focused channel's preview. Built for weak TVs: created on the
@@ -247,7 +247,8 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
         }
         val loadControl = DefaultLoadControl.Builder()
             .apply {
-                if (lowMemory) setBufferDurationsMs(1_500, 3_000, 800, 1_000) else setBufferDurationsMs(2_000, 5_000, 1_000, 1_500)
+                // The picture shows after half a second: a brief stutter in a small preview beats a longer wait.
+                if (lowMemory) setBufferDurationsMs(1_500, 3_000, 500, 1_000) else setBufferDurationsMs(2_000, 5_000, 500, 1_500)
             }
             .setTargetBufferBytes(if (lowMemory) 2 * 1024 * 1024 else 4 * 1024 * 1024)
             .setPrioritizeTimeOverSizeThresholds(false)
@@ -296,13 +297,20 @@ internal fun LiveTvPreviewPanel(
 ) {
     val sound = rememberLiveTvPreviewSoundEnabled()
     SideEffect { preview.soundEnabled = sound }
+    // The first channel focused after the list opens (or comes back) starts at once: that is
+    // landing, not scrolling past.
+    var landed by remember { mutableStateOf(false) }
     LaunchedEffect(channel?.id, playVideo) {
         preview.stop()
-        if (!playVideo || channel == null) return@LaunchedEffect
+        if (!playVideo || channel == null) {
+            if (!playVideo) landed = false
+            return@LaunchedEffect
+        }
         // Stalker links are created per play, and portals flag a device that asks for many: those
         // channels show their logo and what is on now, without a picture.
         if (LiveTvRepository.isStalker(channel)) return@LaunchedEffect
-        delay(PREVIEW_DELAY_MS)
+        if (landed) delay(PREVIEW_DELAY_MS)
+        landed = true
         preview.play(channel)
     }
     // Turning previews off removes the panel: nothing may keep playing unseen.
