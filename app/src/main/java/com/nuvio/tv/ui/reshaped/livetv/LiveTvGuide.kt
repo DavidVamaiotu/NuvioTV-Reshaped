@@ -34,6 +34,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -193,7 +194,13 @@ internal fun LiveTvGuide(state: LiveTvGuideState, takeFocus: Boolean, modifier: 
     val clock = rememberLiveTvMinuteClock()
     val focus = remember { FocusRequester() }
     if (takeFocus) {
-        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+        LaunchedEffect(Unit) {
+            // Until it holds focus, keys would still reach the list underneath.
+            repeat(10) {
+                withFrameNanos { }
+                if (runCatching { focus.requestFocus() }.isSuccess) return@LaunchedEffect
+            }
+        }
     }
     Column(
         modifier = modifier

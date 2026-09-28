@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -50,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.currentStateAsState
@@ -127,7 +129,20 @@ fun LiveTvScreen(
     viewModel: LiveTvScreenModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
+    // Before the state is read, so a list let go while unused shows as loading, never as empty.
+    remember(viewModel) { viewModel.ensureLoaded() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        // Back from the background after a long while: the list may have been let go meanwhile.
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_START) viewModel.ensureLoaded() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val uiState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
+    // A release that raced the screen coming back leaves an empty, idle state: load again.
+    LaunchedEffect(uiState.isLoaded, uiState.isLoading, uiState.hasSource) {
+        if (!uiState.isLoaded && !uiState.isLoading && !uiState.hasSource) viewModel.ensureLoaded()
+    }
     val scope = rememberCoroutineScope()
     var filterKey by rememberSaveable { mutableStateOf(FILTER_ALL) }
     var query by rememberSaveable { mutableStateOf("") }

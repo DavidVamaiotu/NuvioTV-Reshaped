@@ -34,6 +34,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
@@ -56,6 +57,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
@@ -402,8 +406,20 @@ internal fun LiveTvPlayerOverlay(state: LiveTvPlayerState, uiState: PlayerUiStat
 @Composable
 private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiState: PlayerUiState) {
     LaunchedEffect(Unit) { state.syncCurrent() }
+    // Live TV lets go of its channels while unseen (the app in the background for a while):
+    // back on a channel, they load again so zapping and the channel list work.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        LiveTvRepository.reloadIfReleased()
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_START) LiveTvRepository.reloadIfReleased() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LiveTvFrameRateMatch(state, uiState)
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
+    LaunchedEffect(liveState.isLoaded, liveState.isLoading, liveState.hasSource) {
+        if (!liveState.isLoaded && !liveState.isLoading && !liveState.hasSource) LiveTvRepository.reloadIfReleased()
+    }
     val clock = rememberLiveTvMinuteClock()
     // Numbered within the list being zapped (a category keeps its own 1, 2, 3...).
     val zapList = remember(state.currentListUrl, liveState.shownChannels) { state.zapList() }
