@@ -3,7 +3,6 @@ package com.nuvio.tv.ui.screens.player.seekpreview
 import android.graphics.Bitmap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import tv.seekr.previews.android.SeekrTrack
 
 /**
  * A preview frame with the cue window it stands for.
@@ -44,7 +43,7 @@ interface SeekPreviewTrack {
 private val StaticRevision: StateFlow<Int> = MutableStateFlow(0)
 
 /** Adapts the Seekr library's track. Its sheets are prefetched by [SeekPreviewState]. */
-internal class SeekrPreviewTrack(private val seekr: SeekrTrack) : SeekPreviewTrack {
+internal class SeekrPreviewTrack(private val seekr: BoundedSeekrTrack) : SeekPreviewTrack {
     override var offsetMs: Long
         get() = seekr.offsetMs
         set(value) {

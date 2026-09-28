@@ -47,7 +47,6 @@ import com.nuvio.tv.ui.screens.player.PlayerViewModel
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import tv.seekr.previews.android.SeekrTrack
 
 private val SyncThumbnailWidth = 208.dp
 private val SyncThumbnailHeight = 117.dp
@@ -130,7 +129,7 @@ internal fun SeekPreviewSyncOverlayHost(viewModel: PlayerViewModel) {
 
 @Composable
 private fun SeekPreviewSyncOverlay(
-    track: SeekrTrack?,
+    track: BoundedSeekrTrack?,
     positionMs: Long,
     offsetMs: Int,
     suggestedOffsetMs: Long,
@@ -237,7 +236,7 @@ private fun SeekPreviewSyncOverlay(
 
 @Composable
 private fun SyncPreviewImage(
-    track: SeekrTrack?,
+    track: BoundedSeekrTrack?,
     positionMs: Long,
     offsetMs: Int
 ) {
