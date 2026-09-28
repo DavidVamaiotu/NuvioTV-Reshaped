@@ -28,8 +28,8 @@ if (autoSyncFork) {
 // Seekr seek-preview key, supplied to CI builds from the SEEKR_API_KEY secret.
 defaults.buildConfigField("String", "SEEKR_API_KEY", buildConfigString(localProperties.getProperty("SEEKR_API_KEY", "").trim()))
 // In-app updater: the fork's own GitHub releases.
-defaults.buildConfigField("String", "GITHUB_OWNER", buildConfigString(resolveProperty("NUVIO_UPDATE_GITHUB_OWNER", "NuvioMedia")))
-defaults.buildConfigField("String", "GITHUB_REPO", buildConfigString(resolveProperty("NUVIO_UPDATE_GITHUB_REPO", "NuvioTV")))
+defaults.buildConfigField("String", "GITHUB_OWNER", buildConfigString(resolveProperty("NUVIO_UPDATE_GITHUB_OWNER", "ozdek")))
+defaults.buildConfigField("String", "GITHUB_REPO", buildConfigString(resolveProperty("NUVIO_UPDATE_GITHUB_REPO", "NuvioTV-Reshaped")))
 defaults.buildConfigField("boolean", "AUTOSYNC_FORK", autoSyncFork.toString())
 
 // The "Nuvio RS" app name for every locale; the legacy bridge keeps the old name.

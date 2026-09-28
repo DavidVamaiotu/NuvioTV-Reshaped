@@ -158,6 +158,7 @@ internal fun PlayerRuntimeController.fetchAddonSubtitles() {
                 subtitleTracks = _uiState.value.subtitleTracks
             )
             tryAutoSelectPreferredSubtitleFromAvailableTracks()
+            autoTranslateSubtitlesIfNeeded()
         } catch (e: Exception) {
             _uiState.update {
                 it.copy(
@@ -184,6 +185,7 @@ private fun PlayerRuntimeController.publishStreamSidecarSubtitlesWithoutAddonFet
         )
     }
     tryAutoSelectPreferredSubtitleFromAvailableTracks()
+    autoTranslateSubtitlesIfNeeded()
 }
 
 internal fun PlayerRuntimeController.refreshSubtitlesForCurrentEpisode() {

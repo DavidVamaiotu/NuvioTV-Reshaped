@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_gemini_translation_section">Gemini AI Subtitle Translation</string>
+    <string name="settings_gemini_api_key">Gemini API Key</string>
+    <string name="settings_gemini_api_key_configured">API key configured</string>
+    <string name="settings_gemini_api_key_missing">No API key set (Tap to configure)</string>
+    <string name="settings_gemini_api_key_dialog_title">Gemini API Key</string>
+    <string name="settings_gemini_api_key_dialog_subtitle">Scan the QR code to paste your Google Gemini API key from your phone, or enter it below.</string>
+    <string name="settings_gemini_api_key_placeholder">Paste AI Studio API key...</string>
+    <string name="settings_gemini_api_key_invalid">Could not validate Gemini API key</string>
+    <string name="settings_gemini_target_language">Target Language</string>
+    <string name="settings_gemini_model">Gemini Model</string>
+    <string name="settings_gemini_auto_translate">Auto-Translate Subtitles</string>
+    <string name="settings_gemini_auto_translate_desc">Automatically translate subtitles if your language is not available</string>
+    <string name="settings_gemini_clear_cache">Clear Translated Subtitles Cache</string>
+    <string name="settings_gemini_clear_cache_done">Translation cache cleared</string>
+    <string name="gemini_translating_bubble">✨ Translating subtitles with Gemini…</string>
+    <string name="gemini_translating_progress">✨ Translating with Gemini (%d%%)…</string>
+    <string name="gemini_translation_applied">✨ Gemini AI Subtitles Applied (%s)</string>
+    <string name="gemini_translation_failed">Gemini translation failed: %s</string>
+    <string name="gemini_translate_action">✨ Translate with Gemini (%s)</string>
+    <string name="gemini_translate_track_title">Gemini AI (%s)</string>
+</resources>

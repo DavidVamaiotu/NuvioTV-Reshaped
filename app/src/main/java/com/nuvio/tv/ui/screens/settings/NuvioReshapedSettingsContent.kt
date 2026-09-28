@@ -45,6 +45,7 @@ internal fun NuvioReshapedSettingsContent(
             },
         )
         autoSyncBubbleSettingsItems(enabled = playerSettings.playerPreference != PlayerPreference.EXTERNAL) // Nuvio RS hook: AutoSync bubble
+        geminiSettingsItems()
         seekrKeySettingsItems()
         seekPreviewSettingsItems()
         subtitleFontSettingsItems()

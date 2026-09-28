@@ -30,8 +30,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Remove
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -113,6 +115,7 @@ internal fun SubtitleSelectionOverlay(
     onDisableSubtitles: () -> Unit,
     onEvent: (PlayerEvent) -> Unit,
     onDismiss: () -> Unit,
+    onTranslateWithGemini: ((Subtitle?) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val noneLabel = stringResource(R.string.subtitle_none)
@@ -476,12 +479,61 @@ internal fun SubtitleSelectionOverlay(
         }
 
         Column(verticalArrangement = Arrangement.Bottom) {
-            Text(
-                text = stringResource(R.string.subtitle_dialog_title),
-                style = MaterialTheme.typography.headlineMedium,
-                color = Color.White,
-                modifier = Modifier.padding(bottom = NuvioTheme.spacing.md)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = NuvioTheme.spacing.md),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.subtitle_dialog_title),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = Color.White,
+                )
+
+                onTranslateWithGemini?.let { translateAction ->
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    com.nuvio.tv.gemini.GeminiTranslationPreferences.ensureLoaded(context)
+                    val targetLang by com.nuvio.tv.gemini.GeminiTranslationPreferences.targetLanguage.collectAsStateWithLifecycle()
+                    val targetLangName = remember(targetLang) {
+                        com.nuvio.tv.gemini.GeminiTranslationPreferences.getLanguageName(targetLang)
+                    }
+
+                    androidx.tv.material3.Button(
+                        onClick = {
+                            translateAction(selectedAddonSubtitle)
+                            onDismiss()
+                        },
+                        colors = androidx.tv.material3.ButtonDefaults.colors(
+                            containerColor = Color.White.copy(alpha = 0.12f),
+                            focusedContainerColor = NuvioTheme.colors.Primary,
+                            contentColor = Color.White,
+                            focusedContentColor = Color.White,
+                        ),
+                        shape = androidx.tv.material3.ButtonDefaults.shape(
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                        ),
+                        modifier = Modifier.padding(end = NuvioTheme.spacing.md)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            androidx.tv.material3.Icon(
+                                imageVector = androidx.compose.material.icons.Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = Color(0xFFFFD700)
+                            )
+                            Text(
+                                text = stringResource(R.string.gemini_translate_action, targetLangName),
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
+                    }
+                }
+            }
 
             Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 SubtitleLanguageRail(

@@ -1,0 +1,70 @@
+name: Sync Upstream Changes
+
+on:
+  schedule:
+    - cron: '0 */12 * * *' # Run every 12 hours
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    name: Sync with upstream DavidVamaiotu/NuvioTV-Reshaped
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: subtitle-autosync
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream https://github.com/DavidVamaiotu/NuvioTV-Reshaped.git || true
+          git fetch upstream subtitle-autosync
+
+      - name: Check for upstream updates
+        id: check_upstream
+        run: |
+          BEHIND_COUNT=$(git rev-list --count HEAD..upstream/subtitle-autosync)
+          echo "Upstream is $BEHIND_COUNT commits ahead."
+          if [ "$BEHIND_COUNT" -gt 0 ]; then
+            echo "has_updates=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Attempt safe merge
+        if: steps.check_upstream.outputs.has_updates == 'true'
+        id: merge_step
+        run: |
+          echo "Attempting to merge upstream/subtitle-autosync..."
+          if git merge upstream/subtitle-autosync --no-edit -m "Sync upstream DavidVamaiotu/NuvioTV-Reshaped"; then
+            echo "merge_success=true" >> "$GITHUB_OUTPUT"
+            git push origin subtitle-autosync
+            echo "Successfully merged and pushed upstream updates."
+          else
+            echo "merge_success=false" >> "$GITHUB_OUTPUT"
+            echo "Merge conflict detected! Aborting merge to prevent breaking the repo."
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Report conflict if merge failed
+        if: failure() && steps.check_upstream.outputs.has_updates == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "⚠️ Upstream Sync Conflict Detected" \
+            --body "An automated sync from \`DavidVamaiotu/NuvioTV-Reshaped\` encountered merge conflicts. The merge was aborted to keep your repository functional. Please resolve the conflicts manually on the \`subtitle-autosync\` branch." \
+            || true
