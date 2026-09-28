@@ -94,6 +94,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         audioDelayUsProvider: (() -> Long)? = null,
         mediaMetadata: androidx.media3.common.MediaMetadata? = null
     ): MediaSource {
+        val loadErrorHandlingPolicy = com.nuvio.tv.reshaped.livetv.LiveTvLoadErrors.policyFor(url, this.loadErrorHandlingPolicy) // Nuvio RS hook: Live TV retries refusals
         val sanitizedHeaders = sanitizeHeaders(headers)
         val httpDataSourceFactory = PlaybackThroughput.countingNetworkBytes(
             PlayerPlaybackNetworking.createDataSourceFactory(context, sanitizedHeaders)

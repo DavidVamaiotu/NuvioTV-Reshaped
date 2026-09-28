@@ -38,6 +38,7 @@ internal object LiveTvXtream {
                 id to name
             }
         }.toMap()
+        val extension = liveExtension(settings)
         val seen = HashSet<String>()
         val channels = LiveTvHttp.stream(apiUrl(settings, "get_live_streams"), LIVE_TV_PLAYLIST_HEADERS) { input ->
             var index = 0
@@ -45,9 +46,9 @@ internal object LiveTvXtream {
                 val position = index++
                 val name = fields["name"] ?: return@readObjects null
                 val streamId = fields["stream_id"] ?: fields["id"] ?: return@readObjects null
-                val directSource = fields["direct_source"]?.takeIf(String::isHttp)
-                val extension = fields["container_extension"]?.trimStart('.')?.takeIf(String::isNotBlank) ?: "ts"
-                val streamUrl = directSource ?: settings.liveStreamUrl(streamId, extension)
+                // Always the panel's own link, as IPTV players use: "direct_source" is often the
+                // panel's upstream origin, which refuses clients, and the panel redirects to it when it is meant to be used.
+                val streamUrl = settings.liveStreamUrl(streamId, extension)
                 if (!seen.add(streamUrl)) return@readObjects null
                 LiveTvChannel(
                     id = "xtream-$streamId-$position",
@@ -62,6 +63,28 @@ internal object LiveTvXtream {
         }
         return channels
     }
+
+    /**
+     * The live format this account may use: MPEG-TS, as IPTV players prefer, unless the account only
+     * allows HLS ("allowed_output_formats" in the login reply); a TS link then fails on every channel.
+     */
+    private suspend fun liveExtension(settings: LiveTvXtreamSettings): String {
+        val formats = try {
+            val login = JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS))
+            val allowed = login.optJSONObject("user_info")?.optJSONArray("allowed_output_formats")
+            if (allowed == null) emptyList() else List(allowed.length()) { allowed.optString(it).trim().lowercase() }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (error: Exception) {
+            Log.w("LiveTvXtream", "Could not read the account's formats; using TS", error)
+            emptyList()
+        }
+        return if (formats.isEmpty() || "ts" in formats || "m3u8" !in formats) "ts" else "m3u8"
+    }
+
+    private fun loginUrl(settings: LiveTvXtreamSettings): String =
+        "${settings.serverUrl}/player_api.php?username=${settings.username.urlEncoded()}" +
+            "&password=${settings.password.urlEncoded()}"
 
     private fun apiUrl(settings: LiveTvXtreamSettings, action: String): String =
         "${settings.serverUrl}/player_api.php?username=${settings.username.urlEncoded()}" +

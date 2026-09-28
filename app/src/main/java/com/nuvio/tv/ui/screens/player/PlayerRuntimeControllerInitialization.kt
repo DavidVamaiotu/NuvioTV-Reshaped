@@ -809,7 +809,7 @@ internal fun PlayerRuntimeController.initializePlayer(
 
             // ── Extractors & DV Hook ──
             val extractorsFactory = DefaultExtractorsFactory()
-                .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
+                .setTsExtractorFlags(DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS or com.nuvio.tv.reshaped.livetv.LiveTvTsFlags.extraFor(url)) // Nuvio RS hook: Live TV starts on any I-frame
                 .setTsExtractorTimestampSearchBytes(1500 * TsExtractor.TS_PACKET_SIZE)
 
             // Manual Convert-to-DV8.1 uses mode 2; if a prior attempt at this stream

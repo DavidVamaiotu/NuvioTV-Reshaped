@@ -242,6 +242,8 @@ internal class LiveTvPlayerState(
         currentListUrl = channel.streamUrl
         bannerKey++
         closePanel()
+        // The loading screen and pause screen show the player's logo: the new channel's, from the first press.
+        controller._uiState.update { it.copy(title = channel.name, logo = channel.logoUrl) }
         // Quick presses land on the last channel only.
         switchJob?.cancel()
         switchJob = scope.launch {
@@ -252,9 +254,11 @@ internal class LiveTvPlayerState(
                 listUrl = channel.streamUrl,
             )
             controller.switchToSourceStream(channel.toStream(playback))
-            controller._uiState.update { it.copy(title = channel.name) }
         }
     }
+
+    /** Switches the display to the playing channel's frame rate (see [LiveTvFrameRateMatch]). */
+    internal suspend fun matchDisplay(fps: Float, raw: Float) = controller.matchDisplayToLiveTrack(fps, raw)
 
     internal fun closePanel() {
         if (!panelOpen) return
@@ -305,6 +309,7 @@ internal fun LiveTvPlayerOverlay(state: LiveTvPlayerState, uiState: PlayerUiStat
 @Composable
 private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiState: PlayerUiState) {
     LaunchedEffect(Unit) { state.syncCurrent() }
+    LiveTvFrameRateMatch(state, uiState)
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
     val clock = rememberLiveTvMinuteClock()
     // Numbered within the list being zapped (a category keeps its own 1, 2, 3...).

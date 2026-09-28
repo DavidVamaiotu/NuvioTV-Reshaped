@@ -197,8 +197,9 @@ private val DPAD_ARROWS = intArrayOf(
 )
 
 /**
- * A channel logo, decoded at the size it is drawn (channel logos are often large PNGs). Falls back
- * to the channel's initials.
+ * A channel logo, decoded at the size it is drawn (channel logos are often large PNGs). The
+ * channel's initials show only when there is no logo or it fails to load: most logos are
+ * transparent PNGs, so initials drawn underneath would show through them.
  */
 @Composable
 internal fun LiveTvLogo(
@@ -209,6 +210,7 @@ internal fun LiveTvLogo(
     modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(8.dp)
+    var failed by remember(url) { mutableStateOf(false) }
     Box(
         modifier = modifier
             .size(width, height)
@@ -216,12 +218,13 @@ internal fun LiveTvLogo(
             .background(Color.White.copy(alpha = 0.06f)),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = name.initials(),
-            style = MaterialTheme.typography.labelLarge,
-            color = NuvioTheme.colors.TextTertiary,
-        )
-        if (!url.isNullOrBlank()) {
+        if (url.isNullOrBlank() || failed) {
+            Text(
+                text = name.initials(),
+                style = MaterialTheme.typography.labelLarge,
+                color = NuvioTheme.colors.TextTertiary,
+            )
+        } else {
             val context = LocalContext.current
             val density = LocalDensity.current
             val request = remember(url, width, height) {
@@ -236,6 +239,7 @@ internal fun LiveTvLogo(
                 model = request,
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
+                onError = { failed = true },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(4.dp),
