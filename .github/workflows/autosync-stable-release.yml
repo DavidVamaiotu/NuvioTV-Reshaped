@@ -118,17 +118,20 @@ jobs:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
           set -e
-          test -n "$SUPABASE_URL"
-          test -n "$SUPABASE_KEY"
+
+          URL="${SUPABASE_URL:-https://api.nuvio.tv}"
+          KEY="${SUPABASE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgxNTIxMzQ2LCJleHAiOjE5MzkyMDEzNDZ9.tmQaj682pwzehpqlgCDMnySOqiUvpgRbrE43T4VJpDI}"
+          FALLBACK="${SUPABASE_FALLBACK:-https://api.nuvio.tv}"
+          TMDB="${TMDB_API_KEY:-82deccd78297a309d1d01ad9edd640e8}"
 
           cat > local.properties <<EOF
-          NUVIO_SUPABASE_URL=$SUPABASE_URL
-          NUVIO_SUPABASE_ANON_KEY=$SUPABASE_KEY
-          NUVIO_SUPABASE_FALLBACK_URL=$SUPABASE_FALLBACK
-          TMDB_API_KEY=$TMDB_API_KEY
+          NUVIO_SUPABASE_URL=$URL
+          NUVIO_SUPABASE_ANON_KEY=$KEY
+          NUVIO_SUPABASE_FALLBACK_URL=$FALLBACK
+          TMDB_API_KEY=$TMDB
           TV_LOGIN_WEB_BASE_URL=https://nuvio.tv/tv-login
           DEVICE_LOGIN_WEB_BASE_URL=https://nuvio.tv/link
-          AVATAR_PUBLIC_BASE_URL=${SUPABASE_URL%/}/storage/v1/object/public/avatars
+          AVATAR_PUBLIC_BASE_URL=${URL%/}/storage/v1/object/public/avatars
           NUVIO_UPDATE_GITHUB_OWNER=DavidVamaiotu
           NUVIO_UPDATE_GITHUB_REPO=NuvioTV
           AUTOSYNC_FORK=true
