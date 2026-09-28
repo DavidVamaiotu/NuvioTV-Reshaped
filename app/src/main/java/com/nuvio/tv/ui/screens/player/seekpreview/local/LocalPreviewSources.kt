@@ -4,7 +4,11 @@ package com.nuvio.tv.ui.screens.player.seekpreview.local
 
 import android.content.Context
 import androidx.media3.common.Format
+import androidx.media3.extractor.ChunkIndex
 import androidx.media3.extractor.ExtractorsFactory
+import androidx.media3.extractor.SeekMap
+import androidx.media3.extractor.mp4.Mp4Extractor
+import kotlin.math.abs
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -18,6 +22,29 @@ internal class LocalPreviewSource(
 ) {
     @Volatile var released = false
     @Volatile var track: LocalPreviewTrack? = null
+
+    /**
+     * The stream's index when it lists real keyframes: an MP4's sync-sample table, or the cue
+     * points of an MKV (or a fragmented MP4's segment index). Estimated maps (constant bitrate,
+     * binary search) would point between keyframes, so they are not kept.
+     */
+    @Volatile var keyframeIndex: SeekMap? = null
+
+    /**
+     * The keyframe nearest [positionMs] when one is within [toleranceMs], from the stream's own
+     * index; null without a usable index.
+     */
+    fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? {
+        val seekMap = keyframeIndex ?: return null
+        if (released || positionMs < 0L) return null
+        return runCatching {
+            val points = seekMap.getSeekPoints(positionMs * 1_000L)
+            listOf(points.first.timeUs, points.second.timeUs)
+                .map { it / 1_000L }
+                .filter { it >= 0L && abs(it - positionMs) <= toleranceMs }
+                .minByOrNull { abs(it - positionMs) }
+        }.getOrNull()
+    }
 }
 
 /**
@@ -51,6 +78,10 @@ internal object LocalPreviewSources {
             override fun onKeyframe(format: Format, timeUs: Long, data: ByteArray, offset: Int, size: Int) {
                 track()?.onKeyframe(format, timeUs, data, offset, size)
             }
+
+            override fun onSeekMap(seekMap: SeekMap) {
+                if (seekMap is Mp4Extractor || seekMap is ChunkIndex) source.keyframeIndex = seekMap
+            }
         })
     }
 
@@ -72,7 +103,7 @@ internal object LocalPreviewSources {
      */
     fun open(source: LocalPreviewSource, cacheKey: String, durationMs: Long): LocalPreviewTrack? {
         if (source.released || durationMs <= 0L) return null
-        val track = LocalPreviewTrack(source.context, cacheKey, durationMs)
+        val track = LocalPreviewTrack(source.context, cacheKey, durationMs, source::keyframeNear)
         source.track = track
         track.start()
         return track

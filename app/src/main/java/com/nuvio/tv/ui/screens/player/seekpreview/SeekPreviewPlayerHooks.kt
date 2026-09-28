@@ -23,7 +23,9 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.exoplayer.SeekParameters
 import com.nuvio.tv.ui.screens.player.PlayerEvent
+import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
 import com.nuvio.tv.ui.screens.player.PlayerUiState
 import com.nuvio.tv.ui.screens.player.PlayerViewModel
 
@@ -84,6 +86,14 @@ fun SeekPreviewCueTicks(viewModel: PlayerViewModel, durationMs: Long, modifier: 
         }
     }
 }
+
+/**
+ * Seek parameters for committing a D-pad preview scrub: lands on the frame the preview showed
+ * while previews are on (see [SeekPreviewState.commitSeekParameters]), the player's closest
+ * keyframe otherwise.
+ */
+internal fun PlayerRuntimeController.seekPreviewCommitSeekParameters(): SeekParameters =
+    SeekPreviewState.forController(this)?.commitSeekParameters() ?: SeekParameters.CLOSEST_SYNC
 
 /** Opens Preview Sync, or null when no Seekr track loaded for this title. */
 @Composable

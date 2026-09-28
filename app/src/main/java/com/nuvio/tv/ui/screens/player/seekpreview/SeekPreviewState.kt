@@ -9,6 +9,8 @@ import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSource
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSources
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalSeekPreviewSettings
 import com.nuvio.tv.ui.screens.player.seekpreview.local.localSeekPreviewCacheKey
+import androidx.media3.exoplayer.SeekParameters
+import java.util.WeakHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
@@ -202,16 +204,20 @@ class SeekPreviewState internal constructor(
     /**
      * Reported by the thumbnail host once it knows which cue the frame on screen came from.
      * Snapping the pending scrub position onto its start keeps the number under the thumbnail
-     * honest even when the cue grid is not perfectly uniform.
+     * honest even when the cue grid is not perfectly uniform. The start moves onto the file's
+     * keyframe when one is within [SEEK_PREVIEW_KEYFRAME_SNAP_MS], so the committed seek is exact
+     * and needs no decoding forward (see [commitSeekParameters]).
      */
     fun onPreviewCueResolved(cue: SeekPreviewCue?) {
         _previewCue.value = cue
         if (controller.playbackTimeline.value.isLive) return
         val maxDuration = controller.currentPlaybackDurationMs().takeIf { it >= 0 } ?: Long.MAX_VALUE
+        val activeTrack = previewTrack.value
         val aligned = SeekPreviewCueStepper.alignedTargetMs(
             cue = cue,
             pendingMs = controller.pendingPreviewSeekPosition,
-            durationMs = maxDuration
+            durationMs = maxDuration,
+            snap = { startMs -> activeTrack?.keyframeNear(startMs, SEEK_PREVIEW_KEYFRAME_SNAP_MS) ?: startMs }
         ) ?: return
         controller.pendingPreviewSeekPosition = aligned
         controller.updatePlaybackTimeline(currentPosition = aligned)
@@ -239,4 +245,26 @@ class SeekPreviewState internal constructor(
     }
 
     fun adjustOffset(deltaMs: Int) = setOffset(_offsetMs.value + deltaMs)
+
+    init {
+        synchronized(states) { states[controller] = this }
+    }
+
+    /**
+     * How a committed D-pad scrub should land while previews are shown. The player's own choice,
+     * the closest keyframe at any distance, can land seconds away from the frame just shown (half
+     * the gap between keyframes). A preview target is already a keyframe whenever the file's
+     * index is known (see [onPreviewCueResolved]), and landing on it needs no decoding forward;
+     * otherwise a keyframe within Seekr's own precision is taken, and the seek is exact beyond it.
+     */
+    internal fun commitSeekParameters(): SeekParameters? =
+        if (previewTrack.value != null) PreviewCommitSeek else null
+
+    internal companion object {
+        private val PreviewCommitSeek = SeekParameters(3_000_000L, 3_000_000L)
+        private val states = WeakHashMap<PlayerRuntimeController, SeekPreviewState>()
+
+        fun forController(controller: PlayerRuntimeController): SeekPreviewState? =
+            synchronized(states) { states[controller] }
+    }
 }
