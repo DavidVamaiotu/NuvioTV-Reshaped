@@ -430,16 +430,21 @@ internal class AudioSubtitleSyncController(
         Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
         val weights = runCatching { loadWeights(appContext) }.getOrNull() ?: return
         createDecoder()
-        // One decoder per worker: each reads a different place, so their audio must not mix.
-        val decoders = List(SPOT_WORKERS) {
+        // One decoder per connection: each reads a different place, so their audio must not mix.
+        // They are made as connections open, so a single-connection host costs a single decoder.
+        val decoders = ArrayList<AudioSyncDecoder>()
+        val newWorker = {
             val analyzer = SpeechAnalyzer(SileroVad(weights), timeline)
             asr?.let { engine ->
                 analyzer.chunkListener = SpeechSegmenter { startFrame, samples ->
                     engine.offerSegment(startFrame, samples, spread = true)
                 }
             }
-            AudioSyncDecoder(analyzer, analyzer, allowVendorDecoders = false)
+            val spotDecoder = AudioSyncDecoder(analyzer, analyzer, allowVendorDecoders = false)
+            synchronized(decoders) { decoders += spotDecoder }
+            AudioSyncExtractorsFactory(source.extractorsFactory, SpotSink(spotDecoder))
         }
+        val maxConnections = if (SpotConnections.isLowMemoryTv(appContext)) LOW_MEMORY_SPOT_WORKERS else SPOT_WORKERS
         try {
             // Every subtitle at hand shows roughly where people talk, even with its timing off.
             val tracks = listOf(current.track) + englishCandidates()
@@ -457,11 +462,15 @@ internal class AudioSubtitleSyncController(
             // On mobile data the target is also the cap; on other networks a high-bitrate file may
             // use more so each spot still holds whole sentences.
             val maxBytes = if (AsrModel.isUnmetered(appContext)) MAX_SPOT_BYTES else TARGET_SPOT_BYTES
-            val sampler = AudioSpotSampler(source.uri, source.dataSourceFactory, TARGET_SPOT_BYTES, maxBytes, MIN_SPOT_AUDIO_MS)
+            val sampler = AudioSpotSampler(source.uri, source.dataSourceFactory, TARGET_SPOT_BYTES, maxBytes, MIN_SPOT_AUDIO_MS) {
+                SyncLog.i("host refused another connection ($it); sampling continues on the open ones")
+            }
             val result = sampler.run(
                 spotsMs = spots,
                 spotMs = SPOT_MS,
-                workers = decoders.map { AudioSyncExtractorsFactory(source.extractorsFactory, SpotSink(it)) },
+                maxWorkers = maxConnections,
+                newWorker = newWorker,
+                mayAddConnection = ::playbackBufferedAhead,
                 isCancelled = {
                     released || !enabled || sourceKey != source.sourceKey || session == null ||
                         (model != null && !estimated)
@@ -470,14 +479,28 @@ internal class AudioSubtitleSyncController(
                 val seconds = (SystemClock.elapsedRealtime() - startedAt) / 1_000
                 spotStatus = "sampled $sampled of ${spots.size} dialogue spots in ${seconds}s (${bytes / 1_000_000} MB)"
             }
-            SyncLog.i("sampled ${result.sampled} spots, ${result.bytes / 1_000_000} MB, failure=${result.failure}")
+            SyncLog.i(
+                "sampled ${result.sampled} spots over ${result.connections} connection(s), " +
+                    "${result.bytes / 1_000_000} MB, failure=${result.failure}"
+            )
             if (result.failure != null && result.sampled == 0) spotStatus = "not possible for this stream"
-            decoders.forEach { it.awaitDrained(DRAIN_TIMEOUT_MS) }
+            synchronized(decoders) { decoders.toList() }.forEach { it.awaitDrained(DRAIN_TIMEOUT_MS) }
         } catch (error: Throwable) {
             SyncLog.w("audio sampling failed: ${error.message}")
         } finally {
-            decoders.forEach(AudioSyncDecoder::release)
+            synchronized(decoders) { decoders.toList() }.forEach(AudioSyncDecoder::release)
         }
+    }
+
+    /**
+     * Whether playback has enough audio buffered ahead that one more sampling connection won't
+     * starve it. Streams whose audio can't be captured ahead give no such signal and are not held back.
+     */
+    private fun playbackBufferedAhead(): Boolean {
+        if (liveOnly) return true
+        val playheadFrame = SpeechTimeline.frameForTimeUs(playbackPositionMs * 1_000L)
+        val known = timeline.knownFramesIn(playheadFrame, playheadFrame + BUFFERED_AHEAD_FRAMES)
+        return known >= BUFFERED_AHEAD_FRAMES * 8 / 10
     }
 
     /** Feeds sampled audio of the playing track to [decoder], waiting when it is busy. */
@@ -1181,8 +1204,10 @@ internal class AudioSubtitleSyncController(
 
         // Sampling audio across the film.
         private const val SPOT_COUNT = 4
-        /** One connection per spot, so every spot arrives in the same round. */
+        /** Up to one connection per spot, so every spot can arrive in the same round. */
         private const val SPOT_WORKERS = SPOT_COUNT
+        /** 2 GB TVs: each connection carries its own decoder and speech detector. */
+        private const val LOW_MEMORY_SPOT_WORKERS = 2
         private const val SPOT_MS = 30_000L
         private const val TARGET_SPOT_BYTES = 150L * 1_000_000L
         private const val MAX_SPOT_BYTES = 400L * 1_000_000L
@@ -1197,6 +1222,8 @@ internal class AudioSubtitleSyncController(
         /** Playback has started and buffered this much before sampling competes for bandwidth. */
         private val SAMPLE_AFTER_FRAMES = (5_000 / SpeechTimeline.FRAME_DURATION_MS).toInt()
         private val NEAR_PLAYHEAD_FRAMES = (5_000 / SpeechTimeline.FRAME_DURATION_MS).toInt()
+        /** Audio playback should have buffered before sampling opens another connection. */
+        private val BUFFERED_AHEAD_FRAMES = (15_000 / SpeechTimeline.FRAME_DURATION_MS).toInt()
         private const val OPEN_SUBTITLES_FALLBACK = "https://opensubtitles-v3.strem.io"
         private const val RECOGNIZER_THREADS = 2
         private const val NOTIFY_CHANGE_MS = 1_000L
