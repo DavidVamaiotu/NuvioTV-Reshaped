@@ -9,10 +9,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Whether Live TV shows in the menu (off by default), and whether its list previews channels (on). */
+/** Whether Live TV shows in the menu (off by default), and whether its list previews channels, with sound (both on). */
 object LiveTvPreferences {
     private const val KEY_ENABLED = "live_tv_enabled"
     private const val KEY_PREVIEWS = "live_tv_previews"
+    private const val KEY_PREVIEW_SOUND = "live_tv_preview_sound"
 
     private val _enabled = MutableStateFlow(false)
     val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
@@ -20,6 +21,10 @@ object LiveTvPreferences {
     private val _previews = MutableStateFlow(true)
     /** A small live picture of the focused channel in the list. */
     val previews: StateFlow<Boolean> = _previews.asStateFlow()
+
+    private val _previewSound = MutableStateFlow(true)
+    /** Whether the preview plays the channel's sound. */
+    val previewSound: StateFlow<Boolean> = _previewSound.asStateFlow()
 
     @Volatile
     private var loaded = false
@@ -31,6 +36,7 @@ object LiveTvPreferences {
             val prefs = prefs(context)
             _enabled.value = prefs.getBoolean(KEY_ENABLED, false)
             _previews.value = prefs.getBoolean(KEY_PREVIEWS, true)
+            _previewSound.value = prefs.getBoolean(KEY_PREVIEW_SOUND, true)
             loaded = true
         }
     }
@@ -45,6 +51,12 @@ object LiveTvPreferences {
         ensureLoaded(context)
         _previews.value = enabled
         prefs(context).edit().putBoolean(KEY_PREVIEWS, enabled).apply()
+    }
+
+    fun setPreviewSound(context: Context, enabled: Boolean) {
+        ensureLoaded(context)
+        _previewSound.value = enabled
+        prefs(context).edit().putBoolean(KEY_PREVIEW_SOUND, enabled).apply()
     }
 
     // Its own tiny file: this is read on the main thread when the menu is built.
@@ -65,6 +77,14 @@ fun rememberLiveTvEnabled(): Boolean {
 fun rememberLiveTvPreviewsEnabled(): Boolean {
     LiveTvPreferences.ensureLoaded(LocalContext.current)
     val enabled by LiveTvPreferences.previews.collectAsState()
+    return enabled
+}
+
+/** The preview sound setting as Compose state. */
+@Composable
+fun rememberLiveTvPreviewSoundEnabled(): Boolean {
+    LiveTvPreferences.ensureLoaded(LocalContext.current)
+    val enabled by LiveTvPreferences.previewSound.collectAsState()
     return enabled
 }
 

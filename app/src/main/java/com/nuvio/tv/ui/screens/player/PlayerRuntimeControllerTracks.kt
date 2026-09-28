@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import com.nuvio.tv.ui.util.languageCodeToName
+import com.nuvio.tv.ui.reshaped.livetv.measureLiveTvFrameRate // Nuvio RS hook
 
 @UnstableApi
 internal fun PlayerRuntimeController.updateAvailableTracks(tracks: Tracks) {
@@ -91,6 +92,8 @@ internal fun PlayerRuntimeController.updateAvailableTracks(tracks: Tracks) {
                                 )
                             }
                         }
+                    } else {
+                        measureLiveTvFrameRate() // Nuvio RS hook: TS channels carry no frame rate
                     }
                     // Extract video codec, resolution, and bitrate for stream info
                     currentVideoCodec = CustomDefaultTrackNameProvider.formatNameFromMime(format.sampleMimeType)

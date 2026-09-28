@@ -2,16 +2,20 @@
 
 package com.nuvio.tv.ui.reshaped.livetv
 
-import android.app.ActivityManager
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.view.TextureView
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -42,6 +47,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -59,9 +65,12 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
+import com.nuvio.tv.reshaped.livetv.LiveTvClock
+import com.nuvio.tv.reshaped.livetv.LiveTvDevice
 import com.nuvio.tv.reshaped.livetv.LiveTvHttp
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
@@ -70,8 +79,9 @@ import kotlinx.coroutines.delay
 private const val PREVIEW_DELAY_MS = 700L
 
 /**
- * One small, muted player for the focused channel's preview. Built for weak TVs: created on the
- * first preview and released when the list is left, no audio decoding, the lowest quality an
+ * One small player for the focused channel's preview. Built for weak TVs: created on the
+ * first preview and released when the list is left, sound only when the viewer wants it
+ * (faded in, never decoded otherwise), the lowest quality an
  * adaptive stream offers and a few seconds of buffer. Loads go through Live TV's own HTTP client,
  * so previews never touch Nuvio's player, its caches or the connection speed learning.
  *
@@ -80,11 +90,44 @@ private const val PREVIEW_DELAY_MS = 700L
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 internal class LiveTvPreviewPlayer(private val context: Context) {
-    private val lowMemory = isLowMemoryTv(context)
+    private val lowMemory = LiveTvDevice.isLowMemory(context)
     private var player: ExoPlayer? = null
     private var surface: TextureView? = null
     private var current: LiveTvChannel? = null
     private var triedHls = false
+
+    /** Whether the preview plays sound (Nuvio Reshaped settings); the audio track is not even decoded without it. */
+    var soundEnabled: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            player?.let { exo ->
+                exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !value)
+                    .build()
+                exo.setAudioAttributes(exo.audioAttributes, value)
+                if (!value) mute() else if (showingVideo) fadeIn()
+            }
+        }
+    private val handler = Handler(Looper.getMainLooper())
+    private val fadeStep = object : Runnable {
+        override fun run() {
+            val exo = player ?: return
+            exo.volume = (exo.volume + FADE_STEP).coerceAtMost(1f)
+            if (exo.volume < 1f) handler.postDelayed(this, FADE_TICK_MS)
+        }
+    }
+
+    /** Sound rises over a moment rather than starting at full volume as focus lands. */
+    private fun fadeIn() {
+        handler.removeCallbacks(fadeStep)
+        if (soundEnabled) handler.post(fadeStep)
+    }
+
+    private fun mute() {
+        handler.removeCallbacks(fadeStep)
+        player?.volume = 0f
+    }
 
     /** True once the channel shows a picture. */
     var showingVideo by mutableStateOf(false)
@@ -97,6 +140,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     private val listener = object : Player.Listener {
         override fun onRenderedFirstFrame() {
             showingVideo = true
+            fadeIn()
         }
 
         override fun onVideoSizeChanged(videoSize: VideoSize) {
@@ -136,6 +180,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     private fun start(channel: LiveTvChannel, hls: Boolean) {
         current = channel
         showingVideo = false
+        mute()
         val exo = player ?: create().also { created ->
             player = created
             surface?.let(created::setVideoTextureView)
@@ -160,6 +205,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     fun stop() {
         current = null
         showingVideo = false
+        mute()
         player?.let { exo ->
             runCatching {
                 exo.stop()
@@ -172,6 +218,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
     fun release() {
         current = null
         showingVideo = false
+        handler.removeCallbacks(fadeStep)
         player?.let { exo -> runCatching { exo.release() } }
         player = null
     }
@@ -194,7 +241,7 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
                     .setForceLowestBitrate(true)
                     .apply { if (lowMemory) setMaxVideoSize(1280, 720) else setMaxVideoSize(1920, 1080) }
                     .setExceedVideoConstraintsIfNecessary(false)
-                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, !soundEnabled)
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true),
             )
         }
@@ -211,6 +258,11 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
             .build()
             .apply {
                 volume = 0f
+                // Takes audio focus while it plays sound, and gives it back when released.
+                setAudioAttributes(
+                    AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
+                    soundEnabled,
+                )
                 repeatMode = Player.REPEAT_MODE_OFF
                 addListener(listener)
             }
@@ -218,15 +270,9 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
 
     private companion object {
         const val PREVIEW_USER_AGENT = "VLC/3.0.0 LibVLC/3.0.0"
-        /** Boxes that report under this much memory (2 GB models report less than 2 GB) get the lighter preview. */
-        const val LOW_MEMORY_BYTES = 2_560L * 1024 * 1024
-
-        fun isLowMemoryTv(context: Context): Boolean {
-            val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return true
-            if (manager.isLowRamDevice) return true
-            val info = ActivityManager.MemoryInfo().also(manager::getMemoryInfo)
-            return info.totalMem in 1 until LOW_MEMORY_BYTES
-        }
+        const val FADE_TICK_MS = 40L
+        /** Full volume in about half a second. */
+        const val FADE_STEP = 0.08f
     }
 }
 
@@ -238,12 +284,17 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
 internal fun LiveTvPreviewPanel(
     preview: LiveTvPreviewPlayer,
     channel: LiveTvChannel?,
+    logo: String?,
     programme: LiveTvProgramme?,
     clock: State<Long>,
     sourceLabel: String?,
     playVideo: Boolean,
     modifier: Modifier = Modifier,
+    hint: String? = null,
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
+    val sound = rememberLiveTvPreviewSoundEnabled()
+    SideEffect { preview.soundEnabled = sound }
     LaunchedEffect(channel?.id, playVideo) {
         preview.stop()
         if (!playVideo || channel == null) return@LaunchedEffect
@@ -273,7 +324,7 @@ internal fun LiveTvPreviewPanel(
             contentAlignment = Alignment.Center,
         ) {
             if (channel != null) {
-                LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 128.dp, height = 76.dp)
+                LiveTvLogo(url = logo, name = channel.name, width = 128.dp, height = 76.dp)
             }
             val context = LocalContext.current
             val textureView = remember { TextureView(context) }
@@ -306,6 +357,13 @@ internal fun LiveTvPreviewPanel(
                     .padding(horizontal = 8.dp, vertical = 2.dp),
             )
         }
+        // Right under the picture, where TV channel lists put what can be done with it.
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = NuvioTheme.spacing.sm),
+            horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            content = actions,
+        )
 
         Crossfade(targetState = channel to programme, animationSpec = tween(180), label = "liveTvPreviewInfo") { (shown, programme) ->
             if (shown == null) return@Crossfade
@@ -328,7 +386,7 @@ internal fun LiveTvPreviewPanel(
                         modifier = Modifier.padding(top = 4.dp),
                     )
                     Text(
-                        text = "${programme.timeLabel}  ·  ${liveTvTimeLeft(programme, clock)}",
+                        text = "${LiveTvClock.formatSpan(programme)}  ·  ${liveTvTimeLeft(programme, clock)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = NuvioTheme.colors.TextTertiary,
                         modifier = Modifier.padding(top = 2.dp),
@@ -353,6 +411,14 @@ internal fun LiveTvPreviewPanel(
                     )
                 }
             }
+        }
+        if (hint != null) {
+            Text(
+                text = hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = NuvioTheme.colors.TextTertiary,
+                modifier = Modifier.padding(top = NuvioTheme.spacing.md, start = 4.dp, end = 4.dp),
+            )
         }
     }
 }

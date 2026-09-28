@@ -18,6 +18,8 @@ data class LiveTvChannel(
     val sourceId: String = "",
     /** What hiding this channel stores: see [liveTvHideKey]. */
     val hideKey: Long = 0L,
+    /** What its guide is kept under: see [liveTvGuideKey]. */
+    val guideKey: String = "",
 )
 
 /** The category key of channels the playlist gives no category; the screens call it "Uncategorised". */
@@ -48,14 +50,15 @@ data class LiveTvRecentChannel(
     val logoUrl: String? = null,
     val group: String = "",
     val tvgId: String? = null,
-)
+) {
+    val guideKey: String get() = liveTvGuideKey(tvgId, name)
+}
 
 @Immutable
 data class LiveTvProgramme(
     val title: String,
     val startEpochMs: Long,
     val stopEpochMs: Long,
-    val timeLabel: String,
 )
 
 enum class LiveTvSourceType { M3u, Stalker, Xtream }
@@ -121,8 +124,12 @@ data class LiveTvUiState(
     val sourceCounts: Map<String, Int> = emptyMap(),
     /** Sources whose last load failed (their earlier channels, if any, stay listed). */
     val sourceErrors: Map<String, LiveTvError> = emptyMap(),
-    /** Channel tvg-id (as the playlist spells it) to the programme on air now. */
+    /** [LiveTvChannel.guideKey] to the programme on air now. */
     val currentProgrammes: Map<String, LiveTvProgramme> = emptyMap(),
+    /** [LiveTvChannel.guideKey] to the guide's logo, for channels the playlist gives none. */
+    val guideLogos: Map<String, String> = emptyMap(),
+    /** Goes up each time the kept guide is read again, so the programme guide redraws. */
+    val guideVersion: Int = 0,
     val recentChannel: LiveTvRecentChannel? = null,
     val favoriteUrls: Set<String> = emptySet(),
     val isEpgLoading: Boolean = false,
@@ -134,6 +141,10 @@ data class LiveTvUiState(
     val addedCount: Int = 0,
 ) {
     val hasSource: Boolean get() = sources.isNotEmpty()
+
+    /** The channel's logo, or the guide's when the playlist has none. */
+    fun logoFor(channel: LiveTvChannel): String? =
+        channel.logoUrl?.takeIf(String::isNotBlank) ?: guideLogos[channel.guideKey]
 
     /** Categories the list shows. */
     val visibleGroups: List<String>
