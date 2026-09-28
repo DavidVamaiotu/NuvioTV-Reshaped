@@ -10,6 +10,8 @@ import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.MediaExtractorCompat
 import androidx.media3.extractor.ExtractorsFactory
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -20,8 +22,8 @@ import kotlin.math.abs
  * sync has evidence from across the film within seconds instead of only what playback has reached.
  *
  * The audio itself is delivered by the extractors factories (wrapped with an audio tap) while this
- * class only seeks and advances. Each worker reads spots over its own connection, so two far-apart
- * spots arrive together. Containers interleave audio with video, so each spot costs its share of
+ * class only seeks and advances. Each worker reads spots over its own connection, so far-apart
+ * spots arrive together where the host and playback allow more than one (see [run]). Containers interleave audio with video, so each spot costs its share of
  * the whole stream: a spot stops at its share of [targetBytes]. On a high-bitrate file that share
  * can hold only a few seconds, too little for whole sentences, so a spot keeps reading until it has
  * [minSpotMs] of audio when the connection is clearly faster than the stream (playback keeps its
@@ -33,8 +35,10 @@ internal class AudioSpotSampler(
     private val targetBytes: Long,
     private val maxBytes: Long,
     private val minSpotMs: Long,
+    /** An extra connection was refused by the host; sampling carries on over the others. */
+    private val onRefused: (String) -> Unit = {},
 ) {
-    class Result(val sampled: Int, val bytes: Long, val failure: String?)
+    class Result(val sampled: Int, val bytes: Long, val failure: String?, val connections: Int)
 
     private val bytes = AtomicLong()
     private val countingFactory = DataSource.Factory {
@@ -42,25 +46,40 @@ internal class AudioSpotSampler(
     }
 
     /**
-     * Reads [spotMs] of audio from each of [spotsMs], taken in order by one worker per entry of
-     * [workers] (each an extractors factory feeding its own decoder), until done, [isCancelled] or
-     * out of budget. [onSpot] reports progress after each spot, from any worker thread.
+     * Reads [spotMs] of audio from each of [spotsMs], taken in order by workers that each read over
+     * their own connection and feed their own decoder (an extractors factory from [newWorker]),
+     * until done, [isCancelled] or out of budget. [onSpot] reports progress after each spot, from any
+     * worker thread.
+     *
+     * Sampling starts on one connection. Another is opened only once the newest one is reading,
+     * while [mayAddConnection] allows it, up to [maxWorkers]. A host that refuses an extra
+     * connection (it fails before or while reading) stops the ramp: its spot goes back to the queue
+     * for the connections already working, and no further connection is opened for this stream.
      */
     fun run(
         spotsMs: List<Long>,
         spotMs: Long,
-        workers: List<ExtractorsFactory>,
+        maxWorkers: Int,
+        newWorker: () -> ExtractorsFactory,
+        mayAddConnection: () -> Boolean,
         isCancelled: () -> Boolean,
         onSpot: (sampled: Int, bytes: Long) -> Unit,
     ): Result {
-        val next = AtomicInteger(0)
+        val queue = ConcurrentLinkedQueue(spotsMs.indices.toList())
         val sampled = AtomicInteger(0)
         val failure = AtomicReference<String?>(null)
+        val connections = AtomicInteger(1)
+        val refused = AtomicBoolean(false)
+        val helpers = ArrayList<Thread>()
         val stop = { isCancelled() || failure.get() != null || bytes.get() >= maxBytes }
         val startedNs = System.nanoTime()
 
-        fun work(extractorsFactory: ExtractorsFactory) {
+        lateinit var addConnection: () -> Unit
+
+        fun work(extractorsFactory: ExtractorsFactory, extra: Boolean) {
             val extractor = MediaExtractorCompat(extractorsFactory, countingFactory)
+            var taken: Int? = null
+            var reading = false
             try {
                 extractor.setDataSource(uri, 0L)
                 var audioTracks = 0
@@ -76,16 +95,21 @@ internal class AudioSpotSampler(
                     return
                 }
                 while (!stop()) {
-                    val index = next.getAndIncrement()
-                    if (index >= spotsMs.size) return
+                    val index = queue.poll() ?: return
+                    taken = index
                     val spotStartMs = spotsMs[index]
-                    val share = (targetBytes - bytes.get()).coerceAtLeast(0L) / (spotsMs.size - index)
+                    val share = (targetBytes - bytes.get()).coerceAtLeast(0L) / (queue.size + 1)
                     val spotStartBytes = bytes.get()
                     extractor.seekTo(spotStartMs * 1_000L, MediaExtractorCompat.SEEK_TO_PREVIOUS_SYNC)
                     val firstUs = extractor.sampleTime
                     if (firstUs < 0 || abs(firstUs / 1_000L - spotStartMs) > MAX_SEEK_MISS_MS) {
                         failure.compareAndSet(null, "stream cannot seek")
                         return
+                    }
+                    if (!reading) {
+                        // This connection works: the next one may be tried.
+                        reading = true
+                        addConnection()
                     }
                     val endUs = (spotStartMs + spotMs) * 1_000L
                     while (!stop()) {
@@ -95,27 +119,52 @@ internal class AudioSpotSampler(
                         if (spotBytes >= share && !wantsMore(spotBytes, timeUs - firstUs, startedNs)) break
                         if (!extractor.advance()) break
                     }
+                    taken = null
                     onSpot(sampled.incrementAndGet(), bytes.get())
+                    // Conditions may allow another connection now, e.g. playback has buffered more.
+                    addConnection()
                 }
             } catch (error: Exception) {
-                failure.compareAndSet(null, error.message ?: error.javaClass.simpleName)
+                if (extra) {
+                    // The host refused one connection more: keep to the ones that work.
+                    refused.set(true)
+                    taken?.let(queue::add)
+                    onRefused(error.message ?: error.javaClass.simpleName)
+                } else {
+                    failure.compareAndSet(null, error.message ?: error.javaClass.simpleName)
+                }
             } finally {
                 runCatching { extractor.release() }
             }
         }
 
-        val helpers = workers.drop(1).map { extractorsFactory ->
-            Thread({
-                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
-                work(extractorsFactory)
-            }, "NuvioAudioSyncSpots").apply {
-                isDaemon = true
-                start()
+        addConnection = add@{
+            if (refused.get() || queue.isEmpty() || stop()) return@add
+            val count = connections.get()
+            if (count >= maxWorkers || !runCatching(mayAddConnection).getOrDefault(false)) return@add
+            if (!connections.compareAndSet(count, count + 1)) return@add
+            val extractorsFactory = runCatching(newWorker).getOrNull()
+            if (extractorsFactory == null) {
+                connections.decrementAndGet()
+                return@add
             }
+            val thread = Thread({
+                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                work(extractorsFactory, extra = true)
+            }, "NuvioAudioSyncSpots").apply { isDaemon = true }
+            synchronized(helpers) { helpers += thread }
+            thread.start()
         }
-        workers.firstOrNull()?.let(::work)
-        helpers.forEach(Thread::join)
-        return Result(sampled.get(), bytes.get(), failure.get())
+
+        work(newWorker(), extra = false)
+        // A helper only starts another while it runs itself, so once none is alive, none can start.
+        while (true) {
+            val running = synchronized(helpers) { helpers.firstOrNull(Thread::isAlive) } ?: break
+            running.join()
+        }
+        // Spots put back by a refused connection after the others finished are read here.
+        if (!queue.isEmpty() && !stop()) work(newWorker(), extra = false)
+        return Result(sampled.get(), bytes.get(), failure.get(), connections.get() - if (refused.get()) 1 else 0)
     }
 
     /**
