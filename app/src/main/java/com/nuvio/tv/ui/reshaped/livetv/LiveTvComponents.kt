@@ -34,6 +34,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -55,6 +56,7 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
+import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -78,6 +80,8 @@ internal fun LiveTvPillButton(
     modifier: Modifier = Modifier,
     selected: Boolean = false,
     enabled: Boolean = true,
+    icon: ImageVector? = null,
+    iconDescription: String? = null,
 ) {
     Button(
         onClick = onClick,
@@ -94,10 +98,21 @@ internal fun LiveTvPillButton(
             border = Border(BorderStroke(1.dp, NuvioTheme.colors.TextPrimary.copy(alpha = 0.10f)), shape = LiveTvPillShape),
             focusedBorder = Border.None,
         ),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp),
+        contentPadding = PaddingValues(horizontal = if (icon != null && text.isEmpty()) 10.dp else 16.dp, vertical = 7.dp),
         scale = ButtonDefaults.scale(focusedScale = 1.03f),
     ) {
-        Text(text = text, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (icon != null) {
+            Icon(imageVector = icon, contentDescription = iconDescription, modifier = Modifier.size(18.dp))
+        }
+        if (text.isNotEmpty()) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = if (icon != null) Modifier.padding(start = 8.dp) else Modifier,
+            )
+        }
     }
 }
 

@@ -12,6 +12,7 @@
     <string name="live_tv_refresh">Refresh</string>
     <string name="live_tv_sources">Sources</string>
     <string name="live_tv_categories">Categories</string>
+    <string name="live_tv_edit_categories">Edit categories</string>
     <string name="live_tv_source_error">%1$s: %2$s</string>
     <string name="live_tv_continue">Continue watching</string>
     <string name="live_tv_favorite_add">Add to favorites</string>
@@ -77,6 +78,8 @@
     <string name="live_tv_info_next">Next · %1$s</string>
     <string name="live_tv_info_no_guide">No guide for this channel</string>
     <string name="live_tv_guide">Guide</string>
+    <string name="live_tv_preview_mute">Mute preview</string>
+    <string name="live_tv_preview_unmute">Unmute preview</string>
     <string name="live_tv_guide_ended">Ended</string>
     <string name="live_tv_guide_none">No guide</string>
     <string name="live_tv_guide_hint">OK Watch  ·  CH+/CH− Page  ·  Back Close</string>
