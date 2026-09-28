@@ -45,7 +45,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.core.qr.QrCodeGenerator
-import com.nuvio.tv.core.server.DeviceIpAddress
+import com.nuvio.tv.reshaped.net.LanAddress
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvSetupServer
 import com.nuvio.tv.reshaped.livetv.LiveTvSource
@@ -331,7 +331,7 @@ private fun LiveTvSourceRow(
 }
 
 private fun startSetupServer(context: android.content.Context): SetupServerState {
-    val ip = DeviceIpAddress.get(context)
+    val ip = LanAddress.get(context)
         ?: return SetupServerState(null, null, null, context.getString(R.string.error_network_required))
     val server = LiveTvSetupServer.startOnAvailablePort(context)
         ?: return SetupServerState(null, null, null, context.getString(R.string.error_server_ports_unavailable))

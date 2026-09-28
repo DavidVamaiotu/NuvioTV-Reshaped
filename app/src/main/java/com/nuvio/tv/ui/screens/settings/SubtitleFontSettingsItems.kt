@@ -61,7 +61,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.core.qr.QrCodeGenerator
-import com.nuvio.tv.core.server.DeviceIpAddress
+import com.nuvio.tv.reshaped.net.LanAddress
 import com.nuvio.tv.reshaped.subtitlefont.SubtitleFontImportResult
 import com.nuvio.tv.reshaped.subtitlefont.SubtitleFontStore
 import com.nuvio.tv.reshaped.subtitlefont.SubtitleFontUploadServer
@@ -109,7 +109,7 @@ private fun startSubtitleFontServer(
     context: android.content.Context,
     onImported: (SubtitleFontImportResult) -> Unit,
 ): SubtitleFontServerState {
-    val ip = DeviceIpAddress.get(context)
+    val ip = LanAddress.get(context)
         ?: return SubtitleFontServerState(null, null, null, context.getString(R.string.error_network_required))
     val server = SubtitleFontUploadServer.startOnAvailablePort(context, onImported)
         ?: return SubtitleFontServerState(null, null, null, context.getString(R.string.error_server_ports_unavailable))

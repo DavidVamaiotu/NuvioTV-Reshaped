@@ -27,7 +27,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.core.qr.QrCodeGenerator
-import com.nuvio.tv.core.server.DeviceIpAddress
+import com.nuvio.tv.reshaped.net.LanAddress
 import com.nuvio.tv.reshaped.phoneentry.PhoneEntryPage
 import com.nuvio.tv.reshaped.phoneentry.PhoneEntryServer
 import com.nuvio.tv.ui.theme.NuvioTheme
@@ -57,7 +57,7 @@ internal fun PhoneEntryQr(
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> if (running == null) {
-                    val ip = DeviceIpAddress.get(context)
+                    val ip = LanAddress.get(context)
                     if (ip == null) {
                         state = PhoneEntryState(null, null, context.getString(R.string.error_network_required))
                     } else {
