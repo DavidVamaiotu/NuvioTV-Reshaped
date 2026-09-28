@@ -24,8 +24,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.transformLatest
-import tv.seekr.previews.android.Seekr
-import tv.seekr.previews.android.SeekrTrack
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
@@ -67,7 +66,7 @@ class SeekPreviewState internal constructor(
      * The preview itself reads [previewTrack].
      */
     @OptIn(ExperimentalCoroutinesApi::class)
-    val track: StateFlow<SeekrTrack?> =
+    val track: StateFlow<BoundedSeekrTrack?> =
         controller.playbackTimeline
             .map { it.duration }
             .distinctUntilChanged()
@@ -85,11 +84,27 @@ class SeekPreviewState internal constructor(
                     season = controller.currentSeason,
                     episode = controller.currentEpisode
                 ) ?: return@mapLatest null
-                Seekr.create(apiKey)
-                    .loadTrack(content, durationMs)
-                    ?.also { track -> track.prefetchSheets() }
+                // Seekr hook: bounded sheet memory (see BoundedSeekrTrack), same thumbnails.
+                BoundedSeekr.loadTrack(apiKey, content, durationMs)
+                    ?.also { track ->
+                        track.prefetchSheets()
+                        track.warm(runCatching { controller.currentPlaybackPositionMs() }.getOrNull() ?: 0L)
+                    }
             }
             .stateIn(scope, SharingStarted.Eagerly, null)
+
+    init {
+        // The sheets around the current position are decoded as soon as the controls open, so
+        // the first thumbnail of a scrub is as ready as when every sheet was kept decoded.
+        scope.launch {
+            controller.uiState
+                .map { it.showControls || it.showSeekOverlay }
+                .distinctUntilChanged()
+                .collect { open ->
+                    if (open) track.value?.warm(runCatching { controller.currentPlaybackPositionMs() }.getOrNull() ?: 0L)
+                }
+        }
+    }
 
     /**
      * On-device thumbnails for the stream this player shows with ExoPlayer, while "Generate
