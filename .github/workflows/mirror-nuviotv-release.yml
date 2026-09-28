@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: Fix Gemini subtitle coroutines and robust debug signing verification
+# Release trigger: Fix mark-latest handling for beta releases
 
 
 on:
