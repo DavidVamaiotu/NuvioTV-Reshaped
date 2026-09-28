@@ -48,5 +48,9 @@ class GeminiSubtitleServiceTest {
     fun testSupportedLanguagesListNotEmpty() {
         assertTrue(GeminiTranslationPreferences.SUPPORTED_LANGUAGES.isNotEmpty())
         assertTrue(GeminiTranslationPreferences.AVAILABLE_MODELS.contains("gemini-1.5-flash"))
+        assertTrue(GeminiTranslationPreferences.AVAILABLE_MODELS.contains("gemma-4-26b-a4b-it"))
+        assertTrue(GeminiTranslationPreferences.AVAILABLE_MODELS.contains("gemma-4-31b-it"))
+        assertTrue(GeminiTranslationPreferences.AVAILABLE_MODELS.contains("gemini-2.5-flash"))
+        assertEquals("AIzaSy12345", GeminiTranslationPreferences.cleanApiKey("  \"AIzaSy12345\"\n  "))
     }
 }

@@ -8,6 +8,10 @@
     <string name="settings_gemini_api_key_dialog_subtitle">Scan the QR code to paste your Google Gemini API key from your phone, or enter it below.</string>
     <string name="settings_gemini_api_key_placeholder">Paste AI Studio API key...</string>
     <string name="settings_gemini_api_key_invalid">Could not validate Gemini API key</string>
+    <string name="settings_gemini_api_key_saved">Gemini API key saved successfully</string>
+    <string name="settings_gemini_api_key_save_anyway">Save Anyway</string>
+    <string name="settings_gemini_api_key_clear">Clear Key</string>
+    <string name="settings_gemini_api_key_verifying">Verifying API key with Google AI…</string>
     <string name="settings_gemini_target_language">Target Language</string>
     <string name="settings_gemini_model">Gemini Model</string>
     <string name="settings_gemini_auto_translate">Auto-Translate Subtitles</string>

@@ -24,6 +24,19 @@ internal data class SupportedLanguage(
     val displayName: String get() = "$name ($nativeName)"
 }
 
+internal data class GeminiModelOption(
+    val id: String,
+    val displayName: String,
+    val description: String,
+    val badge: String? = null,
+)
+
+internal sealed class GeminiKeyValidationResult {
+    data class Success(val availableModels: List<String> = emptyList()) : GeminiKeyValidationResult()
+    data class InvalidKey(val message: String) : GeminiKeyValidationResult()
+    data class NetworkIssue(val message: String) : GeminiKeyValidationResult()
+}
+
 internal object GeminiTranslationPreferences {
     private const val PREFS = "nuvio_gemini_translation_prefs"
     private const val KEY_API_KEY = "gemini_api_key"
@@ -31,12 +44,66 @@ internal object GeminiTranslationPreferences {
     private const val KEY_MODEL = "gemini_model"
     private const val KEY_AUTO_TRANSLATE = "gemini_auto_translate"
 
-    const val DEFAULT_MODEL = "gemini-1.5-flash"
-    val AVAILABLE_MODELS = listOf(
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-pro",
+    const val DEFAULT_MODEL = "gemini-2.5-flash"
+
+    val MODEL_OPTIONS = listOf(
+        GeminiModelOption(
+            id = "gemini-2.5-flash",
+            displayName = "Gemini 2.5 Flash",
+            description = "Recommended: Ultra-fast and high-accuracy subtitle translation",
+            badge = "Recommended",
+        ),
+        GeminiModelOption(
+            id = "gemini-2.5-flash-lite",
+            displayName = "Gemini 2.5 Flash-Lite",
+            description = "Lowest latency and fastest subtitle turnaround",
+            badge = "Fastest",
+        ),
+        GeminiModelOption(
+            id = "gemma-4-26b-a4b-it",
+            displayName = "Gemma 4 26B",
+            description = "Google's 26B open model with strong multilingual tuning",
+            badge = "Gemma Open",
+        ),
+        GeminiModelOption(
+            id = "gemma-4-31b-it",
+            displayName = "Gemma 4 31B",
+            description = "High-parameter 31B open model for deeper context",
+            badge = "Gemma Open",
+        ),
+        GeminiModelOption(
+            id = "gemini-1.5-flash",
+            displayName = "Gemini 1.5 Flash",
+            description = "Reliable, consistent speed and high rate limits",
+            badge = "Stable",
+        ),
+        GeminiModelOption(
+            id = "gemini-1.5-flash-8b",
+            displayName = "Gemini 1.5 Flash-8B",
+            description = "Lightweight 8B model for high throughput",
+            badge = "Light",
+        ),
+        GeminiModelOption(
+            id = "gemini-2.0-flash",
+            displayName = "Gemini 2.0 Flash",
+            description = "Next-generation multimodal Flash model",
+            badge = "v2.0",
+        ),
+        GeminiModelOption(
+            id = "gemini-2.5-pro",
+            displayName = "Gemini 2.5 Pro",
+            description = "Highest reasoning quality for idiomatic dialogues (slower)",
+            badge = "Pro",
+        ),
+        GeminiModelOption(
+            id = "gemini-1.5-pro",
+            displayName = "Gemini 1.5 Pro",
+            description = "Deep context analysis for nuanced language",
+            badge = "Legacy Pro",
+        ),
     )
+
+    val AVAILABLE_MODELS = MODEL_OPTIONS.map { it.id }
 
     val SUPPORTED_LANGUAGES = listOf(
         SupportedLanguage("es", "Spanish", "Español"),
@@ -104,10 +171,19 @@ internal object GeminiTranslationPreferences {
         return if (SUPPORTED_LANGUAGES.any { it.code == sysLang }) sysLang else "es"
     }
 
+    fun cleanApiKey(key: String): String {
+        return key.trim()
+            .replace("\r", "")
+            .replace("\n", "")
+            .removeSurrounding("\"")
+            .removeSurrounding("'")
+            .trim()
+    }
+
     fun setApiKey(context: Context, key: String) {
-        val trimmed = key.trim()
-        _apiKey.value = trimmed
-        prefs(context).edit().putString(KEY_API_KEY, trimmed).apply()
+        val cleaned = cleanApiKey(key)
+        _apiKey.value = cleaned
+        prefs(context).edit().putString(KEY_API_KEY, cleaned).apply()
     }
 
     fun setTargetLanguage(context: Context, langCode: String) {
@@ -144,27 +220,69 @@ internal object GeminiTranslationPreferences {
         return cacheDir.walkTopDown().filter { it.isFile }.map { it.length() }.sum()
     }
 
-    suspend fun validateApiKey(key: String): Boolean = withContext(Dispatchers.IO) {
-        if (key.isBlank()) return@withContext false
-        runCatching {
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key.trim()}"
-            val payload = JSONObject().apply {
-                put("contents", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("parts", JSONArray().apply {
-                            put(JSONObject().apply { put("text", "ping") })
-                        })
-                    })
-                })
-            }
-            val request = Request.Builder()
-                .url(url)
-                .post(payload.toString().toRequestBody("application/json".toMediaType()))
-                .build()
+    suspend fun validateApiKeyDetailed(key: String): GeminiKeyValidationResult = withContext(Dispatchers.IO) {
+        val cleaned = cleanApiKey(key)
+        if (cleaned.isBlank()) {
+            return@withContext GeminiKeyValidationResult.InvalidKey("API key is empty")
+        }
+
+        // Lightweight validation using the models list endpoint:
+        // - Requires 0 generation tokens/quota
+        // - Directly tests key validity against Google's authentication servers
+        // - Passes both query parameter and x-goog-api-key header for maximum compatibility
+        val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$cleaned"
+        val request = Request.Builder()
+            .url(url)
+            .header("x-goog-api-key", cleaned)
+            .get()
+            .build()
+
+        try {
             httpClient.newCall(request).execute().use { response ->
-                response.isSuccessful
+                val body = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    val modelList = mutableListOf<String>()
+                    runCatching {
+                        val json = JSONObject(body)
+                        val modelsArray = json.optJSONArray("models")
+                        if (modelsArray != null) {
+                            for (i in 0 until modelsArray.length()) {
+                                val m = modelsArray.getJSONObject(i)
+                                val name = m.optString("name").removePrefix("models/")
+                                if (name.isNotBlank()) modelList.add(name)
+                            }
+                        }
+                    }
+                    GeminiKeyValidationResult.Success(modelList)
+                } else {
+                    val errMsg = runCatching {
+                        val json = JSONObject(body)
+                        json.optJSONObject("error")?.optString("message") ?: body
+                    }.getOrDefault(body)
+
+                    if (response.code in 400..403) {
+                        GeminiKeyValidationResult.InvalidKey(
+                            errMsg.ifBlank { "Google authentication failed (HTTP ${response.code})" }
+                        )
+                    } else {
+                        GeminiKeyValidationResult.NetworkIssue(
+                            "Google AI service returned HTTP ${response.code}: $errMsg"
+                        )
+                    }
+                }
             }
-        }.getOrDefault(false)
+        } catch (e: Exception) {
+            GeminiKeyValidationResult.NetworkIssue(
+                e.message ?: "Connection timed out or failed to reach Google AI servers"
+            )
+        }
+    }
+
+    suspend fun validateApiKey(key: String): Boolean = withContext(Dispatchers.IO) {
+        when (validateApiKeyDetailed(key)) {
+            is GeminiKeyValidationResult.Success -> true
+            else -> false
+        }
     }
 
     private val httpClient by lazy {

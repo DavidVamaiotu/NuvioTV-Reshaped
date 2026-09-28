@@ -56,7 +56,9 @@ internal object GeminiTranslationClient {
         targetLanguageName: String,
         srtChunk: String,
     ): String {
-        val url = "$BASE_URL/${model.trim()}:generateContent?key=${apiKey.trim()}"
+        val cleanedKey = GeminiTranslationPreferences.cleanApiKey(apiKey)
+        val selectedModel = model.trim().removePrefix("models/")
+        val url = "$BASE_URL/$selectedModel:generateContent?key=$cleanedKey"
 
         val systemInstruction = """
             You are a professional audiovisual subtitle translator. Translate the dialogue in the provided SRT subtitles into $targetLanguageName.
@@ -68,13 +70,25 @@ internal object GeminiTranslationClient {
             5. Return ONLY the raw translated SRT text. Do NOT wrap output in markdown code fences or add explanations.
         """.trimIndent()
 
+        // Open instruction-tuned models like Gemma respond best when instructions are also embedded in the prompt
+        val promptText = if (selectedModel.contains("gemma", ignoreCase = true)) {
+            """
+            Translate the dialogue in the following SRT subtitles into $targetLanguageName.
+            Preserve all cue numbers and timestamps exactly. Output ONLY raw translated SRT subtitles:
+
+            $srtChunk
+            """.trimIndent()
+        } else {
+            srtChunk
+        }
+
         val jsonPayload = JSONObject().apply {
             put("contents", JSONArray().apply {
                 put(JSONObject().apply {
                     put("role", "user")
                     put("parts", JSONArray().apply {
                         put(JSONObject().apply {
-                            put("text", srtChunk)
+                            put("text", promptText)
                         })
                     })
                 })
@@ -93,6 +107,7 @@ internal object GeminiTranslationClient {
 
         val request = Request.Builder()
             .url(url)
+            .header("x-goog-api-key", cleanedKey)
             .post(jsonPayload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 

@@ -4,6 +4,7 @@ package com.nuvio.tv.ui.screens.settings
 
 import android.view.KeyEvent
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -62,6 +63,8 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
+import com.nuvio.tv.gemini.GeminiKeyValidationResult
+import com.nuvio.tv.gemini.GeminiModelOption
 import com.nuvio.tv.gemini.GeminiTranslationPreferences
 import com.nuvio.tv.gemini.SupportedLanguage
 import com.nuvio.tv.reshaped.phoneentry.PhoneEntryPage
@@ -196,27 +199,44 @@ private fun GeminiApiKeyDialog(currentValue: String, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     var value by remember(currentValue) { mutableStateOf(currentValue) }
     var validating by remember { mutableStateOf(false) }
+    var validationMessage by remember { mutableStateOf<String?>(null) }
     var isInputFocused by remember { mutableStateOf(false) }
     val inputFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
-    val invalidMessage = stringResource(R.string.settings_gemini_api_key_invalid)
 
-    fun save(key: String) {
-        val trimmed = key.trim()
-        if (trimmed.isEmpty() || trimmed == currentValue) {
-            GeminiTranslationPreferences.setApiKey(context, trimmed)
+    fun save(key: String, force: Boolean = false) {
+        val cleaned = GeminiTranslationPreferences.cleanApiKey(key)
+        if (cleaned.isEmpty()) {
+            GeminiTranslationPreferences.setApiKey(context, "")
+            Toast.makeText(context, R.string.settings_gemini_api_key_clear, Toast.LENGTH_SHORT).show()
             onDismiss()
             return
         }
+
+        if (force) {
+            GeminiTranslationPreferences.setApiKey(context, cleaned)
+            Toast.makeText(context, R.string.settings_gemini_api_key_saved, Toast.LENGTH_SHORT).show()
+            onDismiss()
+            return
+        }
+
         validating = true
+        validationMessage = null
         scope.launch {
-            val valid = GeminiTranslationPreferences.validateApiKey(trimmed)
+            val result = GeminiTranslationPreferences.validateApiKeyDetailed(cleaned)
             validating = false
-            if (valid) {
-                GeminiTranslationPreferences.setApiKey(context, trimmed)
-                onDismiss()
-            } else {
-                Toast.makeText(context, invalidMessage, Toast.LENGTH_SHORT).show()
+            when (result) {
+                is GeminiKeyValidationResult.Success -> {
+                    GeminiTranslationPreferences.setApiKey(context, cleaned)
+                    Toast.makeText(context, R.string.settings_gemini_api_key_saved, Toast.LENGTH_SHORT).show()
+                    onDismiss()
+                }
+                is GeminiKeyValidationResult.InvalidKey -> {
+                    validationMessage = result.message
+                }
+                is GeminiKeyValidationResult.NetworkIssue -> {
+                    validationMessage = result.message
+                }
             }
         }
     }
@@ -243,13 +263,14 @@ private fun GeminiApiKeyDialog(currentValue: String, onDismiss: () -> Unit) {
                 page = phonePage,
                 instruction = "Scan with your phone to paste your key directly",
                 onValue = { sent ->
-                    value = sent
-                    if (!validating) save(sent)
+                    val cleaned = GeminiTranslationPreferences.cleanApiKey(sent)
+                    value = cleaned
+                    if (!validating) save(cleaned)
                 },
             )
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.lg),
+                verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md),
             ) {
                 Card(
                     onClick = { inputFocusRequester.requestFocus() },
@@ -262,7 +283,7 @@ private fun GeminiApiKeyDialog(currentValue: String, onDismiss: () -> Unit) {
                     ),
                     border = CardDefaults.border(
                         border = Border(
-                            border = BorderStroke(NuvioTheme.spacing.hairline, NuvioTheme.colors.Border),
+                            border = BorderStroke(NuvioTheme.spacing.hairline, if (validationMessage != null) Color(0xFFE57373) else NuvioTheme.colors.Border),
                             shape = RoundedCornerShape(10.dp)
                         ),
                         focusedBorder = Border(
@@ -274,7 +295,10 @@ private fun GeminiApiKeyDialog(currentValue: String, onDismiss: () -> Unit) {
                     Box(modifier = Modifier.padding(16.dp)) {
                         BasicTextField(
                             value = value,
-                            onValueChange = { value = it },
+                            onValueChange = {
+                                value = it
+                                validationMessage = null
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .focusRequester(inputFocusRequester)
@@ -305,19 +329,63 @@ private fun GeminiApiKeyDialog(currentValue: String, onDismiss: () -> Unit) {
                     }
                 }
 
+                if (validating) {
+                    Text(
+                        text = stringResource(R.string.settings_gemini_api_key_verifying),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NuvioTheme.colors.Primary
+                    )
+                } else if (validationMessage != null) {
+                    Text(
+                        text = "⚠️ Validation warning: ${validationMessage}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFFFB74D)
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Button(
-                        onClick = { save(value) },
-                        enabled = !validating,
-                        colors = ButtonDefaults.colors(
-                            containerColor = NuvioTheme.colors.Primary,
-                            contentColor = Color.White,
-                        )
-                    ) {
-                        Text(if (validating) "Validating..." else "Save")
+                    if (currentValue.isNotBlank()) {
+                        Button(
+                            onClick = { save("", force = true) },
+                            enabled = !validating,
+                            colors = ButtonDefaults.colors(
+                                containerColor = Color(0xFF333333),
+                                contentColor = Color.LightGray,
+                            )
+                        ) {
+                            Text(stringResource(R.string.settings_gemini_api_key_clear))
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(1.dp))
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (validationMessage != null) {
+                            Button(
+                                onClick = { save(value, force = true) },
+                                colors = ButtonDefaults.colors(
+                                    containerColor = Color(0xFF424242),
+                                    contentColor = Color.White,
+                                )
+                            ) {
+                                Text(stringResource(R.string.settings_gemini_api_key_save_anyway))
+                            }
+                        }
+
+                        Button(
+                            onClick = { save(value) },
+                            enabled = !validating,
+                            colors = ButtonDefaults.colors(
+                                containerColor = NuvioTheme.colors.Primary,
+                                contentColor = Color.White,
+                            )
+                        ) {
+                            Text(if (validating) "Verifying..." else "Verify & Save")
+                        }
                     }
                 }
             }
@@ -403,24 +471,26 @@ private fun GeminiModelPickerDialog(
     NuvioDialog(
         onDismiss = onDismiss,
         title = stringResource(R.string.settings_gemini_model),
-        subtitle = "Choose the Gemini model for subtitle translation",
-        width = 540.dp,
+        subtitle = "Choose the Gemini or Gemma model for subtitle translation",
+        width = 620.dp,
     ) {
-        val models = GeminiTranslationPreferences.AVAILABLE_MODELS
+        val models = GeminiTranslationPreferences.MODEL_OPTIONS
         val initialFocusRequester = remember { FocusRequester() }
 
         LaunchedEffect(Unit) {
             initialFocusRequester.requestFocus()
         }
 
-        Column(
-            modifier = Modifier.fillMaxWidth(),
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 420.dp),
             verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
         ) {
-            models.forEach { modelName ->
-                val isSelected = modelName == currentModel
+            items(models, key = { it.id }) { item ->
+                val isSelected = item.id.equals(currentModel.removePrefix("models/"), ignoreCase = true)
                 Card(
-                    onClick = { onSelect(modelName) },
+                    onClick = { onSelect(item.id) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .then(if (isSelected) Modifier.focusRequester(initialFocusRequester) else Modifier),
@@ -438,25 +508,46 @@ private fun GeminiModelPickerDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text(
-                                text = modelName,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White
-                            )
-                            val desc = when {
-                                modelName.contains("2.0") -> "Next-gen experimental Flash model, ultra fast"
-                                modelName.contains("pro") -> "Highest quality, slower and lower rate limits"
-                                else -> "Recommended: Fast, accurate, high rate limits"
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = item.displayName,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = Color.White
+                                )
+                                item.badge?.let { badgeText ->
+                                    Box(
+                                        modifier = Modifier
+                                            .background(
+                                                color = if (badgeText.contains("Open")) Color(0xFF1E88E5).copy(alpha = 0.35f) else NuvioTheme.colors.Primary.copy(alpha = 0.3f),
+                                                shape = RoundedCornerShape(4.dp)
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = badgeText,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
                             }
                             Text(
-                                text = desc,
+                                text = item.description,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = NuvioTheme.colors.TextSecondary
+                            )
+                            Text(
+                                text = item.id,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NuvioTheme.colors.TextSecondary.copy(alpha = 0.7f)
                             )
                         }
                         if (isSelected) {
