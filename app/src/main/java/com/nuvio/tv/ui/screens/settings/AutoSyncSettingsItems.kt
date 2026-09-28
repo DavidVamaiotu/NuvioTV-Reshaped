@@ -5,6 +5,7 @@ package com.nuvio.tv.ui.screens.settings
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -17,6 +18,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.ui.Modifier
+import com.nuvio.tv.ui.reshaped.debuglog.DebugLogQrDialog
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncPreferences
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncFallback
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncSettings
@@ -88,6 +90,17 @@ internal fun LazyListScope.autoSyncSettingsItems(
             onCheckedChange = { AutoSyncPreferences.setDebugLogsEnabled(context, it) },
             enabled = enabled,
         )
+    }
+
+    item(key = "subtitle_auto_sync_debug_logs_to_phone") {
+        var showQr by remember { mutableStateOf(false) }
+        NavigationSettingsItem(
+            icon = Icons.Default.QrCode2,
+            title = stringResource(R.string.reshaped_debug_logs_to_phone_title),
+            subtitle = stringResource(R.string.reshaped_debug_logs_to_phone_description),
+            onClick = { showQr = true },
+        )
+        if (showQr) DebugLogQrDialog(onDismiss = { showQr = false })
     }
 
     item(key = "subtitle_auto_sync_aggressive_mode") {
