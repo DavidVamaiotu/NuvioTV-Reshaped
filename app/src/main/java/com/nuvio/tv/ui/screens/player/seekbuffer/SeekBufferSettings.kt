@@ -22,6 +22,8 @@ internal object SeekBufferSettings {
 
     private const val PREFS_NAME = "nuvio_tv_seek_buffer"
     private const val KEY_BUFFER_MB = "seek_buffer_mb"
+    /** Set once every install has been moved to Nuvio's own buffering; later choices are kept. */
+    private const val KEY_RESET_TO_NUVIO_DEFAULT = "seek_buffer_reset_to_nuvio_default"
     private const val MB = 1024L * 1024L
 
     // NuvioMpvSurfaceView's own demuxer cache sizes: the setting never goes below them.
@@ -42,6 +44,14 @@ internal object SeekBufferSettings {
         synchronized(this) {
             if (preferences != null) return
             val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            // One time only: whatever size an earlier version used or saved, start from Nuvio's own
+            // buffering. Anything picked after this is kept.
+            if (!prefs.getBoolean(KEY_RESET_TO_NUVIO_DEFAULT, false)) {
+                prefs.edit()
+                    .remove(KEY_BUFFER_MB)
+                    .putBoolean(KEY_RESET_TO_NUVIO_DEFAULT, true)
+                    .apply()
+            }
             _bufferMb.value = prefs.getInt(KEY_BUFFER_MB, DEFAULT_MB).takeIf { it in optionsMb } ?: DEFAULT_MB
             preferences = prefs
         }

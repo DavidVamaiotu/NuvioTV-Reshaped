@@ -1,1 +1,1 @@
-- **Seek buffer is now off by default.** Playback uses Nuvio's own buffering unless you pick a size in Settings > Nuvio Reshaped, which makes heavy streams smoother on low-end TVs. If you picked a size yourself, it stays.
+- **Seek buffer is now off by default.** Playback uses Nuvio's own buffering unless you pick a size in Settings > Nuvio Reshaped, which makes heavy streams smoother on low-end TVs. This update moves everyone to Nuvio default once, including anyone who picked a size before. If you change it afterwards, your choice is kept.
