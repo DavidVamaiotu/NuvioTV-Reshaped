@@ -491,6 +491,9 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
     }
 }
 
+/** Near solid, so the banner and info card read clearly over any picture. */
+private val LiveTvCardBackground = Color(0xF0121214)
+
 @Composable
 private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {
     Row(
@@ -498,7 +501,7 @@ private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveT
             .padding(start = 48.dp, top = 40.dp)
             .widthIn(max = 640.dp)
             .clip(RoundedCornerShape(20.dp))
-            .background(Color.Black.copy(alpha = 0.66f))
+            .background(LiveTvCardBackground)
             .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(20.dp))
             .padding(horizontal = 18.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -508,7 +511,7 @@ private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveT
                 text = number.toString(),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
-                color = Color.White.copy(alpha = 0.55f),
+                color = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.padding(end = 16.dp),
             )
         }
@@ -541,7 +544,7 @@ private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveT
                     Text(
                         text = "${LiveTvClock.formatSpan(programme)}  ·  ${liveTvTimeLeft(programme, clock)}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.6f),
+                        color = Color.White.copy(alpha = 0.78f),
                         maxLines = 1,
                         modifier = Modifier.padding(start = 10.dp),
                     )
@@ -550,7 +553,7 @@ private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveT
             Text(
                 text = stringResource(R.string.live_tv_player_hint),
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.45f),
+                color = Color.White.copy(alpha = 0.62f),
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
@@ -579,7 +582,7 @@ private fun LiveTvInfoCard(
             .widthIn(max = 880.dp)
             .fillMaxWidth()
             .clip(shape)
-            .background(Color.Black.copy(alpha = 0.66f))
+            .background(LiveTvCardBackground)
             .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
             .padding(horizontal = 22.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -592,7 +595,7 @@ private fun LiveTvInfoCard(
                         text = number.toString(),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color.White.copy(alpha = 0.5f),
+                        color = Color.White.copy(alpha = 0.68f),
                         modifier = Modifier.padding(end = 10.dp),
                     )
                 }
@@ -613,7 +616,7 @@ private fun LiveTvInfoCard(
                 Text(
                     text = stringResource(R.string.live_tv_info_no_guide),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.6f),
+                    color = Color.White.copy(alpha = 0.78f),
                     modifier = Modifier.padding(top = 6.dp),
                 )
             } else {
@@ -649,7 +652,7 @@ private fun LiveTvInfoCard(
                     Text(
                         text = "${LiveTvClock.formatSpan(now)}  ·  ${liveTvTimeLeft(now, clock)}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.6f),
+                        color = Color.White.copy(alpha = 0.78f),
                         maxLines = 1,
                         modifier = Modifier.padding(start = 12.dp),
                     )
@@ -658,7 +661,7 @@ private fun LiveTvInfoCard(
                     Text(
                         text = stringResource(R.string.live_tv_info_next, LiveTvClock.formatClock(it.startEpochMs)) + "  " + it.title,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.7f),
+                        color = Color.White.copy(alpha = 0.85f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 8.dp),
@@ -668,7 +671,7 @@ private fun LiveTvInfoCard(
             Text(
                 text = stringResource(R.string.live_tv_info_hint),
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.42f),
+                color = Color.White.copy(alpha = 0.62f),
                 modifier = Modifier.padding(top = 10.dp),
             )
         }
@@ -721,12 +724,14 @@ private fun LiveTvFolderColumn(state: LiveTvPlayerState, liveState: LiveTvUiStat
     val allLabel = stringResource(R.string.live_tv_all_channels)
     val favoritesLabel = stringResource(R.string.live_tv_favorites)
     val uncategorisedLabel = liveTvGroupLabel(LIVE_TV_UNGROUPED)
-    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, allLabel, favoritesLabel, uncategorisedLabel) {
+    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, liveState.groupNames, allLabel, favoritesLabel, uncategorisedLabel) {
         buildList {
             add(FILTER_ALL to allLabel)
             add(FILTER_FAVORITES to favoritesLabel)
             if (liveState.sources.size > 1) liveState.sources.forEach { add(FILTER_SOURCE_PREFIX + it.id to it.label) }
-            liveState.visibleGroups.forEach { add(it to if (it == LIVE_TV_UNGROUPED) uncategorisedLabel else it) }
+            liveState.visibleGroups.forEach {
+                add(it to (liveTvGroupName(it, liveState.groupNames) ?: if (it == LIVE_TV_UNGROUPED) uncategorisedLabel else it))
+            }
         }
     }
     // The panel opens on the zapped list's category (All channels for a search or one gone since).

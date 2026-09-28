@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: one-time seek buffer reset to Nuvio default
+# Release trigger: AutoSync finds embedded subtitles again on the first playback
 
 
 on:
