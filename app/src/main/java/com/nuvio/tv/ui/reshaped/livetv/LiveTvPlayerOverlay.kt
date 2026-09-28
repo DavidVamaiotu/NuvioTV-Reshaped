@@ -10,6 +10,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -64,6 +66,7 @@ import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.model.StreamBehaviorHints
 import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
+import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
@@ -114,6 +117,28 @@ internal class LiveTvPlayerState(
         private set
 
     private var switchJob: Job? = null
+
+    /** The Now/Next card OK shows over the picture; OK again opens the controls. Never pauses. */
+    var infoOpen by mutableStateOf(false)
+        private set
+    private var infoJob: Job? = null
+    /** The release of an OK press Live TV acted on, which must not reach the controls it opened. */
+    private var swallowOkRelease = false
+
+    private fun showInfo() {
+        infoOpen = true
+        infoJob?.cancel()
+        infoJob = scope.launch {
+            delay(INFO_MS)
+            infoOpen = false
+        }
+    }
+
+    internal fun hideInfo() {
+        infoJob?.cancel()
+        infoJob = null
+        infoOpen = false
+    }
 
     /** Whether the player is showing a Live TV channel (read on each key; a memory lookup). */
     fun isActive(): Boolean = LiveTvPlaybackRegistry.isLiveTv(controller.currentStreamUrl)
@@ -180,9 +205,34 @@ internal class LiveTvPlayerState(
                 return true
             }
         }
-        // ▲▼◀ are Live TV's only on the bare picture: never over controls, panels or errors.
-        if (uiState.showControls || nuvioOverlayOpen || uiState.error != null || uiState.showPauseOverlay) return false
+        if (event.keyCode in OK_KEYS && !down && swallowOkRelease) {
+            swallowOkRelease = false
+            return true
+        }
+        // ▲▼◀ and OK are Live TV's only on the bare picture: never over controls, panels or errors.
+        if (uiState.showControls || nuvioOverlayOpen || uiState.error != null || uiState.showPauseOverlay) {
+            if (infoOpen) hideInfo()
+            return false
+        }
         return when (event.keyCode) {
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                // Acts on the press; the release is swallowed too, so the player never sees OK (which pauses).
+                if (down && event.repeatCount == 0) {
+                    swallowOkRelease = true
+                    if (infoOpen) {
+                        hideInfo()
+                        controller.onEvent(PlayerEvent.OnToggleControls)
+                    } else {
+                        showInfo()
+                    }
+                }
+                true
+            }
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                if (!infoOpen) return false
+                if (!down) hideInfo()
+                true
+            }
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                 if (down) zap(if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
                 true
@@ -193,7 +243,10 @@ internal class LiveTvPlayerState(
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 // A live channel has nothing to seek to: ▶ opens the controls (audio, subtitles).
-                if (down && event.repeatCount == 0) controller.onEvent(PlayerEvent.OnToggleControls)
+                if (down && event.repeatCount == 0) {
+                    hideInfo()
+                    controller.onEvent(PlayerEvent.OnToggleControls)
+                }
                 true
             }
             else -> false
@@ -201,11 +254,13 @@ internal class LiveTvPlayerState(
     }
 
     private fun zap(step: Int) {
+        hideInfo()
         val next = LiveTvRepository.neighbour(zapList(), currentListUrl, step) ?: return
         switchTo(next)
     }
 
     private fun openPanel() {
+        hideInfo()
         folderJob?.cancel()
         panelFolderKey = null
         val (channels, folderKey) = zapTarget()
@@ -288,6 +343,8 @@ internal class LiveTvPlayerState(
 
     private companion object {
         const val ZAP_SETTLE_MS = 350L
+        const val INFO_MS = 6_000L
+        val OK_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
     }
 }
 
@@ -325,7 +382,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         bannerVisible = false
     }
     AnimatedVisibility(
-        visible = bannerVisible && current != null && !uiState.showControls && !state.panelOpen,
+        visible = bannerVisible && current != null && !uiState.showControls && !state.panelOpen && !state.infoOpen,
         enter = fadeIn(),
         exit = fadeOut(),
         modifier = Modifier.align(Alignment.TopStart).zIndex(3f),
@@ -334,6 +391,22 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
             LiveTvBanner(
                 channel = channel,
                 programme = channel.tvgId?.let(liveState.currentProgrammes::get),
+                number = currentIndex + 1,
+                clock = clock,
+            )
+        }
+    }
+
+    AnimatedVisibility(
+        visible = state.infoOpen && current != null && !uiState.showControls && !state.panelOpen,
+        enter = slideInVertically { it / 3 } + fadeIn(),
+        exit = slideOutVertically { it / 3 } + fadeOut(),
+        modifier = Modifier.align(Alignment.BottomCenter).zIndex(3f),
+    ) {
+        current?.let { channel ->
+            LiveTvInfoCard(
+                channel = channel,
+                now = channel.tvgId?.let(liveState.currentProgrammes::get),
                 number = currentIndex + 1,
                 clock = clock,
             )
@@ -410,6 +483,108 @@ private fun LiveTvBanner(channel: LiveTvChannel, programme: LiveTvProgramme?, nu
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.45f),
                 modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/** The Now/Next card OK shows: the channel, what is on with how far it has got, and what follows. */
+@Composable
+private fun LiveTvInfoCard(channel: LiveTvChannel, now: LiveTvProgramme?, number: Int, clock: State<Long>) {
+    // Read once per minute tick: the kept guide is a map lookup.
+    val next = remember(channel.tvgId, now, clock.value / 60_000L) { LiveTvRepository.nextProgramme(channel.tvgId) }
+    Row(
+        modifier = Modifier
+            .padding(start = 48.dp, end = 48.dp, bottom = 40.dp)
+            .widthIn(max = 920.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color.Black.copy(alpha = 0.74f))
+            .padding(horizontal = 24.dp, vertical = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        LiveTvLogo(url = channel.logoUrl, name = channel.name, width = 112.dp, height = 68.dp)
+        Column(modifier = Modifier.weight(1f).padding(start = 20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (number > 0) {
+                    Text(
+                        text = number.toString(),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(end = 10.dp),
+                    )
+                }
+                Text(
+                    text = channel.name,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (now == null) {
+                Text(
+                    text = stringResource(R.string.live_tv_info_no_guide),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            } else {
+                Row(modifier = Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.live_tv_info_now).uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.Black,
+                        modifier = Modifier
+                            .clip(LiveTvPillShape)
+                            .background(Color.White)
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                    Text(
+                        text = now.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 10.dp),
+                    )
+                }
+                Row(modifier = Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    LiveTvProgressBar(
+                        programme = now,
+                        clock = clock,
+                        fill = Color.White,
+                        track = Color.White.copy(alpha = 0.18f),
+                        modifier = Modifier.width(260.dp),
+                    )
+                    Text(
+                        text = "${now.timeLabel}  ·  ${liveTvTimeLeft(now, clock)}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        modifier = Modifier.padding(start = 12.dp),
+                    )
+                }
+                next?.let {
+                    Text(
+                        text = stringResource(R.string.live_tv_info_next, LiveTvClock.formatClock(it.startEpochMs)) + "  " + it.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            }
+            Text(
+                text = stringResource(R.string.live_tv_info_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.45f),
+                modifier = Modifier.padding(top = 10.dp),
             )
         }
     }

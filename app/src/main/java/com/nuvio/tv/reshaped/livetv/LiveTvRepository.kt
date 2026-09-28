@@ -66,6 +66,8 @@ object LiveTvRepository {
     private var profileJob: Job? = null
     private var epgJob: Job? = null
     @Volatile private var epgGeneration = 0
+    /** The guide programmes kept for each channel id (lower case), for "up next". */
+    @Volatile private var keptSchedule: LiveTvSchedule = emptyMap()
     private var epgKey: Pair<List<String>, Set<String>>? = null
     /** The viewer's category order; empty for A to Z. */
     @Volatile private var groupOrder: List<String> = emptyList()
@@ -558,7 +560,12 @@ object LiveTvRepository {
 
     // region Guide
 
+    /** The next programme after the one on now for [tvgId], from the kept guide; a map lookup. */
+    fun nextProgramme(tvgId: String?, nowEpochMs: Long = LiveTvClock.nowEpochMs()): LiveTvProgramme? =
+        tvgId?.let { keptSchedule[it.lowercase()] }?.firstOrNull { it.startEpochMs > nowEpochMs }
+
     private fun stopEpg() {
+        keptSchedule = emptyMap()
         epgGeneration++
         epgJob?.cancel()
         epgJob = null
@@ -592,6 +599,7 @@ object LiveTvRepository {
                             .forEach { (id, list) -> loaded.putIfAbsent(id, list) }
                     }
                     schedule = loaded
+                    if (epgGeneration == generation) keptSchedule = loaded
                     nextReadAtMs = if (loaded.isEmpty()) {
                         nowMs + EPG_RETRY_MS
                     } else {
