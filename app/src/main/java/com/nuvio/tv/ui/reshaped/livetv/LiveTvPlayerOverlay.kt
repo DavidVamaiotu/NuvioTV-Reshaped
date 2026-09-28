@@ -13,6 +13,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -118,394 +119,34 @@ internal class LiveTvPlayerState(
 
     private var switchJob: Job? = null
 
-    /** The Now/Next card OK shows over the picture; OK again opens the controls. Never pauses. */
-    var infoOpen by mutableStateOf(false)
-        private set
-    private var infoJob: Job? = null
-    /** The release of an OK press Live TV acted on, which must not reach the controls it opened. */
-    private var swallowOkRelease = false
-
-    private fun showInfo() {
-        infoOpen = true
-        infoJob?.cancel()
-        infoJob = scope.launch {
-            delay(INFO_MS)
-            infoOpen = false
-        }
-    }
-
-    internal fun hideInfo() {
-        infoJob?.cancel()
-        infoJob = null
-        infoOpen = false
-    }
-
-    /** Whether the player is showing a Live TV channel (read on each key; a memory lookup). */
-    fun isActive(): Boolean = LiveTvPlaybackRegistry.isLiveTv(controller.currentStreamUrl)
-
-    internal fun syncCurrent() {
-        if (currentListUrl == null && isActive()) {
-            currentListUrl = LiveTvPlaybackRegistry.listUrlFor(controller.currentStreamUrl)
-            bannerKey++
-        }
-    }
-
-    /** The list zapping moves through: the one the channel was picked from, else every shown channel. */
-    internal fun zapList(): List<LiveTvChannel> = zapTarget().first
-
-    /** The list zapping moves through and the category it is (null for a search). */
-    private fun zapTarget(): Pair<List<LiveTvChannel>, String?> {
-        val picked = LiveTvRepository.zapList
-        if (picked.any { it.streamUrl == currentListUrl }) return picked to LiveTvRepository.zapFolderKey
-        // Worked out off the main thread whenever the list or what is hidden changes.
-        return LiveTvRepository.uiState.value.shownChannels to FILTER_ALL
-    }
-
-    /** The category the panel's list is, so the categories open on it; null for a search. */
-    var zappedFolderKey by mutableStateOf<String?>(null)
-        private set
-
-    /** Called first by the player's key handler; true when the key was Live TV's. */
-    fun onPreviewKey(event: KeyEvent, uiState: PlayerUiState): Boolean {
-        if (!isActive()) return false
-        val nuvioOverlayOpen = uiState.showEpisodesPanel || uiState.showSourcesPanel ||
-            uiState.showAudioOverlay || uiState.showSubtitleOverlay || uiState.showSubtitleStylePanel ||
-            uiState.showSpeedDialog || uiState.showSubtitleDelayOverlay || uiState.showSubtitleTimingDialog ||
-            uiState.showMoreDialog || uiState.showStreamInfoOverlay
-        val down = event.action == KeyEvent.ACTION_DOWN
-        if (panelOpen && foldersOpen) {
-            return when (event.keyCode) {
-                // Back to the channels, which show the category last focused.
-                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    if (!down) foldersOpen = false
-                    true
-                }
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> true
-                else -> false // the column handles the rest
-            }
-        }
-        if (panelOpen) {
-            return when (event.keyCode) {
-                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    if (!down) closePanel()
-                    true
-                }
-                KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    if (down && event.repeatCount == 0) foldersOpen = true
-                    true
-                }
-                KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> true
-                else -> false // the list handles the rest
-            }
-        }
-        when (event.keyCode) {
-            KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                if (nuvioOverlayOpen && uiState.error == null) return false
-                if (down) zap(if (event.keyCode == KeyEvent.KEYCODE_CHANNEL_UP) -1 else 1)
-                return true
-            }
-        }
-        if (event.keyCode in OK_KEYS && !down && swallowOkRelease) {
-            swallowOkRelease = false
-            return true
-        }
-        // ▲▼◀ and OK are Live TV's only on the bare picture: never over controls, panels or errors.
-        if (uiState.showControls || nuvioOverlayOpen || uiState.error != null || uiState.showPauseOverlay) {
-            if (infoOpen) hideInfo()
-            return false
-        }
-        return when (event.keyCode) {
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                // Acts on the press; the release is swallowed too, so the player never sees OK (which pauses).
-                if (down && event.repeatCount == 0) {
-                    swallowOkRelease = true
-                    if (infoOpen) {
-                        hideInfo()
-                        controller.onEvent(PlayerEvent.OnToggleControls)
-                    } else {
-                        showInfo()
-                    }
-                }
-                true
-            }
-            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                if (!infoOpen) return false
-                if (!down) hideInfo()
-                true
-            }
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (down) zap(if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
-                true
-            }
-            KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (down && event.repeatCount == 0) openPanel()
-                true // also swallows the release, which would commit a seek
-            }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                // A live channel has nothing to seek to: ▶ opens the controls (audio, subtitles).
-                if (down && event.repeatCount == 0) {
-                    hideInfo()
-                    controller.onEvent(PlayerEvent.OnToggleControls)
-                }
-                true
-            }
-            else -> false
-        }
-    }
-
-    private fun zap(step: Int) {
-        hideInfo()
-        val next = LiveTvRepository.neighbour(zapList(), currentListUrl, step) ?: return
-        switchTo(next)
-    }
-
-    private fun openPanel() {
-        hideInfo()
-        folderJob?.cancel()
-        panelFolderKey = null
-        val (channels, folderKey) = zapTarget()
-        panelChannels = channels
-        zappedFolderKey = folderKey
-        foldersOpen = false
-        panelOpen = true
-    }
-
-    /** Shows a category's channels in the panel; zapping follows once one of them is picked. */
-    internal fun showFolder(key: String) {
-        if (key == panelFolderKey) return
-        panelFolderKey = key
-        folderJob?.cancel()
-        folderJob = scope.launch {
-            val state = LiveTvRepository.uiState.value
-            panelChannels = withContext(Dispatchers.Default) {
-                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelKeys, key)
-            }
-        }
-    }
-
-    /** A channel picked from the panel: zapping then stays in the list it was picked from. */
-    internal fun pickFromPanel(channel: LiveTvChannel) {
-        panelFolderKey?.let { LiveTvRepository.setZapList(panelChannels, it) }
-        switchTo(channel)
-    }
-
-    internal fun switchTo(channel: LiveTvChannel) {
-        if (channel.streamUrl == currentListUrl) {
-            closePanel()
-            return
-        }
-        currentListUrl = channel.streamUrl
-        bannerKey++
-        closePanel()
-        // The loading screen and pause screen show the player's logo: the new channel's, from the first press.
-        controller._uiState.update { it.copy(title = channel.name, logo = LiveTvRepository.uiState.value.logoFor(channel)) }
-        // Quick presses land on the last channel only.
-        switchJob?.cancel()
-        switchJob = scope.launch {
-            delay(ZAP_SETTLE_MS)
-            val playback = LiveTvRepository.prepareForPlayback(channel)
-            LiveTvPlaybackRegistry.register(
-                PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers).url,
-                listUrl = channel.streamUrl,
-            )
-            controller.switchToSourceStream(channel.toStream(playback))
-        }
-    }
-
-    /** Switches the display to the playing channel's frame rate (see [LiveTvFrameRateMatch]). */
-    internal suspend fun matchDisplay(fps: Float, raw: Float) = controller.matchDisplayToLiveTrack(fps, raw)
-
-    internal fun closePanel() {
-        if (!panelOpen) return
-        panelOpen = false
-        foldersOpen = false
-        runCatching { containerFocusRequester.requestFocus() }
-    }
-
-    private fun LiveTvChannel.toStream(playback: LiveTvChannel) = Stream(
-        name = name,
-        title = name,
-        description = group.takeIf(String::isNotBlank),
-        url = playback.streamUrl,
-        ytId = null,
-        infoHash = null,
-        fileIdx = null,
-        externalUrl = null,
-        behaviorHints = StreamBehaviorHints(
-            notWebReady = null,
-            bingeGroup = null,
-            countryWhitelist = null,
-            proxyHeaders = ProxyHeaders(request = playback.headers, response = null),
-        ),
-        addonName = LIVE_TV_ADDON_NAME,
-        addonLogo = null,
-    )
-
-    private companion object {
-        const val ZAP_SETTLE_MS = 350L
-        const val INFO_MS = 6_000L
-        val OK_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
-    }
-}
-
+    /**
+ * The Now/Next card OK shows: the channel with its picture and sound (resolution, frame rate,
+ * codecs), what is on with how far it has got, and what follows.
+ */
 @Composable
-internal fun rememberLiveTvPlayer(controller: PlayerRuntimeController, containerFocusRequester: FocusRequester): LiveTvPlayerState {
-    val scope = rememberCoroutineScope()
-    return remember(controller) { LiveTvPlayerState(controller, containerFocusRequester, scope) }
-}
-
-/** The banner and channel panel, drawn over the player. */
-@Composable
-internal fun LiveTvPlayerOverlay(state: LiveTvPlayerState, uiState: PlayerUiState) {
-    if (!state.isActive()) return
-    Box(modifier = Modifier.fillMaxSize().zIndex(3f)) {
-        LiveTvPlayerOverlayContent(state, uiState)
-    }
-}
-
-@Composable
-private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiState: PlayerUiState) {
-    LaunchedEffect(Unit) { state.syncCurrent() }
-    LiveTvFrameRateMatch(state, uiState)
-    val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
-    val clock = rememberLiveTvMinuteClock()
-    // Numbered within the list being zapped (a category keeps its own 1, 2, 3...).
-    val zapList = remember(state.currentListUrl, liveState.shownChannels) { state.zapList() }
-    val currentIndex = remember(state.currentListUrl, zapList) { zapList.indexOfFirst { it.streamUrl == state.currentListUrl } }
-    val current = zapList.getOrNull(currentIndex)
-
-    var bannerVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(state.bannerKey) {
-        if (state.bannerKey == 0) return@LaunchedEffect
-        bannerVisible = true
-        delay(BANNER_MS)
-        bannerVisible = false
-    }
-    AnimatedVisibility(
-        visible = bannerVisible && current != null && !uiState.showControls && !state.panelOpen && !state.infoOpen,
-        enter = fadeIn(),
-        exit = fadeOut(),
-        modifier = Modifier.align(Alignment.TopStart).zIndex(3f),
-    ) {
-        current?.let { channel ->
-            LiveTvBanner(
-                channel = channel,
-                logo = liveState.logoFor(channel),
-                programme = liveState.currentProgrammes[channel.guideKey],
-                number = currentIndex + 1,
-                clock = clock,
-            )
-        }
-    }
-
-    AnimatedVisibility(
-        visible = state.infoOpen && current != null && !uiState.showControls && !state.panelOpen,
-        enter = slideInVertically { it / 3 } + fadeIn(),
-        exit = slideOutVertically { it / 3 } + fadeOut(),
-        modifier = Modifier.align(Alignment.BottomCenter).zIndex(3f),
-    ) {
-        current?.let { channel ->
-            LiveTvInfoCard(
-                channel = channel,
-                logo = liveState.logoFor(channel),
-                now = liveState.currentProgrammes[channel.guideKey],
-                number = currentIndex + 1,
-                clock = clock,
-            )
-        }
-    }
-
-    AnimatedVisibility(
-        visible = state.panelOpen,
-        enter = slideInHorizontally { -it } + fadeIn(),
-        exit = slideOutHorizontally { -it } + fadeOut(),
-        modifier = Modifier.align(Alignment.CenterStart).zIndex(3f),
-    ) {
-        LiveTvChannelPanel(state, liveState.currentProgrammes, clock)
-    }
-}
-
-@Composable
-private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {
-    Row(
-        modifier = Modifier
-            .padding(start = 48.dp, top = 40.dp)
-            .widthIn(max = 640.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color.Black.copy(alpha = 0.72f))
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (number > 0) {
-            Text(
-                text = number.toString(),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White.copy(alpha = 0.55f),
-                modifier = Modifier.padding(end = 16.dp),
-            )
-        }
-        LiveTvLogo(url = logo, name = channel.name, width = 88.dp, height = 54.dp)
-        Column(modifier = Modifier.padding(start = 16.dp)) {
-            Text(
-                text = channel.name,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (programme != null) {
-                Text(
-                    text = programme.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.85f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Row(modifier = Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    LiveTvProgressBar(
-                        programme = programme,
-                        clock = clock,
-                        fill = Color.White,
-                        track = Color.White.copy(alpha = 0.18f),
-                        modifier = Modifier.width(220.dp),
-                    )
-                    Text(
-                        text = "${LiveTvClock.formatSpan(programme)}  ·  ${liveTvTimeLeft(programme, clock)}",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.6f),
-                        maxLines = 1,
-                        modifier = Modifier.padding(start = 10.dp),
-                    )
-                }
-            }
-            Text(
-                text = stringResource(R.string.live_tv_player_hint),
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.45f),
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-    }
-}
-
-/** The Now/Next card OK shows: the channel, what is on with how far it has got, and what follows. */
-@Composable
-private fun LiveTvInfoCard(channel: LiveTvChannel, logo: String?, now: LiveTvProgramme?, number: Int, clock: State<Long>) {
+private fun LiveTvInfoCard(
+    channel: LiveTvChannel,
+    logo: String?,
+    details: LiveTvStreamDetails,
+    now: LiveTvProgramme?,
+    number: Int,
+    clock: State<Long>,
+) {
     // Read once per minute tick: the kept guide is a map lookup.
     val next = remember(channel.guideKey, now, clock.value / 60_000L) { LiveTvRepository.nextProgramme(channel.guideKey) }
+    val shape = RoundedCornerShape(22.dp)
     Row(
         modifier = Modifier
-            .padding(start = 48.dp, end = 48.dp, bottom = 40.dp)
-            .widthIn(max = 920.dp)
+            .padding(start = 48.dp, end = 48.dp, bottom = 36.dp)
+            .widthIn(max = 880.dp)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color.Black.copy(alpha = 0.74f))
-            .padding(horizontal = 24.dp, vertical = 20.dp),
+            .clip(shape)
+            .background(Color.Black.copy(alpha = 0.66f))
+            .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
+            .padding(horizontal = 22.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        LiveTvLogo(url = logo, name = channel.name, width = 112.dp, height = 68.dp)
+        LiveTvLogo(url = logo, name = channel.name, width = 104.dp, height = 64.dp)
         Column(modifier = Modifier.weight(1f).padding(start = 20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (number > 0) {
@@ -524,7 +165,11 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, logo: String?, now: LiveTvPro
                     color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+                details.labels.forEach { label ->
+                    LiveTvDetailChip(label, modifier = Modifier.padding(start = 8.dp))
+                }
             }
             if (now == null) {
                 Text(
@@ -542,8 +187,8 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, logo: String?, now: LiveTvPro
                         color = Color.Black,
                         modifier = Modifier
                             .clip(LiveTvPillShape)
-                            .background(Color.White)
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                            .background(Color.White.copy(alpha = 0.92f))
+                            .padding(horizontal = 7.dp, vertical = 1.dp),
                     )
                     Text(
                         text = now.title,
@@ -561,7 +206,7 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, logo: String?, now: LiveTvPro
                         clock = clock,
                         fill = Color.White,
                         track = Color.White.copy(alpha = 0.18f),
-                        modifier = Modifier.width(260.dp),
+                        modifier = Modifier.width(240.dp),
                     )
                     Text(
                         text = "${LiveTvClock.formatSpan(now)}  ·  ${liveTvTimeLeft(now, clock)}",
@@ -585,11 +230,26 @@ private fun LiveTvInfoCard(channel: LiveTvChannel, logo: String?, now: LiveTvPro
             Text(
                 text = stringResource(R.string.live_tv_info_hint),
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.45f),
+                color = Color.White.copy(alpha = 0.42f),
                 modifier = Modifier.padding(top = 10.dp),
             )
         }
     }
+}
+
+/** A quiet outlined tag: "1080p", "50 fps". */
+@Composable
+private fun LiveTvDetailChip(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Medium,
+        color = Color.White.copy(alpha = 0.82f),
+        maxLines = 1,
+        modifier = modifier
+            .border(1.dp, Color.White.copy(alpha = 0.24f), LiveTvPillShape)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    )
 }
 
 @Composable
