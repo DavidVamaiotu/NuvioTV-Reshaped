@@ -293,7 +293,7 @@ private fun LiveTvCategoryToggle(
         scale = CardDefaults.scale(focusedScale = 1.02f),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
