@@ -141,6 +141,12 @@ internal object EmbeddedSubtitleTimelineLoader {
     suspend fun load(
         sourceUrl: String,
         sourceHeaders: Map<String, String> = emptyMap(),
+    ): IndexedEmbeddedTimeline? = load(sourceUrl, sourceHeaders, retryAfterJoinedFailure = true)
+
+    private suspend fun load(
+        sourceUrl: String,
+        sourceHeaders: Map<String, String>,
+        retryAfterJoinedFailure: Boolean,
     ): IndexedEmbeddedTimeline? {
         if (!sourceUrl.startsWith("http://", ignoreCase = true) &&
             !sourceUrl.startsWith("https://", ignoreCase = true)
@@ -156,21 +162,34 @@ internal object EmbeddedSubtitleTimelineLoader {
             if (cached != null) {
                 if (cached.timeline != null) return cached.timeline
                 val ageMs = (nowNs - cached.createdAtNs).coerceAtLeast(0L) / 1_000_000L
-                if (ageMs < NEGATIVE_CACHE_TTL_MS) return null
+                if (ageMs < NEGATIVE_CACHE_TTL_MS) {
+                    AutoSyncDebugLog.info {
+                        "index skipped: it failed ${ageMs / 1_000L}s ago for this stream " +
+                            "(tried again after ${NEGATIVE_CACHE_TTL_MS / 1_000L}s)"
+                    }
+                    return null
+                }
                 cache.remove(cacheKey)
             }
             inFlight.getOrPut(cacheKey) { ownedLoad }
         }
 
         if (activeLoad !== ownedLoad) {
-            return try {
+            val joined = try {
                 activeLoad.await()
             } catch (cancel: CancellationException) {
                 // The owning load was cancelled (e.g. its player closed). Load for this caller
                 // unless this caller itself is the one being cancelled.
                 currentCoroutineContext().ensureActive()
-                load(sourceUrl, sourceHeaders)
+                return load(sourceUrl, sourceHeaders, retryAfterJoinedFailure)
             }
+            if (joined != null || !retryAfterJoinedFailure) return joined
+            // The load this caller joined (usually the prefetch that runs while the stream opens)
+            // failed for a network reason and left nothing cached: try once more on its own.
+            val failureCached = synchronized(cacheLock) { cache.containsKey(cacheKey) }
+            if (failureCached) return null
+            AutoSyncDebugLog.info { "index retry after a network failure while the stream opened" }
+            return load(sourceUrl, sourceHeaders, retryAfterJoinedFailure = false)
         }
 
         try {
@@ -189,16 +208,33 @@ internal object EmbeddedSubtitleTimelineLoader {
         sourceUrl: String,
         sourceHeaders: Map<String, String>,
     ): IndexedEmbeddedTimeline? {
+        val stats = RangeStats(
+            deadlineNs = System.nanoTime() + TOTAL_TIMEOUT_MS * 1_000_000L,
+            maxBytes = MAX_TOTAL_DOWNLOAD_BYTES,
+            maxRequests = MAX_RANGE_REQUESTS,
+        )
         return try {
             val loaded = try {
                 withTimeout(TOTAL_TIMEOUT_MS) {
                     withContext(Dispatchers.IO) {
-                        loadMatroskaCueIndex(sourceUrl, sourceHeaders)
+                        loadMatroskaCueIndex(sourceUrl, sourceHeaders, stats)
                     }
                 }
             } catch (_: TimeoutCancellationException) {
                 // A transient deadline is not evidence that the container is unsupported.
                 // Do not publish a negative cache entry for timed-out work.
+                AutoSyncDebugLog.warn {
+                    "index reject reason=timeout requests=${stats.requests} bytes=${stats.bytesDownloaded}"
+                }
+                return null
+            }
+            if (loaded == null && stats.transientFailure != null) {
+                // A network hiccup (often the stream itself still opening) says nothing about
+                // the file, so the next load may try again instead of reusing this failure.
+                AutoSyncDebugLog.warn {
+                    "index reject reason=network detail=${stats.transientFailure} " +
+                        "requests=${stats.requests} bytes=${stats.bytesDownloaded}"
+                }
                 return null
             }
 
@@ -212,7 +248,18 @@ internal object EmbeddedSubtitleTimelineLoader {
         } catch (cancel: CancellationException) {
             // External cancellation must remain observable and must never publish cache state.
             throw cancel
-        } catch (_: Exception) {
+        } catch (error: java.io.IOException) {
+            // Connection failures are transient too: leave nothing cached.
+            AutoSyncDebugLog.warn {
+                "index reject reason=network " +
+                    "detail=${error::class.simpleName}: ${error.message.orEmpty().take(120)} " +
+                    "requests=${stats.requests} bytes=${stats.bytesDownloaded}"
+            }
+            null
+        } catch (error: Exception) {
+            AutoSyncDebugLog.warn {
+                "index reject reason=${error::class.simpleName}: ${error.message.orEmpty()}"
+            }
             synchronized(cacheLock) {
                 cache[cacheKey] = CachedLoadResult(
                     timeline = null,
@@ -226,13 +273,9 @@ internal object EmbeddedSubtitleTimelineLoader {
     private suspend fun loadMatroskaCueIndex(
         sourceUrl: String,
         sourceHeaders: Map<String, String>,
+        stats: RangeStats,
     ): IndexedEmbeddedTimeline? {
         val startedAtNs = System.nanoTime()
-        val stats = RangeStats(
-            deadlineNs = System.nanoTime() + TOTAL_TIMEOUT_MS * 1_000_000L,
-            maxBytes = MAX_TOTAL_DOWNLOAD_BYTES,
-            maxRequests = MAX_RANGE_REQUESTS,
-        )
         val initial = fetchRange(
             sourceUrl = sourceUrl,
             sourceHeaders = sourceHeaders,
@@ -1520,7 +1563,10 @@ internal object EmbeddedSubtitleTimelineLoader {
         requireExactLength: Boolean = false,
     ): RangeResponse? {
         if (length <= 0 || start < 0L) return null
-        if (!stats.canRequest(length)) return null
+        if (!stats.canRequest(length)) {
+            if (stats.remainingBudgetMs() <= 0L) stats.transientFailure = "time budget spent"
+            return null
+        }
         val end = start + length - 1L
         if (end < start) return null
 
@@ -1540,7 +1586,10 @@ internal object EmbeddedSubtitleTimelineLoader {
         }
 
         val remainingBudgetMs = stats.remainingBudgetMs()
-        if (remainingBudgetMs <= 0L) return null
+        if (remainingBudgetMs <= 0L) {
+            stats.transientFailure = "time budget spent"
+            return null
+        }
 
         stats.requests++
         val call = httpClient.newCall(requestBuilder.build())
@@ -1581,7 +1630,12 @@ internal object EmbeddedSubtitleTimelineLoader {
 
                         try {
                             val result = response.use { current ->
-                                if (!current.isSuccessful) return@use null
+                                if (!current.isSuccessful) {
+                                    if (isTransientHttpStatus(current.code)) {
+                                        stats.transientFailure = "HTTP ${current.code}"
+                                    }
+                                    return@use null
+                                }
                                 if (requirePartialContent && current.code != 206) return@use null
                                 if (start > 0L && current.code != 206) return@use null
 
@@ -1598,12 +1652,11 @@ internal object EmbeddedSubtitleTimelineLoader {
                                 val bytes = ByteArray(length)
                                 var offset = 0
                                 while (offset < length) {
-                                    if (
-                                        stats.remainingBudgetMs() <= 0L ||
-                                        stats.remainingByteBudget() <= 0L
-                                    ) {
+                                    if (stats.remainingBudgetMs() <= 0L) {
+                                        stats.transientFailure = "time budget spent"
                                         return@use null
                                     }
+                                    if (stats.remainingByteBudget() <= 0L) return@use null
                                     val allowedRead = minOf(
                                         length - offset,
                                         stats.remainingByteBudget()
@@ -1656,6 +1709,10 @@ internal object EmbeddedSubtitleTimelineLoader {
             )
         }
     }
+
+    /** Statuses that describe the server's current state rather than the file. */
+    private fun isTransientHttpStatus(code: Int): Boolean =
+        code == 408 || code == 425 || code == 429 || code >= 500
 
     private fun parseContentRange(value: String?): ContentRange? {
         if (value.isNullOrBlank()) return null
@@ -1823,6 +1880,10 @@ internal object EmbeddedSubtitleTimelineLoader {
         val maxBytes: Long,
         val maxRequests: Int,
     ) {
+        /** Set when a request failed for a reason that says nothing about the file itself. */
+        @Volatile
+        var transientFailure: String? = null
+
         fun remainingBudgetMs(): Long =
             ((deadlineNs - System.nanoTime()) / 1_000_000L).coerceAtLeast(0L)
 

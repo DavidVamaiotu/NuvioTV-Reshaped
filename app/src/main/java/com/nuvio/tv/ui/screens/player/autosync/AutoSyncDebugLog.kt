@@ -39,12 +39,18 @@ internal object AutoSyncDebugLog {
     // Timing dump has its own budget and is appended after the report, so it never crowds out
     // the regular log lines. Roughly 8 characters per cue.
     private const val MAX_TIMING_DUMP_CHARS = 400_000
+    private const val MAX_EARLY_LINES = 40
+    private const val MAX_EARLY_LINE_CHARS = 500
 
     private val lock = Any()
     private val buffer = StringBuilder()
     private val timingTracks = LinkedHashMap<String, AutoSyncTimingDump.Track>()
+    // Lines logged between sessions, such as the embedded index prefetch that runs while the
+    // stream opens. The next report starts with them so a failed prefetch keeps its reason.
+    private val earlyLines = java.util.ArrayDeque<String>()
 
     private var sessionId: String = "none"
+    @Volatile
     private var startedElapsedMs: Long = 0L
     private var active: Boolean = false
 
@@ -67,6 +73,12 @@ internal object AutoSyncDebugLog {
             appendRawLocked("addon=${safeSourceLabel(subtitleUrl)}")
             appendRawLocked("verbose=$VERBOSE")
             appendRawLocked("")
+            if (earlyLines.isNotEmpty()) {
+                appendRawLocked("=== BEFORE SESSION ===")
+                earlyLines.forEach(::appendRawLocked)
+                earlyLines.clear()
+                appendRawLocked("")
+            }
         }
         Log.i(TAG, "session=$sessionId started")
     }
@@ -209,8 +221,16 @@ internal object AutoSyncDebugLog {
     }
 
     private fun append(level: String, message: String) {
-        val line = "[+${elapsedMs()}ms][$level] $message"
-        appendRaw(line)
+        val line = synchronized(lock) {
+            if (active) {
+                "[+${elapsedMs()}ms][$level] $message".also(::appendRawLocked)
+            } else {
+                "[${clockTime()}][$level] $message".also { early ->
+                    earlyLines.addLast(early.take(MAX_EARLY_LINE_CHARS))
+                    while (earlyLines.size > MAX_EARLY_LINES) earlyLines.removeFirst()
+                }
+            }
+        }
         when (level) {
             "ERROR" -> Log.e(TAG, line)
             "WARN" -> Log.w(TAG, line)
@@ -236,7 +256,7 @@ internal object AutoSyncDebugLog {
     }
 
     private fun elapsedMs(): Long {
-        val started = synchronized(lock) { startedElapsedMs }
+        val started = startedElapsedMs
         return if (started == 0L) 0L else (SystemClock.elapsedRealtime() - started).coerceAtLeast(0L)
     }
 
@@ -290,6 +310,9 @@ internal object AutoSyncDebugLog {
             millis,
         )
     }
+
+    private fun clockTime(): String =
+        SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
 
     private fun wallClock(): String =
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
