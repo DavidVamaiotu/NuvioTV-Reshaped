@@ -175,7 +175,7 @@ internal object ReshapedSync {
             val base = withContext(Dispatchers.IO) { readBase(context) }
             val settings = if (settingsOn) ReshapedSyncedSettings.current(context) else emptyMap()
             val liveTv = profileId?.let { LiveTvRepository.syncSnapshot(context, it) }
-            val current = settings + (if (profileId != null && liveTv != null) LiveTvSections.toSections(profileId, liveTv) else emptyMap())
+            val current = settings + (if (profileId != null && liveTv != null) LiveTvSections.toSections(profileId, liveTv, base) else emptyMap())
             if (onlyIfChanged && SyncDoc.stamp(base, current, 0L) == base) return
             _status.update { it.copy(running = true) }
             try {
@@ -189,7 +189,10 @@ internal object ReshapedSync {
                     ReshapedSyncedSettings.apply(context, settings, merged)
                 }
                 if (profileId != null && liveTv != null) {
-                    val after = LiveTvSections.fromSections(profileId, merged)
+                    // Sources this device has keep its own ids (the file may give another device's).
+                    val localIds = liveTv.sources.associate { it.identity to it.id }
+                    val fromFile = LiveTvSections.fromSections(profileId, merged)
+                    val after = fromFile.copy(sources = fromFile.sources.map { source -> localIds[source.identity]?.let { source.copy(id = it) } ?: source })
                     LiveTvRepository.applySync(context, profileId, liveTv, after)
                 }
                 if (merged != remote || remoteFile.id == null) {

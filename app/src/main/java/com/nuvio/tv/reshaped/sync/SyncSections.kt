@@ -30,8 +30,15 @@ internal object LiveTvSections {
     private fun groupOrder(p: Int) = prefix(p) + "group_order"
     private fun recent(p: Int) = prefix(p) + "recent"
 
-    fun toSections(profileId: Int, data: LiveTvSyncData): Map<String, Map<String, JsonElement>> = mapOf(
-        sources(profileId) to data.sources.associate { it.identity to it.toJson() },
+    /**
+     * [data] as sections. A source keeps the id the file already gives it ([base]), so devices
+     * that each gave the same source their own id do not keep replacing each other's.
+     */
+    fun toSections(profileId: Int, data: LiveTvSyncData, base: SyncSections): Map<String, Map<String, JsonElement>> = mapOf(
+        sources(profileId) to data.sources.associate { source ->
+            val known = (SyncDoc.values(base, sources(profileId))[source.identity] as? JsonObject)?.text("id")
+            source.identity to source.copy(id = known?.takeIf(String::isNotBlank) ?: source.id).toJson()
+        },
         favorites(profileId) to data.favorites.associateWith { TRUE },
         hiddenGroups(profileId) to data.hiddenGroups.associateWith { TRUE },
         hiddenChannels(profileId) to data.hiddenChannels.associate { it.toString() to TRUE },
