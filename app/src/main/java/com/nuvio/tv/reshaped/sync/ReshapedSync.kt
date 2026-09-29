@@ -41,7 +41,7 @@ internal enum class ReshapedSyncFailure { Network, SignedOut, NewerVersion }
 
 /**
  * Keeps Reshaped settings and Live TV the same on the viewer's devices, through one small file
- * in their Google account's hidden app folder. Off until the viewer signs in and turns it on.
+ * in their Google Drive. Off until the viewer signs in and turns it on.
  *
  * It syncs when the app comes to the front (at most once a minute), a few seconds after a Live
  * TV change, when the app goes to the back if something changed here, and on "Sync now".
