@@ -28,6 +28,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import com.nuvio.tv.reshaped.sync.ReshapedSync
 
 /**
  * Live TV's channel list, guide, favorites and last channel for the active profile. It lives for
@@ -281,6 +282,7 @@ object LiveTvRepository {
                 store.saveSources(sources)
                 store.deletePlaylistFile(sourceId)
             }
+            ReshapedSync.onLocalChange()
             publish()
             updateLoading()
         }
@@ -307,6 +309,7 @@ object LiveTvRepository {
         _uiState.update { it.copy(hiddenChannelKeys = next) }
         refreshShownChannels()
         storage?.let { store -> scope.launch(writer) { store.saveHiddenChannelKeys(next) } }
+        ReshapedSync.onLocalChange()
     }
 
     /** Moves a category [step] places up (negative) or down; the order is kept for every list. */
@@ -319,6 +322,7 @@ object LiveTvRepository {
         groupOrder = reordered
         _uiState.update { it.copy(groups = reordered) }
         storage?.let { store -> scope.launch(writer) { store.saveGroupOrder(reordered) } }
+        ReshapedSync.onLocalChange()
     }
 
     /**
@@ -333,6 +337,7 @@ object LiveTvRepository {
             state.copy(groupNames = next).let { if (groupOrder.isEmpty()) it.copy(groups = orderedGroups(it.groupCounts.keys, next)) else it }
         }
         storage?.let { store -> scope.launch(writer) { store.saveGroupNames(next) } }
+        ReshapedSync.onLocalChange()
     }
 
     /** Back to A to Z. */
@@ -340,6 +345,7 @@ object LiveTvRepository {
         groupOrder = emptyList()
         _uiState.update { it.copy(groups = orderedGroups(it.groupCounts.keys, it.groupNames)) }
         storage?.let { store -> scope.launch(writer) { store.saveGroupOrder(emptyList()) } }
+        ReshapedSync.onLocalChange()
     }
 
     /** [names] in the viewer's order, then the ones it does not have yet, A to Z, with "Uncategorised" last. */
@@ -359,6 +365,7 @@ object LiveTvRepository {
         _uiState.update { it.copy(hiddenGroups = groups) }
         refreshShownChannels()
         storage?.let { store -> scope.launch(writer) { store.saveHiddenGroups(groups) } }
+        ReshapedSync.onLocalChange()
     }
 
     fun toggleFavorite(channel: LiveTvChannel) {
@@ -367,6 +374,7 @@ object LiveTvRepository {
         if (!favorites.add(channel.streamUrl)) favorites.remove(channel.streamUrl)
         _uiState.update { it.copy(favoriteUrls = favorites) }
         scope.launch(writer) { store.saveFavoriteUrls(favorites) }
+        ReshapedSync.onLocalChange()
     }
 
     /** [channel] is the list's own entry (not a resolved Stalker link), so it can be found again. */
@@ -504,6 +512,7 @@ object LiveTvRepository {
                             store.saveSources(sources)
                             if (source.type != LiveTvSourceType.M3u || source.url.isHttpUrl()) store.deletePlaylistFile(source.id)
                         }
+                        ReshapedSync.onLocalChange()
                     }
                     _uiState.update { state ->
                         val errors = state.sourceErrors - source.id
@@ -681,6 +690,93 @@ object LiveTvRepository {
         } else {
             channels.filter { it.group !in hiddenGroups && it.hideKey !in hiddenKeys }
         }
+
+    // endregion
+
+    // region Cloud sync (reshaped/sync)
+
+    /** What [profileId] has now: the shown state when it is loaded, else the saved files. */
+    internal suspend fun syncSnapshot(context: Context, profileId: Int): LiveTvSyncData {
+        val shown = withContext(serial) {
+            if (loadedProfileId != profileId || storage == null) return@withContext null
+            val state = _uiState.value
+            LiveTvSyncData(
+                sources = state.sources.filter { it.isSyncable },
+                favorites = state.favoriteUrls,
+                hiddenGroups = state.hiddenGroups,
+                hiddenChannels = state.hiddenChannelKeys,
+                groupNames = state.groupNames,
+                groupOrder = groupOrder,
+                recent = state.recentChannel,
+            )
+        }
+        return shown ?: withContext(writer) { LiveTvStorage(context.applicationContext, profileId).syncData() }
+    }
+
+    /**
+     * Makes the change sync brought in ([before] to [after]) on top of what [profileId] has now,
+     * saves it, and shows it when the profile is loaded. Only changed sources load again.
+     */
+    internal suspend fun applySync(context: Context, profileId: Int, before: LiveTvSyncData, after: LiveTvSyncData) {
+        if (before == after) return
+        val appContext = context.applicationContext
+        val applied = withContext(serial) {
+            val store = storage
+            if (loadedProfileId != profileId || store == null) return@withContext false
+            val oldSources = _uiState.value.sources
+            _uiState.update { state ->
+                state.copy(
+                    sources = state.sources.withSyncChange(before.sources, after.sources, store::newSourceId),
+                    favoriteUrls = state.favoriteUrls.withSyncChange(before.favorites, after.favorites),
+                    hiddenGroups = state.hiddenGroups.withSyncChange(before.hiddenGroups, after.hiddenGroups),
+                    hiddenChannelKeys = state.hiddenChannelKeys.withSyncChange(before.hiddenChannels, after.hiddenChannels),
+                    groupNames = state.groupNames.withSyncChange(before.groupNames, after.groupNames),
+                    recentChannel = if (before.recent != after.recent) after.recent else state.recentChannel,
+                )
+            }
+            if (before.groupOrder != after.groupOrder) groupOrder = after.groupOrder
+            _uiState.update { it.copy(groups = orderedGroups(it.groupCounts.keys, it.groupNames)) }
+            val state = _uiState.value
+            val sources = state.sources
+            if (sources != oldSources) {
+                val kept = sources.associateBy { it.id }
+                oldSources.filter { it.id !in kept }.forEach { gone ->
+                    sourceJobs.remove(gone.id)?.cancel()
+                    loaded.remove(gone.id)
+                }
+                LiveTvStalker.clearSession()
+                val oldById = oldSources.associateBy { it.id }
+                sources.filter { oldById[it.id] != it }.forEach { launchSourceLoad(it, adding = false) }
+                publish()
+                updateLoading()
+            } else {
+                refreshShownChannels()
+            }
+            val order = groupOrder
+            scope.launch(writer) {
+                store.saveSources(sources)
+                store.saveFavoriteUrls(state.favoriteUrls)
+                store.saveHiddenGroups(state.hiddenGroups)
+                store.saveHiddenChannelKeys(state.hiddenChannelKeys)
+                store.saveGroupNames(state.groupNames)
+                store.saveGroupOrder(order)
+                state.recentChannel?.let(store::saveRecentChannel)
+            }
+            true
+        }
+        if (applied) return
+        withContext(writer) {
+            val store = LiveTvStorage(appContext, profileId)
+            val sources = store.sources()
+            store.saveSources(sources.withSyncChange(before.sources, after.sources, store::newSourceId))
+            store.saveFavoriteUrls(store.favoriteUrls().withSyncChange(before.favorites, after.favorites))
+            store.saveHiddenGroups(store.hiddenGroups().withSyncChange(before.hiddenGroups, after.hiddenGroups))
+            store.saveHiddenChannelKeys(store.hiddenChannelKeys().withSyncChange(before.hiddenChannels, after.hiddenChannels))
+            store.saveGroupNames(store.groupNames().withSyncChange(before.groupNames, after.groupNames))
+            if (before.groupOrder != after.groupOrder) store.saveGroupOrder(after.groupOrder)
+            if (before.recent != after.recent) after.recent?.let(store::saveRecentChannel)
+        }
+    }
 
     // endregion
 

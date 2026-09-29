@@ -27,6 +27,10 @@ if (autoSyncFork) {
 }
 // Seekr seek-preview key, supplied to CI builds from the SEEKR_API_KEY secret.
 defaults.buildConfigField("String", "SEEKR_API_KEY", buildConfigString(localProperties.getProperty("SEEKR_API_KEY", "").trim()))
+// Google sign-in for Reshaped sync (a "TVs and Limited Input devices" OAuth client), from the
+// RESHAPED_GOOGLE_TV_CLIENT_ID / _SECRET secrets. Without them, sign-in shows as not set up.
+defaults.buildConfigField("String", "RESHAPED_GOOGLE_TV_CLIENT_ID", buildConfigString(resolveProperty("RESHAPED_GOOGLE_TV_CLIENT_ID", "")))
+defaults.buildConfigField("String", "RESHAPED_GOOGLE_TV_CLIENT_SECRET", buildConfigString(resolveProperty("RESHAPED_GOOGLE_TV_CLIENT_SECRET", "")))
 // In-app updater: the fork's own GitHub releases.
 defaults.buildConfigField("String", "GITHUB_OWNER", buildConfigString(resolveProperty("NUVIO_UPDATE_GITHUB_OWNER", "NuvioMedia")))
 defaults.buildConfigField("String", "GITHUB_REPO", buildConfigString(resolveProperty("NUVIO_UPDATE_GITHUB_REPO", "NuvioTV")))

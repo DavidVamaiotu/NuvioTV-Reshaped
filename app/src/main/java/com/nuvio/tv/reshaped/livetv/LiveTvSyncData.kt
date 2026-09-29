@@ -1,0 +1,78 @@
+package com.nuvio.tv.reshaped.livetv
+
+/**
+ * One profile's Live TV data that Reshaped sync carries between devices (see reshaped/sync).
+ * Playlists imported from a file stay on the device that has the file, so they are left out.
+ */
+internal data class LiveTvSyncData(
+    val sources: List<LiveTvSource> = emptyList(),
+    val favorites: Set<String> = emptySet(),
+    val hiddenGroups: Set<String> = emptySet(),
+    val hiddenChannels: Set<Long> = emptySet(),
+    val groupNames: Map<String, String> = emptyMap(),
+    val groupOrder: List<String> = emptyList(),
+    val recent: LiveTvRecentChannel? = null,
+)
+
+internal val LiveTvSource.isSyncable: Boolean
+    get() = type != LiveTvSourceType.M3u || url.isHttpUrl()
+
+/**
+ * [current] with the change from [before] to [after] made on top: what sync brought in, without
+ * undoing an edit made here while it ran.
+ */
+internal fun <T> Set<T>.withSyncChange(before: Set<T>, after: Set<T>): Set<T> {
+    if (before == after) return this
+    val added = after - before
+    val removed = before - after
+    return (this - removed) + added
+}
+
+internal fun <K, V> Map<K, V>.withSyncChange(before: Map<K, V>, after: Map<K, V>): Map<K, V> {
+    if (before == after) return this
+    val result = toMutableMap()
+    before.keys.filterNot(after::containsKey).forEach(result::remove)
+    after.forEach { (key, value) -> if (before[key] != value) result[key] = value }
+    return result
+}
+
+/**
+ * Sources are matched by what they are ([LiveTvSource.identity]), since each device gave its own
+ * ids. A changed source keeps its id here; a new one keeps the other device's id (so its hidden
+ * channels match), unless this device already uses that id.
+ */
+internal fun List<LiveTvSource>.withSyncChange(before: List<LiveTvSource>, after: List<LiveTvSource>, newId: () -> String): List<LiveTvSource> {
+    if (before == after) return this
+    val beforeByIdentity = before.associateBy { it.identity }
+    val afterByIdentity = after.associateBy { it.identity }
+    val result = mapNotNull { source ->
+        val key = source.identity
+        val was = beforeByIdentity[key]
+        val now = afterByIdentity[key]
+        when {
+            was != null && now == null -> null
+            now != null && now != was -> now.copy(id = source.id)
+            else -> source
+        }
+    }.toMutableList()
+    val identities = result.mapTo(HashSet()) { it.identity }
+    val ids = result.mapTo(HashSet()) { it.id }
+    after.forEach { source ->
+        if (source.identity in beforeByIdentity || source.identity in identities) return@forEach
+        val id = source.id.takeIf { it.isNotBlank() && it !in ids } ?: newId()
+        result += source.copy(id = id)
+        identities += source.identity
+        ids += id
+    }
+    return result
+}
+
+internal fun LiveTvStorage.syncData(): LiveTvSyncData = LiveTvSyncData(
+    sources = sources().filter { it.isSyncable },
+    favorites = favoriteUrls(),
+    hiddenGroups = hiddenGroups(),
+    hiddenChannels = hiddenChannelKeys(),
+    groupNames = groupNames(),
+    groupOrder = groupOrder(),
+    recent = recentChannel(),
+)
