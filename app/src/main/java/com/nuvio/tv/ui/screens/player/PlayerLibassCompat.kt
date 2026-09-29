@@ -102,18 +102,20 @@ private fun ExtractorsFactory.withAssMkvSupportCompat(
         val extractors = delegate.createExtractors()
         extractors.forEachIndexed { index, extractor ->
             // Stock MatroskaExtractor: replace with ASS-aware variant for libass support.
-            if (extractor is StockMatroskaExtractor) {
-                extractors[index] = NuvioAssMatroskaExtractor(subtitleParserFactory, assHandler)
+            // Nuvio RS: look through (and keep) the fork's extractor taps around Matroska.
+            val inner = extractor.underlyingImplementation
+            if (inner is StockMatroskaExtractor) {
+                extractors[index] = extractor.replaceInnermostExtractor(NuvioAssMatroskaExtractor(subtitleParserFactory, assHandler))
             }
             // The DV7 factory swaps in a vendored DvMatroskaExtractor for DV conversion.
             // Preserve its Dolby Vision transformer while enabling libass and zlib subtitle
             // decompression from the same vendored Matroska extractor base class.
-            if (extractor is DvMatroskaExtractor) {
-                extractors[index] = NuvioAssMatroskaExtractor(
+            if (inner is DvMatroskaExtractor) {
+                extractors[index] = extractor.replaceInnermostExtractor(NuvioAssMatroskaExtractor(
                     subtitleParserFactory = subtitleParserFactory,
                     assHandler = assHandler,
-                    dolbyVisionSampleTransformer = extractor.dolbyVisionSampleTransformer
-                )
+                    dolbyVisionSampleTransformer = inner.dolbyVisionSampleTransformer
+                ))
             }
         }
         extractors
