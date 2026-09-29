@@ -36,10 +36,10 @@ internal object LiveTvSections {
      */
     fun toSections(profileId: Int, data: LiveTvSyncData, base: SyncSections): Map<String, Map<String, JsonElement>> {
         val knownSources = SyncDoc.values(base, sources(profileId))
-        return toSections(profileId, data, knownSources)
+        return sectionsWith(profileId, data, knownSources)
     }
 
-    private fun toSections(profileId: Int, data: LiveTvSyncData, knownSources: Map<String, JsonElement>): Map<String, Map<String, JsonElement>> = mapOf(
+    private fun sectionsWith(profileId: Int, data: LiveTvSyncData, knownSources: Map<String, JsonElement>): Map<String, Map<String, JsonElement>> = mapOf(
         sources(profileId) to data.sources.associate { source ->
             val known = (knownSources[source.identity] as? JsonObject)?.text("id")
             source.identity to source.copy(id = known?.takeIf(String::isNotBlank) ?: source.id).toJson()
