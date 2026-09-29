@@ -169,6 +169,12 @@ private class ReadAheadSession(val key: String, private val file: File, private 
     @Volatile private var ring: RandomAccessFile? = null
     /** The connection being opened or read, so a seek or close can abort it when it stalls. */
     @Volatile private var activeSource: DataSource? = null
+    /**
+     * The filler while it waits for a connection to open. Closing a source does not stop an open
+     * in progress; interrupting the thread does (as ExoPlayer cancels its own loads), so a seek
+     * made while the last one is still connecting is not queued behind it. Guarded by lock.
+     */
+    private var opening: Thread? = null
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
 
@@ -298,6 +304,8 @@ private class ReadAheadSession(val key: String, private val file: File, private 
         lock.withLock {
             if (closed) return
             generation++
+            // A connect for the place just left is cancelled, not finished and then thrown away.
+            opening?.interrupt()
             windowStart = position
             windowEnd = position
             ended = contentLength != C.LENGTH_UNSET.toLong() && position >= contentLength
@@ -372,6 +380,7 @@ private class ReadAheadSession(val key: String, private val file: File, private 
             if (closed) return
             closed = true
             changed.signalAll()
+            opening?.interrupt()
             val untaken = handoff.also { handoff = null }
             (filler != null) to listOfNotNull(activeSource, untaken).also { activeSource = null }
         }
@@ -513,12 +522,18 @@ private class ReadAheadSession(val key: String, private val file: File, private 
         lock.withLock {
             if (forGeneration != generation || closed) return null
             activeSource = source
+            opening = Thread.currentThread()
         }
         val opened = try {
             source.open(DataSpec.Builder().setUri(key).setPosition(position).build())
         } catch (failure: Exception) {
             source.closeQuietly()
             throw failure
+        } finally {
+            lock.withLock { opening = null }
+            // Only the open may be cancelled: a cancel that landed as it returned must not end
+            // the filler's own waits.
+            Thread.interrupted()
         }
         lock.withLock {
             if (forGeneration != generation || closed) {
