@@ -192,7 +192,12 @@ internal object ReshapedSync {
                     // Sources this device has keep its own ids (the file may give another device's).
                     val localIds = liveTv.sources.associate { it.identity to it.id }
                     val fromFile = LiveTvSections.fromSections(profileId, merged)
-                    val after = fromFile.copy(sources = fromFile.sources.map { source -> localIds[source.identity]?.let { source.copy(id = it) } ?: source })
+                    val order = liveTv.sources.withIndex().associate { it.value.identity to it.index }
+                    val after = fromFile.copy(
+                        sources = fromFile.sources
+                            .map { source -> localIds[source.identity]?.let { source.copy(id = it) } ?: source }
+                            .sortedBy { order[it.identity] ?: Int.MAX_VALUE },
+                    )
                     LiveTvRepository.applySync(context, profileId, liveTv, after)
                 }
                 if (merged != remote || remoteFile.id == null) {
