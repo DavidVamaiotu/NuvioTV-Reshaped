@@ -221,6 +221,13 @@ internal class AudioSubtitleSyncController(
             if (!value) model = null
         }
 
+    /**
+     * Whether a better-fitting subtitle in the same language may replace the chosen one. Off when
+     * the user picked the subtitle: the others then only help time it, as AutoSync does.
+     */
+    @Volatile
+    var mayReplaceSubtitle: Boolean = true
+
     @Volatile
     private var playbackPositionMs = 0L
 
@@ -625,7 +632,12 @@ internal class AudioSubtitleSyncController(
     fun setReferenceSubtitles(list: List<ReferenceCandidate>) {
         candidates = list
         // Load the speech model while the viewer is still choosing, so it is ready for the pick.
-        if (enabled && list.isNotEmpty() && AsrModel.isReady(appContext)) ensureRecognizer()
+        // Not while AutoSync is still deciding (listening before a session): most of those runs
+        // never need it, and on 2 GB TVs it would compete with AutoSync for memory. The session
+        // loads it on takeover; speech heard meanwhile waits in the recognition queue.
+        if (enabled && list.isNotEmpty() && AsrModel.isReady(appContext) && (session != null || !listensBeforeSession)) {
+            ensureRecognizer()
+        }
         // Download the likeliest English references now so a later pick is instant.
         englishCandidates().take(PREFETCH_REFERENCES).forEach { fetchReference(it, onReady = null) }
         // Subtitles listed after the pick join the running search.
@@ -699,6 +711,12 @@ internal class AudioSubtitleSyncController(
                     rateCorrected = winner.model.segments.first().scale != 1.0,
                 ),
             )
+            return
+        }
+        if (!mayReplaceSubtitle) {
+            // The user chose this subtitle: keep it, and keep syncing it on its own evidence.
+            SyncLog.i("${winner.key} fits the audio better, but the chosen subtitle was picked by the user; keeping it")
+            stopPool()
             return
         }
         val label = candidates.firstOrNull { it.url == winner.key }?.label?.takeIf { it.isNotBlank() } ?: "another file"

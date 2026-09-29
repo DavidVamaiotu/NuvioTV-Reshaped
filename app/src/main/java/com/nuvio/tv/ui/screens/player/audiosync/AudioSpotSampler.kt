@@ -70,6 +70,9 @@ internal class AudioSpotSampler(
         val failure = AtomicReference<String?>(null)
         val connections = AtomicInteger(1)
         val refused = AtomicBoolean(false)
+        // A connection was opened and has not started reading yet: no other is tried meanwhile.
+        val opening = AtomicBoolean(false)
+        val nextCheckNs = AtomicLong(0L)
         val helpers = ArrayList<Thread>()
         val stop = { isCancelled() || failure.get() != null || bytes.get() >= maxBytes }
         val startedNs = System.nanoTime()
@@ -109,6 +112,7 @@ internal class AudioSpotSampler(
                     if (!reading) {
                         // This connection works: the next one may be tried.
                         reading = true
+                        if (extra) opening.set(false)
                         addConnection()
                     }
                     val endUs = (spotStartMs + spotMs) * 1_000L
@@ -118,6 +122,11 @@ internal class AudioSpotSampler(
                         val spotBytes = bytes.get() - spotStartBytes
                         if (spotBytes >= share && !wantsMore(spotBytes, timeUs - firstUs, startedNs)) break
                         if (!extractor.advance()) break
+                        // Conditions are checked every second, not only between spots, so a
+                        // connection that playback now allows opens without waiting out a spot.
+                        val now = System.nanoTime()
+                        val due = nextCheckNs.get()
+                        if (now >= due && nextCheckNs.compareAndSet(due, now + CONNECTION_CHECK_NS)) addConnection()
                     }
                     taken = null
                     onSpot(sampled.incrementAndGet(), bytes.get())
@@ -134,18 +143,24 @@ internal class AudioSpotSampler(
                     failure.compareAndSet(null, error.message ?: error.javaClass.simpleName)
                 }
             } finally {
+                if (extra && !reading) opening.set(false)
                 runCatching { extractor.release() }
             }
         }
 
         addConnection = add@{
-            if (refused.get() || queue.isEmpty() || stop()) return@add
+            if (refused.get() || opening.get() || queue.isEmpty() || stop()) return@add
             val count = connections.get()
             if (count >= maxWorkers || !runCatching(mayAddConnection).getOrDefault(false)) return@add
-            if (!connections.compareAndSet(count, count + 1)) return@add
+            if (!opening.compareAndSet(false, true)) return@add
+            if (!connections.compareAndSet(count, count + 1)) {
+                opening.set(false)
+                return@add
+            }
             val extractorsFactory = runCatching(newWorker).getOrNull()
             if (extractorsFactory == null) {
                 connections.decrementAndGet()
+                opening.set(false)
                 return@add
             }
             val thread = Thread({
@@ -198,5 +213,8 @@ internal class AudioSpotSampler(
 
         /** Download speed over stream bitrate needed to read past a spot's share. */
         const val MIN_SPEED_RATIO = 3.0
+
+        /** How often a reading connection checks whether another may open. */
+        const val CONNECTION_CHECK_NS = 1_000_000_000L
     }
 }

@@ -28,7 +28,9 @@ import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncTaps
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSources
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.update
 
 /** Thin TV adapter around the feature-owned Mobile AutoSync V2 pipeline. */
@@ -174,7 +176,8 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         .build()
     val audioFallback = AudioSyncFallback.of(this)
-    audioFallback?.arm()
+    // Like AutoSync itself: a subtitle the user picked is only synced, never swapped.
+    audioFallback?.arm(mayReplaceSubtitle = candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH)
 
     automaticSubtitleSyncJob = scope.launch {
         launch {
@@ -239,6 +242,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                 },
                 onReferenceReady = {},
                 onAnalysisOutcome = { outcome -> analysisOutcome = outcome },
+                streamHasTextTracks = ::streamHasTextTracks,
             )
 
             // No match in the first language: search the secondary subtitle language before the
@@ -456,6 +460,20 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
         job.invokeOnCompletion { selectedBodyDeferred.complete(null) }
     }
 }
+
+/**
+ * Whether the playing stream lists any text track (embedded, or attached by Nuvio), from the
+ * player's own track list; null until the player has read it. AutoSync stops waiting for embedded
+ * cues when this is false, so a file without subtitles goes to the audio sync straight away even
+ * when the subtitle index could not be read.
+ */
+private suspend fun PlayerRuntimeController.streamHasTextTracks(): Boolean? =
+    withContext(Dispatchers.Main.immediate) {
+        val player = _exoPlayer ?: return@withContext null
+        val tracks = player.currentTracks
+        if (tracks.isEmpty) return@withContext null
+        tracks.groups.any { it.type == C.TRACK_TYPE_TEXT }
+    }
 
 private fun Subtitle.toAutoSyncCandidate(): AutoSyncSubtitleCandidate =
     AutoSyncSubtitleCandidate(

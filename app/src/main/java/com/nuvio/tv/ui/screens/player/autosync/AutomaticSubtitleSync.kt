@@ -172,6 +172,12 @@ internal object AutomaticSubtitleSync {
         sourceHeaders: Map<String, String> = emptyMap(),
         /** A follow-up search in another language: log into the current debug session. */
         continueDebugSession: Boolean = false,
+        /**
+         * Whether the playing stream has any text track: false once the player has read the
+         * stream's track list and found none, null while it is not known yet. False ends the wait
+         * for embedded cues at once, since none can arrive.
+         */
+        streamHasTextTracks: (suspend () -> Boolean?)? = null,
     ): AutoSyncResolvedTimeline? {
         Unit
         val aggressiveMode = AutoSyncPreferences.aggressiveMode.value
@@ -603,6 +609,7 @@ internal object AutomaticSubtitleSync {
                         else -> LIVE_REFERENCE_WAIT_MS
                     },
                     allowSparseLiveReference = useSparseLiveReference,
+                    streamHasTextTracks = streamHasTextTracks,
                 )
                 referenceTracks = liveSelection.primary
                 forcedFallbackTracks = liveSelection.forcedFallback
@@ -1934,6 +1941,7 @@ internal object AutomaticSubtitleSync {
         target: List<SubtitleSyncCue>,
         waitMs: Long = LIVE_REFERENCE_WAIT_MS,
         allowSparseLiveReference: Boolean = false,
+        streamHasTextTracks: (suspend () -> Boolean?)? = null,
     ): ReferenceSelection {
         val targetSpan = referenceSpanMs(target).coerceAtLeast(1L)
         val started = SystemClock.elapsedRealtime()
@@ -2009,6 +2017,12 @@ internal object AutomaticSubtitleSync {
 
             val elapsedMs = SystemClock.elapsedRealtime() - started
             if (elapsedMs >= waitMs) break
+            if (prepared.isEmpty() && streamHasTextTracks?.let { runCatching { it() }.getOrNull() } == false) {
+                AutoSyncDebugLog.info {
+                    "stream has no text tracks; live wait ended after ${elapsedMs}ms"
+                }
+                break
+            }
             delay(minOf(LIVE_REFERENCE_POLL_MS, waitMs - elapsedMs))
         }
 
@@ -2475,7 +2489,6 @@ internal object EmbeddedSubtitleCueStore {
     private const val SEEK_DEDUP_WINDOW_MS = 1_500L
     private const val SEEK_TARGET_TOLERANCE_MS = 1_000L
     private const val MAX_RETAINED_GENERATIONS = 6
-    private const val MAX_RETAINED_SOURCES = 8
 
     private data class Track(
         var language: String?,
@@ -2496,8 +2509,6 @@ internal object EmbeddedSubtitleCueStore {
     private val generations = mutableMapOf<String, Long>()
     private val lastSeekTargetMs = mutableMapOf<String, Long?>()
     private val lastSeekWallMs = mutableMapOf<String, Long>()
-    /** Streams by when they were last started, oldest first. */
-    private val recentSources = ArrayDeque<String>()
 
     fun reset(sourceKey: String) {
         if (sourceKey.isBlank()) return
@@ -2505,19 +2516,13 @@ internal object EmbeddedSubtitleCueStore {
         var generation = 0L
         synchronized(lock) {
             generation = (generations[sourceKey] ?: 0L) + 1L
-            // Cues of the last few streams are kept, as before, so a stream started while another
-            // player is still winding down (or resetting) keeps its own; only streams older than
-            // that are dropped, rather than kept for the whole app session. Generation counters
-            // are kept so they never repeat.
-            recentSources.remove(sourceKey)
-            recentSources.addLast(sourceKey)
-            while (recentSources.size > MAX_RETAINED_SOURCES) {
-                val oldest = recentSources.removeFirst()
-                sources.remove(oldest)
-                retainedGenerations.remove(oldest)
-                lastSeekTargetMs.remove(oldest)
-                lastSeekWallMs.remove(oldest)
-            }
+            // Only the player's current stream is ever read again (a return to an earlier one
+            // resets it anyway), so cues of earlier streams are dropped rather than kept for the
+            // whole app session. Generation counters are kept so they never repeat.
+            sources.keys.retainAll { it == sourceKey }
+            retainedGenerations.keys.retainAll { it == sourceKey }
+            lastSeekTargetMs.keys.retainAll { it == sourceKey }
+            lastSeekWallMs.keys.retainAll { it == sourceKey }
             sources[sourceKey] = linkedMapOf()
             retainedGenerations.remove(sourceKey)
             generations[sourceKey] = generation

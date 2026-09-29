@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: Live TV guide, preview sound, category renaming and fixes
+# Release trigger: send debug logs to a phone by QR code
 
 
 on:
