@@ -1,1 +1,3 @@
-- **Send debug logs to your phone.** Settings > Nuvio Reshaped > Subtitle AutoSync > Send debug logs to phone shows a QR code. Scan it with a phone on the same network to download the latest AutoSync reports and the audio sync log, instead of needing a computer.
+- **Sync with Google.** Settings > Nuvio Reshaped > Sync keeps Reshaped settings and Live TV (sources and logins, favourites, categories, last channel) the same on your TVs and phone. Sign in by scanning the QR code with your phone. Both switches are off until you turn them on, and the data stays in one file in your own Google Drive.
+- **Faster, steadier seeking.** Rapid seeks cancel the stale connection instead of waiting for it.
+- **Better styled subtitles** and a lighter fallback for the pill navigation glass effect.
