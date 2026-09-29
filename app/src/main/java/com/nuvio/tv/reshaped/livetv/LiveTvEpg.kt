@@ -4,7 +4,7 @@ import android.util.Xml
 import java.io.InputStream
 import java.time.Instant
 import java.time.LocalDateTime
-import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -51,6 +51,10 @@ internal class LiveTvGuideRequest(
                 if (!keys.add(channel.guideKey)) return@forEach
                 val name = liveTvNameKey(channel.name)
                 if (name.isNotEmpty()) byName.getOrPut(name) { ArrayList(1) } += channel.guideKey
+                // Guides often list a channel by the playlist's tvg-name rather than its shown name.
+                channel.tvgName?.let(::liveTvNameKey)?.takeIf { it.isNotEmpty() && it != name }?.let { alias ->
+                    byName.getOrPut(alias) { ArrayList(1) } += channel.guideKey
+                }
                 if (channel.logoUrl.isNullOrBlank()) withoutLogo += channel.guideKey
             }
             return LiveTvGuideRequest(keys, byName, withoutLogo)
@@ -362,9 +366,6 @@ internal fun liveTvGuideKey(tvgId: String?, name: String): String =
 private const val NAME_KEY_PREFIX = "\u0001"
 
 internal object LiveTvClock {
-    private val whitespace = Regex("\\s+")
-    private val offsetFormatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z")
-    private val localFormatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss")
     private val clockFormatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
 
     fun nowEpochMs(): Long = System.currentTimeMillis()
@@ -377,21 +378,50 @@ internal object LiveTvClock {
     fun formatSpan(programme: LiveTvProgramme): String =
         "${formatClock(programme.startEpochMs)} – ${formatClock(programme.stopEpochMs)}"
 
-    /** XMLTV `20260927213000 +0200` (or without an offset, then in local time). */
+    /**
+     * XMLTV `20260927213000 +0200`, also written `+02:00`, `+0200` without the space, `Z`/`UTC`/`GMT`,
+     * or with no offset (then local time). Seconds may be left out. Parsed by hand: a guide has
+     * hundreds of thousands of these.
+     */
     fun parseXmlTvTimestamp(value: String): Long? {
-        val parts = value.trim().split(whitespace, limit = 2)
-        val digits = parts.firstOrNull().orEmpty()
-        val normalized = when (digits.length) {
-            12 -> "${digits}00"
-            14 -> digits
-            else -> return null
+        val text = value.trim()
+        var digits = 0
+        while (digits < text.length && digits < 14 && text[digits].isDigit()) digits++
+        if (digits != 12 && digits != 14) return null
+        fun number(from: Int, length: Int): Int {
+            var result = 0
+            for (i in from until from + length) result = result * 10 + (text[i] - '0')
+            return result
         }
-        return runCatching {
-            if (parts.size > 1) {
-                OffsetDateTime.parse("$normalized ${parts[1]}", offsetFormatter).toInstant().toEpochMilli()
-            } else {
-                LocalDateTime.parse(normalized, localFormatter).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val year = number(0, 4)
+        val month = number(4, 2)
+        val day = number(6, 2)
+        val hour = number(8, 2)
+        val minute = number(10, 2)
+        val second = if (digits == 14) number(12, 2) else 0
+        if (month !in 1..12 || day !in 1..31 || hour > 23 || minute > 59 || second > 60) return null
+        val local = runCatching { LocalDateTime.of(year, month, day, hour, minute, minOf(second, 59)) }.getOrNull() ?: return null
+        // A fraction of a second (".000") some guides add is skipped.
+        var index = digits
+        if (index < text.length && text[index] == '.') {
+            index++
+            while (index < text.length && text[index].isDigit()) index++
+        }
+        val zone = text.substring(index).trim()
+        val offsetSeconds = when {
+            zone.isEmpty() -> return local.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            zone.equals("Z", true) || zone.equals("UTC", true) || zone.equals("GMT", true) -> 0
+            zone[0] == '+' || zone[0] == '-' -> {
+                val hhmm = zone.substring(1).replace(":", "")
+                if (hhmm.length !in 2..4 || !hhmm.all(Char::isDigit)) return null
+                val hours = hhmm.take(2).toInt()
+                val minutes = if (hhmm.length >= 4) hhmm.substring(2, 4).toInt() else 0
+                val total = hours * 3600 + minutes * 60
+                if (zone[0] == '-') -total else total
             }
-        }.getOrNull()
+            // A region ("Europe/London"); abbreviations like "BST" are ambiguous and left out.
+            else -> return runCatching { local.atZone(ZoneId.of(zone)).toInstant().toEpochMilli() }.getOrNull()
+        }
+        return (local.toEpochSecond(ZoneOffset.UTC) - offsetSeconds) * 1000L
     }
 }

@@ -131,4 +131,44 @@ class LiveTvPlaylistParserTest {
         // None of these has a logo in the playlist, so the guide's is used.
         assertEquals("https://logo/itv.png", guide.logos[channels[1].guideKey])
     }
+
+    @Test
+    fun keepsTvgNameWhenItDiffersFromTheShownName() {
+        val playlist = parse(
+            """
+            #EXTM3U
+            #EXTINF:-1 tvg-name="BBC One HD",UK: BBC 1
+            https://stream.example/1.ts
+            #EXTINF:-1 tvg-name="Two",Two
+            https://stream.example/2.ts
+            """.trimIndent(),
+        )
+        assertEquals("BBC One HD", playlist.channels[0].tvgName)
+        assertEquals(null, playlist.channels[1].tvgName)
+    }
+
+    @Test
+    fun findsTheGuideOfAnXtreamM3uLink() {
+        assertEquals(
+            "http://dns.example:8080/xmltv.php?username=user&password=pass",
+            xtreamGuideUrlFor("http://dns.example:8080/get.php?username=user&password=pass&type=m3u_plus&output=ts"),
+        )
+        assertEquals(null, xtreamGuideUrlFor("https://lists.example/list.m3u"))
+        assertEquals(null, xtreamGuideUrlFor("http://dns.example/get.php?type=m3u"))
+    }
+
+    @Test
+    fun readsGuideTimesInEveryCommonForm() {
+        val expected = java.time.Instant.parse("2026-09-27T19:30:00Z").toEpochMilli()
+        listOf(
+            "20260927213000 +0200",
+            "20260927213000+0200",
+            "20260927213000 +02:00",
+            "202609272130 +0200",
+            "20260927193000 Z",
+            "20260927193000 UTC",
+            "20260927213000.000 +0200",
+        ).forEach { assertEquals(it, expected, LiveTvClock.parseXmlTvTimestamp(it)) }
+        assertEquals(null, LiveTvClock.parseXmlTvTimestamp("2026092719"))
+    }
 }

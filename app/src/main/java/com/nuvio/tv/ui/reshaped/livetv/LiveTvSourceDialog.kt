@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -49,6 +50,7 @@ import com.nuvio.tv.reshaped.net.LanAddress
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvSetupServer
 import com.nuvio.tv.reshaped.livetv.LiveTvSource
+import com.nuvio.tv.reshaped.livetv.LiveTvSourceGuide
 import com.nuvio.tv.reshaped.livetv.LiveTvSourceType
 import com.nuvio.tv.reshaped.livetv.LiveTvStalkerSettings
 import com.nuvio.tv.reshaped.livetv.LiveTvXtreamSettings
@@ -76,6 +78,10 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
     var stalkerMac by rememberSaveable { mutableStateOf("") }
     var stalkerUser by rememberSaveable { mutableStateOf("") }
     var stalkerPassword by rememberSaveable { mutableStateOf("") }
+    var epgLink by rememberSaveable { mutableStateOf("") }
+    /** The saved source the form edits; null while adding. */
+    var editingId by rememberSaveable { mutableStateOf<String?>(null) }
+    val editing = editingId?.let { id -> uiState.sources.firstOrNull { it.id == id } }
     val firstFocus = remember { FocusRequester() }
 
     // Back to the list once a source was added (or entered again) while the dialog was open; the
@@ -87,8 +93,9 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
         seenAdds = uiState.addedCount
         if (openedEmpty && uiState.sources.size == 1) onDismiss() else {
             adding = false
+            editingId = null
             m3uUrl = ""; xtreamServer = ""; xtreamUser = ""; xtreamPassword = ""
-            stalkerPortal = ""; stalkerMac = ""; stalkerUser = ""; stalkerPassword = ""
+            stalkerPortal = ""; stalkerMac = ""; stalkerUser = ""; stalkerPassword = ""; epgLink = ""
         }
     }
 
@@ -120,14 +127,28 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
     // Removing the last source goes to the form; a removed row's focus moves to the first row.
     LaunchedEffect(adding, uiState.sources.size) {
         if (!uiState.hasSource) adding = true
+        // The source being edited was removed (on another device, through sync).
+        if (editingId != null && editing == null) editingId = null
         withFrameNanos { }
         runCatching { firstFocus.requestFocus() }
     }
 
     NuvioDialog(
         onDismiss = onDismiss,
-        title = stringResource(if (adding) R.string.live_tv_source_add_title else R.string.live_tv_sources_title),
-        subtitle = stringResource(if (adding) R.string.live_tv_source_description else R.string.live_tv_sources_description),
+        title = stringResource(
+            when {
+                editing != null -> R.string.live_tv_source_edit_title
+                adding -> R.string.live_tv_source_add_title
+                else -> R.string.live_tv_sources_title
+            },
+        ),
+        subtitle = stringResource(
+            when {
+                editing != null -> R.string.live_tv_source_edit_description
+                adding -> R.string.live_tv_source_description
+                else -> R.string.live_tv_sources_description
+            },
+        ),
         width = 860.dp,
         // The platform's default dialog width is narrower than this layout on TVs.
         usePlatformDefaultWidth = false,
@@ -172,7 +193,23 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                             source = source,
                             channelCount = uiState.sourceCounts[source.id] ?: 0,
                             error = uiState.sourceErrors[source.id]?.message(context),
+                            guide = uiState.sourceGuides[source.id],
                             confirmingRemove = confirmRemoveId == source.id,
+                            onEdit = {
+                                confirmRemoveId = null
+                                tab = source.type
+                                m3uUrl = source.url
+                                xtreamServer = source.xtream.serverUrl
+                                xtreamUser = source.xtream.username
+                                xtreamPassword = source.xtream.password
+                                stalkerPortal = source.stalker.portalUrl
+                                stalkerMac = source.stalker.macAddress
+                                stalkerUser = source.stalker.username
+                                stalkerPassword = source.stalker.password
+                                epgLink = source.epgUrl
+                                editingId = source.id
+                                adding = true
+                            },
                             onRemove = {
                                 if (confirmRemoveId == source.id) {
                                     confirmRemoveId = null
@@ -198,7 +235,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                         LiveTvPillButton(text = stringResource(R.string.live_tv_close), onClick = onDismiss)
                         LiveTvPillButton(text = stringResource(R.string.live_tv_add_source_button), onClick = { adding = true })
                     }
-                } else {
+                } else if (editing == null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm)) {
                         LiveTvPillButton(
                             text = stringResource(R.string.live_tv_source_m3u),
@@ -217,20 +254,32 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                             onClick = { tab = LiveTvSourceType.Stalker },
                         )
                     }
-
+                }
+                if (adding) {
+                    // Editing has no kind to pick: the first field takes the focus instead.
+                    val fieldFocus = if (editing != null) Modifier.focusRequester(firstFocus) else Modifier
                     when (tab) {
                         LiveTvSourceType.M3u -> {
-                            LiveTvTextField(m3uUrl, { m3uUrl = it }, stringResource(R.string.live_tv_m3u_hint))
+                            if (editing != null && !editing.url.startsWith("http", ignoreCase = true)) {
+                                // An imported file: only its guide can change.
+                                Text(
+                                    text = stringResource(R.string.live_tv_imported_file, editing.url),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = NuvioTheme.colors.TextSecondary,
+                                )
+                            } else {
+                                LiveTvTextField(m3uUrl, { m3uUrl = it }, stringResource(R.string.live_tv_m3u_hint), fieldFocus)
+                            }
                         }
                         LiveTvSourceType.Xtream -> {
-                            LiveTvTextField(xtreamServer, { xtreamServer = it }, stringResource(R.string.live_tv_xtream_server_hint))
+                            LiveTvTextField(xtreamServer, { xtreamServer = it }, stringResource(R.string.live_tv_xtream_server_hint), fieldFocus)
                             Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm)) {
                                 LiveTvTextField(xtreamUser, { xtreamUser = it }, stringResource(R.string.live_tv_username_hint), Modifier.weight(1f), keyboardType = KeyboardType.Text)
                                 LiveTvTextField(xtreamPassword, { xtreamPassword = it }, stringResource(R.string.live_tv_password_hint), Modifier.weight(1f), password = true)
                             }
                         }
                         LiveTvSourceType.Stalker -> {
-                            LiveTvTextField(stalkerPortal, { stalkerPortal = it }, stringResource(R.string.live_tv_stalker_portal_hint))
+                            LiveTvTextField(stalkerPortal, { stalkerPortal = it }, stringResource(R.string.live_tv_stalker_portal_hint), fieldFocus)
                             LiveTvTextField(stalkerMac, { stalkerMac = it }, stringResource(R.string.live_tv_stalker_mac_hint), keyboardType = KeyboardType.Ascii)
                             Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm)) {
                                 LiveTvTextField(stalkerUser, { stalkerUser = it }, stringResource(R.string.live_tv_optional_username_hint), Modifier.weight(1f), keyboardType = KeyboardType.Text)
@@ -238,6 +287,13 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                             }
                         }
                     }
+                    // An imported file being edited has no other field to take the focus.
+                    val guideFocus = if (editing != null && tab == LiveTvSourceType.M3u && !editing.url.startsWith("http", ignoreCase = true)) {
+                        Modifier.focusRequester(firstFocus)
+                    } else {
+                        Modifier
+                    }
+                    LiveTvTextField(epgLink, { epgLink = it }, stringResource(R.string.live_tv_epg_hint), guideFocus)
 
                     val status = when {
                         uiState.isLoading -> stringResource(R.string.live_tv_loading)
@@ -257,20 +313,27 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                         horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm, Alignment.End),
                     ) {
                         if (uiState.hasSource) {
-                            LiveTvPillButton(text = stringResource(R.string.live_tv_back), onClick = { adding = false })
+                            LiveTvPillButton(text = stringResource(R.string.live_tv_back), onClick = { adding = false; editingId = null })
                         } else {
                             LiveTvPillButton(text = stringResource(R.string.live_tv_close), onClick = onDismiss)
                         }
                         LiveTvPillButton(
-                            text = stringResource(R.string.live_tv_load),
+                            text = stringResource(if (editing != null) R.string.live_tv_save_source else R.string.live_tv_load),
                             enabled = !uiState.isLoading,
                             onClick = {
-                                when (tab) {
-                                    LiveTvSourceType.M3u -> LiveTvRepository.loadM3uUrl(m3uUrl)
-                                    LiveTvSourceType.Xtream -> LiveTvRepository.loadXtream(LiveTvXtreamSettings(xtreamServer, xtreamUser, xtreamPassword))
-                                    LiveTvSourceType.Stalker -> LiveTvRepository.loadStalker(
-                                        LiveTvStalkerSettings(stalkerPortal, stalkerMac, stalkerUser, stalkerPassword),
+                                val xtream = LiveTvXtreamSettings(xtreamServer, xtreamUser, xtreamPassword)
+                                val stalker = LiveTvStalkerSettings(stalkerPortal, stalkerMac, stalkerUser, stalkerPassword)
+                                if (editing != null) {
+                                    LiveTvRepository.updateSource(
+                                        editing.id,
+                                        LiveTvSource(editing.id, editing.type, m3uUrl, stalker = stalker, xtream = xtream, epgUrl = epgLink),
                                     )
+                                } else {
+                                    when (tab) {
+                                        LiveTvSourceType.M3u -> LiveTvRepository.loadM3uUrl(m3uUrl, epgLink)
+                                        LiveTvSourceType.Xtream -> LiveTvRepository.loadXtream(xtream, epgLink)
+                                        LiveTvSourceType.Stalker -> LiveTvRepository.loadStalker(stalker, epgLink)
+                                    }
                                 }
                             },
                         )
@@ -281,13 +344,15 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
     }
 }
 
-/** A saved source: its name, kind and channel count (or why it failed), and a two-press Remove. */
+/** A saved source: its name, kind, channel count and guide (or why it failed), Edit, and a two-press Remove. */
 @Composable
 private fun LiveTvSourceRow(
     source: LiveTvSource,
     channelCount: Int,
     error: String?,
+    guide: LiveTvSourceGuide?,
     confirmingRemove: Boolean,
+    onEdit: () -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -314,8 +379,16 @@ private fun LiveTvSourceRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            val guideText = when (guide?.state) {
+                null -> null
+                LiveTvSourceGuide.State.None -> stringResource(R.string.live_tv_guide_none)
+                LiveTvSourceGuide.State.Loading -> stringResource(R.string.live_tv_guide_loading)
+                LiveTvSourceGuide.State.Failed -> stringResource(R.string.live_tv_guide_failed)
+                LiveTvSourceGuide.State.Loaded -> stringResource(R.string.live_tv_guide_loaded, guide.channels)
+            }
+            val summary = stringResource(R.string.live_tv_source_summary, kind, channelCount)
             Text(
-                text = error ?: stringResource(R.string.live_tv_source_summary, kind, channelCount),
+                text = error ?: guideText?.let { "$summary · $it" } ?: summary,
                 style = MaterialTheme.typography.bodySmall,
                 color = if (error != null) NuvioTheme.colors.Error else NuvioTheme.colors.TextSecondary,
                 maxLines = 1,
@@ -323,9 +396,14 @@ private fun LiveTvSourceRow(
             )
         }
         LiveTvPillButton(
+            text = stringResource(R.string.live_tv_edit_source),
+            onClick = onEdit,
+            modifier = modifier,
+        )
+        Spacer(Modifier.width(NuvioTheme.spacing.sm))
+        LiveTvPillButton(
             text = stringResource(if (confirmingRemove) R.string.live_tv_remove_confirm else R.string.live_tv_remove_source),
             onClick = onRemove,
-            modifier = modifier,
         )
     }
 }

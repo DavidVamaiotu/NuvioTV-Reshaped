@@ -1,5 +1,7 @@
 package com.nuvio.tv.reshaped.livetv
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+
 internal data class ParsedM3uPlaylist(
     val channels: List<LiveTvChannel>,
     val epgUrls: List<String>,
@@ -66,6 +68,7 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
                     streamUrl = url,
                     tvgId = current?.tvgId,
                     logoUrl = current?.logoUrl,
+                    tvgName = current?.tvgName?.takeIf { it != name },
                     group = groups.getOrPut(group) { group },
                     headers = if (extraHeaders.isEmpty()) {
                         defaults
@@ -81,7 +84,7 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
     return ParsedM3uPlaylist(channels = channels, epgUrls = epgUrls.toList())
 }
 
-private class M3uMetadata(val name: String, val tvgId: String?, val logoUrl: String?, val group: String)
+private class M3uMetadata(val name: String, val tvgId: String?, val tvgName: String?, val logoUrl: String?, val group: String)
 
 private val m3uAttributeRegex = Regex("""([\w-]+)="([^"]*)"""")
 
@@ -94,6 +97,7 @@ private fun parseExtInf(line: String): M3uMetadata {
     return M3uMetadata(
         name = displayName,
         tvgId = attributes["tvg-id"]?.takeIf(String::isNotBlank),
+        tvgName = attributes["tvg-name"]?.takeIf(String::isNotBlank),
         logoUrl = attributes["tvg-logo"]?.takeIf(String::isNotBlank),
         group = attributes["group-title"].orEmpty(),
     )
@@ -125,6 +129,25 @@ private fun parseExtHttpHeaders(value: String): Map<String, String> =
             if (key.isBlank() || headerValue.isBlank()) null else key to headerValue
         }
         .toMap()
+
+/**
+ * The guide of an Xtream panel's M3U link (`…/get.php?username=…&password=…`), as IPTV players
+ * use it when the playlist names no guide: the panel serves it at `xmltv.php` with the same login.
+ */
+internal fun xtreamGuideUrlFor(playlistUrl: String): String? {
+    val url = playlistUrl.toHttpUrlOrNull() ?: return null
+    if (!url.encodedPath.endsWith("/get.php", ignoreCase = true)) return null
+    val username = url.queryParameter("username")?.takeIf(String::isNotBlank) ?: return null
+    val password = url.queryParameter("password")?.takeIf(String::isNotBlank) ?: return null
+    val folder = url.encodedPath.dropLast("get.php".length)
+    return url.newBuilder()
+        .encodedPath(folder + "xmltv.php")
+        .query(null)
+        .addQueryParameter("username", username)
+        .addQueryParameter("password", password)
+        .build()
+        .toString()
+}
 
 internal fun defaultStreamHeaders(url: String): Map<String, String> =
     if (url.isHttpUrl()) LIVE_TV_STREAM_HEADERS else emptyMap()

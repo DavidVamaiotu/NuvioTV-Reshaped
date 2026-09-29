@@ -56,6 +56,8 @@ object LiveTvRepository {
     private const val UNSEEN_GRACE_MS = 10_000L
     /** Sources loaded at once on a refresh: each holds a connection and a parse buffer. */
     private const val PARALLEL_SOURCES = 2
+    /** Marks a Stalker portal's guide in the guide list; see [stalkerGuideLink]. */
+    private const val STALKER_GUIDE_PREFIX = "stalker-guide:"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _uiState = MutableStateFlow(LiveTvUiState())
@@ -225,19 +227,34 @@ object LiveTvRepository {
         }
     }
 
-    fun loadM3uUrl(url: String) {
+    fun loadM3uUrl(url: String, epgUrl: String = "") {
         val trimmed = url.trim()
-        launchAdd(LiveTvSource("", LiveTvSourceType.M3u, trimmed))
+        launchAdd(LiveTvSource("", LiveTvSourceType.M3u, trimmed, epgUrl = epgUrl.trim()))
     }
 
-    fun loadXtream(settings: LiveTvXtreamSettings) {
+    fun loadXtream(settings: LiveTvXtreamSettings, epgUrl: String = "") {
         val normalized = settings.normalized()
-        launchAdd(LiveTvSource("", LiveTvSourceType.Xtream, normalized.serverUrl, xtream = normalized))
+        launchAdd(LiveTvSource("", LiveTvSourceType.Xtream, normalized.serverUrl, xtream = normalized, epgUrl = epgUrl.trim()))
     }
 
-    fun loadStalker(settings: LiveTvStalkerSettings) {
+    fun loadStalker(settings: LiveTvStalkerSettings, epgUrl: String = "") {
         val normalized = settings.normalized()
-        launchAdd(LiveTvSource("", LiveTvSourceType.Stalker, normalized.portalUrl, stalker = normalized))
+        launchAdd(LiveTvSource("", LiveTvSourceType.Stalker, normalized.portalUrl, stalker = normalized, epgUrl = epgUrl.trim()))
+    }
+
+    /**
+     * Saves a changed source (a new server address, login or guide link) in place of the saved
+     * one: it keeps its id, so its hidden channels and categories stay, and its favourites and
+     * last channel move to the new links once it loaded. A failed load changes nothing.
+     */
+    fun updateSource(sourceId: String, edited: LiveTvSource) {
+        if (_uiState.value.sources.none { it.id == sourceId }) return
+        val source = when (edited.type) {
+            LiveTvSourceType.M3u -> edited.copy(url = edited.url.trim())
+            LiveTvSourceType.Xtream -> edited.xtream.normalized().let { edited.copy(url = it.serverUrl, xtream = it) }
+            LiveTvSourceType.Stalker -> edited.stalker.normalized().let { edited.copy(url = it.portalUrl, stalker = it) }
+        }
+        launchAdd(source.copy(id = sourceId, epgUrl = edited.epgUrl.trim()))
     }
 
     /**
@@ -502,7 +519,9 @@ object LiveTvRepository {
                 val known = _uiState.value.sources.any { it.id == source.id }
                 if (!adding && !known) return@withContext
                 outcome.onSuccess { (result, notice) ->
+                    val previous = loaded[source.id]
                     loaded[source.id] = result
+                    if (adding && known && previous != null) carryOverFavorites(source, previous, result, store)
                     if (adding) {
                         val sources = _uiState.value.sources.let { current ->
                             if (known) current.map { if (it.id == source.id) source else it } else current + source
@@ -543,7 +562,10 @@ object LiveTvRepository {
         job.start()
     }
 
-    private fun validate(source: LiveTvSource): LiveTvError? = when (source.type) {
+    private fun validate(source: LiveTvSource): LiveTvError? =
+        if (source.epgUrl.isNotBlank() && !source.epgUrl.isHttpUrl()) LiveTvError.GuideInvalidUrl else validateSource(source)
+
+    private fun validateSource(source: LiveTvSource): LiveTvError? = when (source.type) {
         LiveTvSourceType.M3u -> if (source.url.isBlank()) LiveTvError.InvalidUrl else null
         LiveTvSourceType.Xtream -> when {
             !source.xtream.isConfigured -> LiveTvError.XtreamRequired
@@ -570,14 +592,17 @@ object LiveTvRepository {
             LiveTvSourceType.M3u -> {
                 val file = withContext(Dispatchers.IO) { storage?.playlistFile(source.id) }
                 val playlist = when {
-                    file != null -> withContext(Dispatchers.IO) { file.bufferedReader().useLines { parseM3uPlaylist(it) } }
+                    // An imported file; a source edited to a link loads the link.
+                    file != null && !source.url.isHttpUrl() -> withContext(Dispatchers.IO) { file.bufferedReader().useLines { parseM3uPlaylist(it) } }
                     source.url.isHttpUrl() -> fetchM3u(source.url)
                     else -> throw LiveTvException(if (source.url.startsWith("http", ignoreCase = true)) LiveTvError.InvalidUrl else LiveTvError.FileEmpty)
                 }
                 if (playlist.channels.isEmpty()) {
                     throw LiveTvException(if (file != null) LiveTvError.FileNoChannels else LiveTvError.NoChannels)
                 }
-                playlist.channels to playlist.epgUrls
+                // An Xtream panel's M3U link names no guide more often than not; the panel still has one.
+                val guides = playlist.epgUrls.ifEmpty { listOfNotNull(xtreamGuideUrlFor(source.url)) }
+                playlist.channels to guides
             }
             LiveTvSourceType.Xtream -> {
                 val settings = source.xtream
@@ -590,22 +615,66 @@ object LiveTvRepository {
                 val (channels, incomplete) = LiveTvStalker.channels(source.stalker)
                 if (channels.isEmpty()) throw LiveTvException(LiveTvError.StalkerNoChannels)
                 if (incomplete) notice = LiveTvError.StalkerIncomplete
-                channels to emptyList()
+                // The portal's own guide (see [stalkerGuideLink]).
+                channels to listOf(stalkerGuideLink(source))
             }
         }
         // Ids only need to be unique within a source; the list keys on them across all of them.
         val tagged = ArrayList<LiveTvChannel>(channels.size)
+        val stalker = source.type == LiveTvSourceType.Stalker
         channels.forEach { channel ->
             val group = channel.group.trim()
+            // Portal channels without a guide id get one from their portal id, which the portal's guide uses.
+            val tvgId = if (stalker && channel.tvgId.isNullOrBlank()) "stalker.${source.id}.${channel.id}".lowercase() else channel.tvgId
             tagged += channel.copy(
                 id = "${source.id}/${channel.id}",
                 sourceId = source.id,
                 group = group,
+                tvgId = tvgId,
                 hideKey = liveTvHideKey(source.id, group, channel.name),
-                guideKey = liveTvGuideKey(channel.tvgId, channel.name),
+                guideKey = liveTvGuideKey(tvgId, channel.name),
             )
         }
-        return LoadedSource(tagged, epgUrls) to notice
+        // A guide link the viewer added comes first: it is what they chose over the source's own.
+        val guides = (listOfNotNull(source.epgUrl.trim().takeIf(String::isNotEmpty)) + epgUrls).distinct()
+        return LoadedSource(tagged, guides) to notice
+    }
+
+    /**
+     * A Stalker portal's guide, which is not a link but the portal's `get_epg_info`: a name for it
+     * in the guide list, changing with the portal and MAC so an edited source downloads it again.
+     */
+    private fun stalkerGuideLink(source: LiveTvSource): String {
+        val login = "${source.stalker.portalUrl.lowercase()}|${source.stalker.macAddress}"
+        return "$STALKER_GUIDE_PREFIX${source.id}:${Integer.toHexString(login.hashCode())}"
+    }
+
+    /**
+     * After an edit changed a source's links: favourites and the last channel of that source
+     * move to the same channel's new link (same category and name, or for Xtream and Stalker the
+     * same provider id). Runs on [serial].
+     */
+    private fun carryOverFavorites(source: LiveTvSource, before: LoadedSource, after: LoadedSource, store: LiveTvStorage) {
+        val state = _uiState.value
+        val recent = state.recentChannel
+        val wanted = before.channels.filter { it.streamUrl in state.favoriteUrls || it.streamUrl == recent?.streamUrl }
+        if (wanted.isEmpty()) return
+        val byKey = HashMap<Long, LiveTvChannel>(after.channels.size * 2)
+        after.channels.forEach { byKey.putIfAbsent(it.hideKey, it) }
+        val byId = if (source.type == LiveTvSourceType.M3u) emptyMap() else after.channels.associateBy { it.id }
+        val moved = HashMap<String, LiveTvChannel>()
+        wanted.forEach { old ->
+            val now = byKey[old.hideKey] ?: byId[old.id] ?: return@forEach
+            if (now.streamUrl != old.streamUrl) moved[old.streamUrl] = now
+        }
+        if (moved.isEmpty()) return
+        val favorites = state.favoriteUrls.mapTo(HashSet()) { moved[it]?.streamUrl ?: it }
+        val newRecent = recent?.let { r -> moved[r.streamUrl]?.let { r.copy(streamUrl = it.streamUrl, logoUrl = it.logoUrl) } ?: r }
+        _uiState.update { it.copy(favoriteUrls = favorites, recentChannel = newRecent) }
+        scope.launch(writer) {
+            store.saveFavoriteUrls(favorites)
+            newRecent?.let(store::saveRecentChannel)
+        }
     }
 
     private suspend fun fetchM3u(url: String): ParsedM3uPlaylist {
@@ -649,6 +718,16 @@ object LiveTvRepository {
                 guideLogos = if (hasGuide) it.guideLogos else emptyMap(),
                 isEpgLoading = hasGuide && (guideChanged || it.isEpgLoading),
                 isLoaded = true,
+                // A source's guide shows as loading until the next read says how it did.
+                sourceGuides = sources.associate { source ->
+                    val links = loaded[source.id]?.epgUrls
+                    source.id to when {
+                        links == null -> it.sourceGuides[source.id] ?: LiveTvSourceGuide.Loading
+                        links.isEmpty() -> LiveTvSourceGuide.None
+                        guideChanged -> LiveTvSourceGuide.Loading
+                        else -> it.sourceGuides[source.id] ?: LiveTvSourceGuide.Loading
+                    }
+                },
             )
         }
         if (!hasGuide) {
@@ -815,6 +894,25 @@ object LiveTvRepository {
         val cacheFile = File(guideDir(), LiveTvGuideCache.FILE_NAME)
         val cacheKey = LiveTvGuideCache.key(epgUrls, guideKeys, window)
         guideWindow = window
+        // Which sources each guide belongs to, and how a portal's guide is fetched. Read here, on [serial].
+        val sourceLinks = _uiState.value.sources.associate { it.id to loaded[it.id]?.epgUrls.orEmpty() }
+        val sourcesById = _uiState.value.sources.associateBy { it.id }
+        val aheadHours = (window.aheadMs / (60L * 60 * 1000)).toInt()
+        val downloads: List<suspend (File) -> Unit> = epgUrls.map { url ->
+            val portal = url.takeIf { it.startsWith(STALKER_GUIDE_PREFIX) }
+                ?.let { sourcesById[it.removePrefix(STALKER_GUIDE_PREFIX).substringBefore(':')] }
+            val fetch: suspend (File) -> Unit = if (portal != null) {
+                { file ->
+                    // The portal's channel id (after "<source>/") to the guide id the list keeps.
+                    val ids = HashMap<String, String>()
+                    channels.forEach { if (it.sourceId == portal.id) ids[it.id.substringAfter('/')] = it.guideKey }
+                    LiveTvStalker.downloadGuide(portal.stalker, ids, aheadHours, file)
+                }
+            } else {
+                { file -> LiveTvHttp.download(url, LIVE_TV_STREAM_HEADERS, file, LiveTvHttp.GUIDE_READ_TIMEOUT_S) }
+            }
+            fetch
+        }
         epgJob = scope.launch {
             withContext(Dispatchers.IO) {
                 // Guides of an earlier source.
@@ -824,9 +922,10 @@ object LiveTvRepository {
             var schedule: LiveTvSchedule = keptSchedule
             var nextReadAtMs = 0L
             var firstRead = true
-            val publishGuide = { kept: LiveTvSchedule, logos: Map<String, String>?, nowMs: Long ->
+            val publishGuide = { kept: LiveTvSchedule, logos: Map<String, String>?, nowMs: Long, failedLinks: Set<String>? ->
                 if (epgGeneration == generation) keptSchedule = kept
                 val current = currentProgrammes(kept, guideKeys, nowMs)
+                val guides = failedLinks?.let { guideStates(sourceLinks, it, kept, channels) }
                 _uiState.update { state ->
                     if (epgGeneration != generation) {
                         state
@@ -835,6 +934,7 @@ object LiveTvRepository {
                             guideLogos = if (logos == null || state.guideLogos == logos) state.guideLogos else logos,
                             guideVersion = state.guideVersion + 1,
                             currentProgrammes = current,
+                            sourceGuides = guides?.let { state.sourceGuides + it } ?: state.sourceGuides,
                         )
                     }
                 }
@@ -857,17 +957,17 @@ object LiveTvRepository {
                         if (saved != null) {
                             schedule = saved.schedule
                             nextReadAtMs = saved.nextReadAtMs
-                            publishGuide(schedule, saved.logos, nowMs)
+                            publishGuide(schedule, saved.logos, nowMs, emptySet())
                         } else {
                             val previous = schedule
                             val loaded = HashMap<String, List<LiveTvProgramme>>()
                             val logos = HashMap<String, String>()
                             val truncated = HashSet<String>()
-                            var failed = false
+                            val failedLinks = HashSet<String>()
                             epgUrls.forEachIndexed { index, epgUrl ->
-                                val guide = readGuide(epgUrl, guideFiles[index], request, nowMs, window, force)
+                                val guide = readGuide(downloads[index], guideFiles[index], request, nowMs, window, force)
                                 if (guide == null) {
-                                    failed = true
+                                    failedLinks += epgUrl
                                     return@forEachIndexed
                                 }
                                 guide.schedule.forEach { (key, list) ->
@@ -876,9 +976,10 @@ object LiveTvRepository {
                                 guide.logos.forEach(logos::putIfAbsent)
                                 // Each guide shows as soon as it is read; the slowest one holds back nothing.
                                 if (index < epgUrls.lastIndex) {
-                                    publishGuide(HashMap(previous).apply { putAll(loaded) }, HashMap(logos), nowMs)
+                                    publishGuide(HashMap(previous).apply { putAll(loaded) }, HashMap(logos), nowMs, null)
                                 }
                             }
+                            val failed = failedLinks.isNotEmpty()
                             if (force && epgGeneration == generation) forceGuideDownload = false
                             // A guide that failed keeps what it showed before.
                             schedule = if (failed && previous.isNotEmpty()) HashMap(previous).apply { putAll(loaded) } else loaded
@@ -888,7 +989,7 @@ object LiveTvRepository {
                                 nextScheduleReadAt(loaded, truncated, nowMs, EPG_MIN_READ_GAP_MS, EPG_DOWNLOAD_MS)
                             }
                             nextReadAtMs = if (failed) minOf(regular, nowMs + EPG_RETRY_MS) else regular
-                            publishGuide(schedule, logos, nowMs)
+                            publishGuide(schedule, logos, nowMs, failedLinks)
                             if (!failed && loaded.isNotEmpty() && epgGeneration == generation) {
                                 val entry = LiveTvGuideCache.Entry(loaded, logos, nextReadAtMs)
                                 withContext(Dispatchers.IO) { LiveTvGuideCache.write(cacheFile, cacheKey, guideFiles, entry) }
@@ -947,7 +1048,7 @@ object LiveTvRepository {
      * serves when the download fails. Null when there is no guide to read.
      */
     private suspend fun readGuide(
-        url: String,
+        download: suspend (File) -> Unit,
         file: File,
         request: LiveTvGuideRequest,
         nowMs: Long,
@@ -958,7 +1059,7 @@ object LiveTvRepository {
             val saved = withContext(Dispatchers.IO) { file.lastModified() }
             if (force || saved == 0L || nowMs - saved !in 0 until EPG_DOWNLOAD_MS) {
                 try {
-                    LiveTvHttp.download(url, LIVE_TV_STREAM_HEADERS, file, LiveTvHttp.GUIDE_READ_TIMEOUT_S)
+                    download(file)
                 } catch (cancel: CancellationException) {
                     throw cancel
                 } catch (error: Exception) {
@@ -972,6 +1073,25 @@ object LiveTvRepository {
         } catch (error: Exception) {
             Log.w(TAG, "Guide failed", error)
             return null
+        }
+    }
+
+    /** How each source's guide did: read for how many of its channels, or failed when every guide link of it did. */
+    private fun guideStates(
+        sourceLinks: Map<String, List<String>>,
+        failedLinks: Set<String>,
+        schedule: LiveTvSchedule,
+        channels: List<LiveTvChannel>,
+    ): Map<String, LiveTvSourceGuide> {
+        val counts = HashMap<String, Int>()
+        channels.forEach { if (!schedule[it.guideKey].isNullOrEmpty()) counts[it.sourceId] = (counts[it.sourceId] ?: 0) + 1 }
+        return sourceLinks.mapValues { (id, links) ->
+            val count = counts[id] ?: 0
+            when {
+                links.isEmpty() -> LiveTvSourceGuide.None
+                count == 0 && links.all(failedLinks::contains) -> LiveTvSourceGuide.Failed
+                else -> LiveTvSourceGuide(LiveTvSourceGuide.State.Loaded, count)
+            }
         }
     }
 

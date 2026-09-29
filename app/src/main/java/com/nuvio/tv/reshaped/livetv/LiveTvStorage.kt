@@ -54,6 +54,7 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
             url = optString("url"),
             stalker = LiveTvStalkerSettings(optString("portal"), optString("mac"), optString("stalkerUser"), optString("stalkerPassword")),
             xtream = LiveTvXtreamSettings(optString("server"), optString("xtreamUser"), optString("xtreamPassword")),
+            epgUrl = optString("epg"),
         )
     }
 
@@ -61,6 +62,7 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         put("id", id)
         put("type", type.name)
         put("url", url)
+        if (epgUrl.isNotBlank()) put("epg", epgUrl)
         when (type) {
             LiveTvSourceType.M3u -> Unit
             LiveTvSourceType.Stalker -> {

@@ -29,12 +29,18 @@ internal object LiveTvHttp {
      * Opens [url] and hands [block] the body as a stream, un-gzipped when the server sent a
      * gzip file (common for guides) rather than gzip transfer encoding. Runs on the IO pool; cancelling interrupts the read.
      */
-    suspend fun <T> stream(url: String, headers: Map<String, String>, block: (InputStream) -> T): T =
+    suspend fun <T> stream(
+        url: String,
+        headers: Map<String, String>,
+        readTimeoutSeconds: Long = 0L,
+        block: (InputStream) -> T,
+    ): T =
         runInterruptible(Dispatchers.IO) {
+            val http = if (readTimeoutSeconds > 0) client.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build() else client
             val request = Request.Builder().url(url).apply {
                 headers.forEach { (name, value) -> header(name, value) }
             }.build()
-            client.newCall(request).execute().use { response ->
+            http.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
                 val body = response.body ?: throw IOException("Empty response")
                 BufferedInputStream(body.byteStream(), BUFFER_BYTES).use { buffered ->
@@ -74,6 +80,37 @@ internal object LiveTvHttp {
                 temp.delete()
             }
         }
+    }
+
+    /**
+     * Writes [target] gzip-compressed through [write] (blocking; call on the IO pool). The old
+     * file stays until the new one is complete.
+     */
+    fun writeGzip(target: File, write: (java.io.OutputStream) -> Unit) {
+        target.parentFile?.mkdirs()
+        val temp = File(target.path + ".part")
+        try {
+            FastGzipOutputStream(temp.outputStream()).use(write)
+            if (!temp.renameTo(target)) throw IOException("Could not save ${target.name}")
+        } finally {
+            temp.delete()
+        }
+    }
+
+    /**
+     * Channel logos. IPTV panels often serve them slowly and refuse many connections at once, so
+     * they get longer timeouts than Nuvio's posters and a few requests per host at a time.
+     */
+    internal val logoClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .dispatcher(okhttp3.Dispatcher().apply {
+                maxRequests = 16
+                maxRequestsPerHost = 6
+            })
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .callTimeout(40, TimeUnit.SECONDS)
+            .build()
     }
 
     /** Reads a file saved by [download]. Runs on the IO pool; cancelling interrupts the read. */

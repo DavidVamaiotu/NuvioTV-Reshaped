@@ -20,6 +20,8 @@ data class LiveTvChannel(
     val hideKey: Long = 0L,
     /** What its guide is kept under: see [liveTvGuideKey]. */
     val guideKey: String = "",
+    /** The playlist's tvg-name when it differs from [name]: guides often list the channel by it. */
+    val tvgName: String? = null,
 )
 
 /** The category key of channels the playlist gives no category; the screens call it "Uncategorised". */
@@ -91,6 +93,8 @@ data class LiveTvSource(
     val url: String = "",
     val stalker: LiveTvStalkerSettings = LiveTvStalkerSettings(),
     val xtream: LiveTvXtreamSettings = LiveTvXtreamSettings(),
+    /** A guide (XMLTV) link the viewer added; read before the source's own guide. */
+    val epgUrl: String = "",
 ) {
     /** A short name for lists: the host of a link, or the imported file's name. */
     val label: String
@@ -141,6 +145,8 @@ data class LiveTvUiState(
     val error: LiveTvError? = null,
     /** Goes up each time a source is added, so the Sources dialog can tell an add went through. */
     val addedCount: Int = 0,
+    /** How each source's guide did, for the Sources dialog; a source missing here has not been read yet. */
+    val sourceGuides: Map<String, LiveTvSourceGuide> = emptyMap(),
 ) {
     val hasSource: Boolean get() = sources.isNotEmpty()
 
@@ -151,4 +157,16 @@ data class LiveTvUiState(
     /** Categories the list shows. */
     val visibleGroups: List<String>
         get() = if (hiddenGroups.isEmpty()) groups else groups.filterNot(hiddenGroups::contains)
+}
+
+/** How a source's guide did: none offered, loading, read for [channels] channels, or failed. */
+@Immutable
+data class LiveTvSourceGuide(val state: State, val channels: Int = 0) {
+    enum class State { None, Loading, Loaded, Failed }
+
+    companion object {
+        val None = LiveTvSourceGuide(State.None)
+        val Loading = LiveTvSourceGuide(State.Loading)
+        val Failed = LiveTvSourceGuide(State.Failed)
+    }
 }

@@ -50,6 +50,17 @@
     <string name="live_tv_stalker_mac_hint">MAC address, e.g. 00:1A:79:12:34:56</string>
     <string name="live_tv_load">Load channels</string>
     <string name="live_tv_remove_source">Remove source</string>
+    <string name="live_tv_edit_source">Edit</string>
+    <string name="live_tv_source_edit_title">Edit source</string>
+    <string name="live_tv_source_edit_description">Change the address, login or guide. Hidden channels and favorites stay.</string>
+    <string name="live_tv_save_source">Save</string>
+    <string name="live_tv_imported_file">Imported file: %1$s</string>
+    <string name="live_tv_epg_hint">Guide link (XMLTV, optional)</string>
+    <string name="live_tv_guide_none">no guide</string>
+    <string name="live_tv_guide_loading">loading guide</string>
+    <string name="live_tv_guide_failed">guide didn\'t load</string>
+    <string name="live_tv_guide_loaded">guide for %1$d</string>
+    <string name="live_tv_error_guide_url">The guide link must start with http:// or https://</string>
     <string name="live_tv_close">Close</string>
     <string name="live_tv_phone_instruction">Scan with your phone to paste a link, type a login or send an M3U file.</string>
 

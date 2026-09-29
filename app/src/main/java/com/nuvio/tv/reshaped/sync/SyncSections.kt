@@ -69,6 +69,8 @@ internal object LiveTvSections {
         put("id", id)
         put("type", type.name)
         put("url", url)
+        // Only when set, so a source without one reads the same as from versions before guide links.
+        if (epgUrl.isNotBlank()) put("epg", epgUrl)
         when (type) {
             LiveTvSourceType.M3u -> Unit
             LiveTvSourceType.Xtream -> {
@@ -89,6 +91,10 @@ internal object LiveTvSections {
 
     private fun JsonObject.toSource(): LiveTvSource? {
         val type = LiveTvSourceType.entries.firstOrNull { it.name == text("type") } ?: return null
+        return toSourceOfType(type)?.copy(epgUrl = text("epg"))
+    }
+
+    private fun JsonObject.toSourceOfType(type: LiveTvSourceType): LiveTvSource? {
         return when (type) {
             LiveTvSourceType.M3u -> LiveTvSource(text("id"), type, text("url")).takeIf { it.url.isNotBlank() }
             LiveTvSourceType.Xtream -> LiveTvSource(

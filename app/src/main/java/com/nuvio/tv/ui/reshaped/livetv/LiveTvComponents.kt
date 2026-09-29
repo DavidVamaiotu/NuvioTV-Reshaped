@@ -64,6 +64,7 @@ import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
 import coil3.request.ImageRequest
 import com.nuvio.tv.R
+import com.nuvio.tv.reshaped.livetv.LiveTvHttp
 import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
@@ -257,6 +258,7 @@ internal fun LiveTvLogo(
                         .size(width.roundToPx(), height.roundToPx())
                         // IPTV panels often serve logos only to player-like clients, as they do streams.
                         .httpHeaders(LOGO_HEADERS)
+                        .fetcherFactory<coil3.Uri>(LOGO_FETCHER)
                         .build()
                 }
             }
@@ -274,6 +276,9 @@ internal fun LiveTvLogo(
 }
 
 private val LOGO_HEADERS = NetworkHeaders.Builder().set("User-Agent", "VLC/3.0.0 LibVLC/3.0.0").build()
+
+/** Logos load through Live TV's own client ([LiveTvHttp.logoClient]), still into Nuvio's image caches. */
+private val LOGO_FETCHER = coil3.network.okhttp.OkHttpNetworkFetcherFactory(callFactory = { LiveTvHttp.logoClient })
 
 private fun String.initials(): String =
     split(' ', '-', '_', '.').filter { it.isNotBlank() && it.first().isLetterOrDigit() }
