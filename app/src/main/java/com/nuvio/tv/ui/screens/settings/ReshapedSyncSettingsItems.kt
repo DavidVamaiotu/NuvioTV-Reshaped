@@ -2,6 +2,7 @@
 
 package com.nuvio.tv.ui.screens.settings
 
+import android.util.Log
 import android.text.format.DateUtils
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -115,7 +116,8 @@ internal fun LazyListScope.reshapedSyncSettingsItems(onFocused: () -> Unit = {})
                         title = stringResource(R.string.reshaped_sync_now_title),
                         subtitle = when {
                             status.running -> stringResource(R.string.reshaped_sync_running)
-                            status.failed == ReshapedSyncFailure.Network -> stringResource(R.string.reshaped_sync_failed_network)
+                            status.failed == ReshapedSyncFailure.Network -> stringResource(R.string.reshaped_sync_failed_network) +
+                                status.failedDetail.takeIf(String::isNotBlank)?.let { "\n" + it }.orEmpty()
                             status.failed == ReshapedSyncFailure.SignedOut -> stringResource(R.string.reshaped_sync_failed_signed_out)
                             status.failed == ReshapedSyncFailure.NewerVersion -> stringResource(R.string.reshaped_sync_failed_newer)
                             status.lastSyncedAtMs == 0L -> stringResource(R.string.reshaped_sync_never)
@@ -141,7 +143,7 @@ internal fun LazyListScope.reshapedSyncSettingsItems(onFocused: () -> Unit = {})
 private sealed interface SignInStep {
     data object Starting : SignInStep
     data class Waiting(val code: GoogleDeviceCode) : SignInStep
-    data class Failed(val message: Int) : SignInStep
+    data class Failed(val message: Int, val detail: String = "") : SignInStep
 }
 
 @Composable
@@ -163,15 +165,15 @@ private fun GoogleSignInDialog(onDismiss: () -> Unit) {
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (error: GoogleAuthException) {
-            SignInStep.Failed(
-                when (error.code) {
-                    "access_denied" -> R.string.reshaped_sync_sign_in_declined
-                    "expired_token" -> R.string.reshaped_sync_sign_in_expired
-                    else -> R.string.reshaped_sync_sign_in_failed
-                }
-            )
+            Log.w("ReshapedSync", "Google sign-in refused: ${error.detail}")
+            when (error.code) {
+                "access_denied" -> SignInStep.Failed(R.string.reshaped_sync_sign_in_declined)
+                "expired_token" -> SignInStep.Failed(R.string.reshaped_sync_sign_in_expired)
+                else -> SignInStep.Failed(R.string.reshaped_sync_sign_in_refused, error.detail)
+            }
         } catch (error: Exception) {
-            SignInStep.Failed(R.string.reshaped_sync_sign_in_failed)
+            Log.w("ReshapedSync", "Google sign-in failed", error)
+            SignInStep.Failed(R.string.reshaped_sync_sign_in_failed, error.message?.takeIf(String::isNotBlank) ?: error::class.java.simpleName)
         }
     }
 
@@ -223,6 +225,13 @@ private fun GoogleSignInDialog(onDismiss: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = NuvioTheme.colors.TextSecondary,
                 )
+                if (current.detail.isNotBlank()) {
+                    Text(
+                        text = stringResource(R.string.reshaped_sync_sign_in_detail, current.detail),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = NuvioTheme.colors.TextTertiary,
+                    )
+                }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     DialogButton(stringResource(R.string.action_cancel), onDismiss)
                     Spacer(modifier = Modifier.width(NuvioTheme.spacing.sm))

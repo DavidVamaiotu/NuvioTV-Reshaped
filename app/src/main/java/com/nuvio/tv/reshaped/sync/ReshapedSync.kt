@@ -33,13 +33,15 @@ internal data class ReshapedSyncStatus(
     val running: Boolean = false,
     val lastSyncedAtMs: Long = 0L,
     val failed: ReshapedSyncFailure? = null,
+    /** What went wrong, in Google's words when it said. */
+    val failedDetail: String = "",
 )
 
 internal enum class ReshapedSyncFailure { Network, SignedOut, NewerVersion }
 
 /**
  * Keeps Reshaped settings and Live TV the same on the viewer's devices, through one small file
- * in their Google account's hidden app folder. Off until the viewer signs in and turns it on.
+ * in their Google Drive. Off until the viewer signs in and turns it on.
  *
  * It syncs when the app comes to the front (at most once a minute), a few seconds after a Live
  * TV change, when the app goes to the back if something changed here, and on "Sync now".
@@ -229,7 +231,7 @@ internal object ReshapedSync {
                     is SyncDoc.NewerFormatException -> ReshapedSyncFailure.NewerVersion
                     else -> ReshapedSyncFailure.Network
                 }
-                _status.update { it.copy(running = false, failed = failure) }
+                _status.update { it.copy(running = false, failed = failure, failedDetail = error.message.orEmpty()) }
             }
         }
     }
