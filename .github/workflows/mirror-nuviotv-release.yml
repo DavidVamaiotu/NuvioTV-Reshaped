@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: send debug logs to a phone by QR code
+# Release trigger: rebuild with Google sign-in keys for Reshaped sync
 
 
 on:
