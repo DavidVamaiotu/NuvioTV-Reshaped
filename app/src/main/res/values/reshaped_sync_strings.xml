@@ -12,6 +12,8 @@
     <string name="reshaped_sync_sign_in_declined">Sign-in was declined, or Google Drive access was unticked. Try again and allow it.</string>
     <string name="reshaped_sync_sign_in_expired">The code expired. Try again for a new one.</string>
     <string name="reshaped_sync_sign_in_failed">Couldn\'t reach Google. Check the connection and try again.</string>
+    <string name="reshaped_sync_sign_in_refused">Google refused this sign-in. This usually means the Google Cloud client or its consent screen needs a change.</string>
+    <string name="reshaped_sync_sign_in_detail">Details: %1$s</string>
     <string name="reshaped_sync_try_again">Try again</string>
     <string name="reshaped_sync_account_title">Google account</string>
     <string name="reshaped_sync_signed_in_as">Signed in as %1$s</string>

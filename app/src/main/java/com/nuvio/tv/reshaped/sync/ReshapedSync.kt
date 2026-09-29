@@ -33,6 +33,8 @@ internal data class ReshapedSyncStatus(
     val running: Boolean = false,
     val lastSyncedAtMs: Long = 0L,
     val failed: ReshapedSyncFailure? = null,
+    /** What went wrong, in Google's words when it said. */
+    val failedDetail: String = "",
 )
 
 internal enum class ReshapedSyncFailure { Network, SignedOut, NewerVersion }
@@ -229,7 +231,7 @@ internal object ReshapedSync {
                     is SyncDoc.NewerFormatException -> ReshapedSyncFailure.NewerVersion
                     else -> ReshapedSyncFailure.Network
                 }
-                _status.update { it.copy(running = false, failed = failure) }
+                _status.update { it.copy(running = false, failed = failure, failedDetail = error.message.orEmpty()) }
             }
         }
     }
