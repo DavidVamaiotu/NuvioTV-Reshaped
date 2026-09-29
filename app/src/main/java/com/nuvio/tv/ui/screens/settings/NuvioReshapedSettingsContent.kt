@@ -52,5 +52,6 @@ internal fun NuvioReshapedSettingsContent(
         pillNavSettingsItems()
         liveTvSettingsItems()
         seekBufferSettingsItems()
+        reshapedSyncSettingsItems()
     }
 }
