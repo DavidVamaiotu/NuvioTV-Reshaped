@@ -53,6 +53,8 @@ internal object ReshapedSync {
     private const val KEY_LAST_SYNC = "last_sync_ms"
     private const val FOREGROUND_MIN_GAP_MS = 60_000L
     private const val CHANGE_DEBOUNCE_MS = 5_000L
+    /** The first sync waits until the app has finished starting (lighter on 2 GB TVs). */
+    private const val START_DELAY_MS = 8_000L
 
     @EntryPoint
     @InstallIn(SingletonComponent::class)
@@ -137,10 +139,12 @@ internal object ReshapedSync {
     /** Live TV changed here (a favourite, a category, a source): sync in a few seconds. */
     fun onLocalChange() {
         if (!::appContext.isInitialized || !_syncLiveTv.value) return
-        changeJob?.cancel()
-        changeJob = scope.launch {
-            delay(CHANGE_DEBOUNCE_MS)
-            sync(appContext, onlyIfChanged = true)
+        synchronized(this) {
+            changeJob?.cancel()
+            changeJob = scope.launch {
+                delay(CHANGE_DEBOUNCE_MS)
+                sync(appContext, onlyIfChanged = true)
+            }
         }
     }
 
@@ -150,9 +154,13 @@ internal object ReshapedSync {
 
     private fun onForeground() {
         val now = SystemClock.elapsedRealtime()
-        if (lastForegroundSyncMs != 0L && now - lastForegroundSyncMs < FOREGROUND_MIN_GAP_MS) return
+        val firstStart = lastForegroundSyncMs == 0L
+        if (!firstStart && now - lastForegroundSyncMs < FOREGROUND_MIN_GAP_MS) return
         lastForegroundSyncMs = now
-        scope.launch { sync(appContext, onlyIfChanged = false) }
+        scope.launch {
+            if (firstStart) delay(START_DELAY_MS)
+            sync(appContext, onlyIfChanged = false)
+        }
     }
 
     private fun onBackground() {
@@ -173,20 +181,21 @@ internal object ReshapedSync {
         mutex.withLock {
             val profileId = if (liveTvOn) activeProfileId(context) else null
             val base = withContext(Dispatchers.IO) { readBase(context) }
-            val settings = if (settingsOn) ReshapedSyncedSettings.current(context) else emptyMap()
+            // Settings are read and set on the main thread, as their screens do.
+            val settings = if (settingsOn) withContext(Dispatchers.Main) { ReshapedSyncedSettings.current(context) } else emptyMap()
             val liveTv = profileId?.let { LiveTvRepository.syncSnapshot(context, it) }
             val current = settings + (if (profileId != null && liveTv != null) LiveTvSections.toSections(profileId, liveTv, base) else emptyMap())
             if (onlyIfChanged && SyncDoc.stamp(base, current, 0L) == base) return
             _status.update { it.copy(running = true) }
             try {
                 val remoteFile = DriveAppFolder.read(context)
-                val remote = SyncDoc.decode(remoteFile.text)
+                val remote = remoteFile.others.fold(SyncDoc.decode(remoteFile.text)) { doc, (_, text) -> SyncDoc.merge(SyncDoc.decode(text), doc) }
                 val now = SyncDoc.stampTime(System.currentTimeMillis(), base, remote)
                 val local = SyncDoc.stamp(base, current, now)
                 val merged = SyncDoc.prune(SyncDoc.merge(local, remote), now)
 
                 if (settingsOn) {
-                    ReshapedSyncedSettings.apply(context, settings, merged)
+                    withContext(Dispatchers.Main) { ReshapedSyncedSettings.apply(context, settings, merged) }
                 }
                 if (profileId != null && liveTv != null) {
                     // Sources this device has keep its own ids (the file may give another device's).
@@ -200,11 +209,12 @@ internal object ReshapedSync {
                     )
                     LiveTvRepository.applySync(context, profileId, liveTv, after)
                 }
-                if (merged != remote || remoteFile.id == null) {
+                if (merged != remote || remoteFile.id == null || remoteFile.others.isNotEmpty()) {
                     driveFileId = DriveAppFolder.write(context, remoteFile.id ?: driveFileId, SyncDoc.encode(merged))
                 } else {
                     driveFileId = remoteFile.id
                 }
+                remoteFile.others.forEach { (id, _) -> runCatching { DriveAppFolder.delete(context, id) } }
                 withContext(Dispatchers.IO) { writeBase(context, merged) }
                 val syncedAt = System.currentTimeMillis()
                 prefs(context).edit().putLong(KEY_LAST_SYNC, syncedAt).apply()

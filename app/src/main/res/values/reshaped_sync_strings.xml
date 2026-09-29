@@ -9,7 +9,7 @@
     <string name="reshaped_sync_phone_button">Copy code and open Google</string>
     <string name="reshaped_sync_phone_copied">Code copied</string>
     <string name="reshaped_sync_sign_in_waiting">Waiting for you to approve on your phone…</string>
-    <string name="reshaped_sync_sign_in_declined">Sign-in was declined.</string>
+    <string name="reshaped_sync_sign_in_declined">Sign-in was declined, or Google Drive access was unticked. Try again and allow it.</string>
     <string name="reshaped_sync_sign_in_expired">The code expired. Try again for a new one.</string>
     <string name="reshaped_sync_sign_in_failed">Couldn\'t reach Google. Check the connection and try again.</string>
     <string name="reshaped_sync_try_again">Try again</string>

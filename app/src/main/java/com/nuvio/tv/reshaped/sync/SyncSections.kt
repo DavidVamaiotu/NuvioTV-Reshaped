@@ -34,9 +34,14 @@ internal object LiveTvSections {
      * [data] as sections. A source keeps the id the file already gives it ([base]), so devices
      * that each gave the same source their own id do not keep replacing each other's.
      */
-    fun toSections(profileId: Int, data: LiveTvSyncData, base: SyncSections): Map<String, Map<String, JsonElement>> = mapOf(
+    fun toSections(profileId: Int, data: LiveTvSyncData, base: SyncSections): Map<String, Map<String, JsonElement>> {
+        val knownSources = SyncDoc.values(base, sources(profileId))
+        return toSections(profileId, data, knownSources)
+    }
+
+    private fun toSections(profileId: Int, data: LiveTvSyncData, knownSources: Map<String, JsonElement>): Map<String, Map<String, JsonElement>> = mapOf(
         sources(profileId) to data.sources.associate { source ->
-            val known = (SyncDoc.values(base, sources(profileId))[source.identity] as? JsonObject)?.text("id")
+            val known = (knownSources[source.identity] as? JsonObject)?.text("id")
             source.identity to source.copy(id = known?.takeIf(String::isNotBlank) ?: source.id).toJson()
         },
         favorites(profileId) to data.favorites.associateWith { TRUE },
