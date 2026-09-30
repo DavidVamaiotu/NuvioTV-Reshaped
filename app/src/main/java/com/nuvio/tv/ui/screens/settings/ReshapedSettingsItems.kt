@@ -2,12 +2,14 @@ package com.nuvio.tv.ui.screens.settings
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.nuvio.tv.ui.theme.NuvioTheme
 
 // Keep Reshaped's settings contracts while using upstream's current row design.
 // Upstream's toggle and slider rows intentionally omit leading icons.
+// Disabled Reshaped rows remain focusable, including the category's initial focus target.
 @Suppress("UNUSED_PARAMETER")
 @Composable
 internal fun ToggleSettingsItem(
@@ -28,6 +30,7 @@ internal fun ToggleSettingsItem(
         checked = isChecked,
         onToggle = { onCheckedChange(!isChecked) },
         onFocused = onFocused,
+        modifier = Modifier.focusProperties { canFocus = true },
         enabled = enabled,
         titleTrailingIcon = titleTrailingIcon,
         titleTrailingIconTint = titleTrailingIconTint,
@@ -49,6 +52,7 @@ internal fun NavigationSettingsItem(
         subtitle = subtitle,
         onClick = onClick,
         onFocused = onFocused,
+        modifier = Modifier.focusProperties { canFocus = true },
         enabled = enabled,
         leadingIcon = icon
     )
