@@ -1,0 +1,50 @@
+name: Reshaped upstream merge validation
+
+on:
+  push:
+    branches:
+      - fix/upstream-beta3-preserve-reshaped
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reshaped-upstream-merge-validation
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Configure validation build
+        run: |
+          cat > local.properties <<'PROPERTIES'
+          AUTOSYNC_FORK=true
+          NUVIO_UPDATE_GITHUB_OWNER=DavidVamaiotu
+          NUVIO_UPDATE_GITHUB_REPO=NuvioTV-Reshaped
+          PROPERTIES
+          keytool -genkeypair -keystore "$RUNNER_TEMP/merge-validation.jks" -storepass android -alias androiddebugkey -keypass android -dname "CN=Merge Validation" -keyalg RSA -keysize 2048 -validity 30
+          {
+            echo "NUVIO_RELEASE_STORE_FILE=$RUNNER_TEMP/merge-validation.jks"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=android"
+            echo "NUVIO_RELEASE_KEY_ALIAS=androiddebugkey"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=android"
+          } >> "$GITHUB_ENV"
+      - name: Run unit tests and build full debug APK
+        run: ./gradlew :app:testFullDebugUnitTest :app:assembleFullDebug --build-cache --stacktrace
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reshaped-merge-validation-reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
