@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_autosync_bubble_toast">Notificações em balão</string>
+    <string name="settings_autosync_bubble_toast_description">Mostra o progresso e os resultados do AutoSync em um pequeno balão animado, com efeito fosco, na parte inferior do player, em vez de toasts simples</string>
+    <string name="autosync_bubble_label">AutoSync</string>
+</resources>

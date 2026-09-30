@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Nuvio Reshaped: TV ao Vivo (IPTV). Separado do strings.xml do Nuvio para manter os merges do upstream limpos. -->
+    <string name="live_tv_title">TV ao Vivo</string>
+    <string name="settings_live_tv_title">TV ao Vivo</string>
+    <string name="settings_live_tv_description">Mostra a TV ao Vivo no menu, para listas de canais M3U, Xtream e Stalker</string>
+
+    <string name="live_tv_all_channels">Todos os canais</string>
+    <string name="live_tv_favorites">Favoritos</string>
+    <string name="live_tv_channel_count">%1$d canais</string>
+    <string name="live_tv_search">Buscar canais</string>
+    <string name="live_tv_refresh">Atualizar</string>
+    <string name="live_tv_sources">Fontes</string>
+    <string name="live_tv_categories">Categorias</string>
+    <string name="live_tv_edit_categories">Editar categorias</string>
+    <string name="live_tv_source_error">%1$s: %2$s</string>
+    <string name="live_tv_continue">Continuar Assistindo</string>
+    <string name="live_tv_favorite_add">Adicionar aos favoritos</string>
+    <string name="live_tv_favorite_remove">Remover dos favoritos</string>
+    <string name="live_tv_favorite_hint">Segure OK para adicionar ou remover um favorito</string>
+    <string name="live_tv_loading">Carregando canais…</string>
+    <string name="live_tv_guide_loading">Carregando guia…</string>
+    <string name="live_tv_no_channels_found">Nenhum canal encontrado.</string>
+    <string name="live_tv_no_favorites">Segure OK em um canal para adicioná-lo aos seus favoritos.</string>
+    <string name="live_tv_empty_title">Adicione seus canais</string>
+    <string name="live_tv_empty_description">Conecte uma playlist M3U, um login Xtream ou um portal Stalker. Configurar pelo celular é o jeito mais rápido.</string>
+    <string name="live_tv_add_source">Adicionar canais</string>
+    <string name="live_tv_now">Agora</string>
+    <string name="live_tv_minutes_left">Faltam %1$d min</string>
+    <string name="live_tv_hours_minutes_left">Faltam %1$d h %2$d min</string>
+
+    <string name="live_tv_sources_title">Fontes de canais</string>
+    <string name="live_tv_sources_description">Os canais de todas as fontes aparecem juntos em uma única lista.</string>
+    <string name="live_tv_source_add_title">Adicionar uma fonte</string>
+    <string name="live_tv_add_source_button">Adicionar fonte</string>
+    <string name="live_tv_source_summary">%1$s · %2$d canais</string>
+    <string name="live_tv_remove_confirm">Pressione novamente para remover</string>
+    <string name="live_tv_back">Voltar</string>
+    <string name="live_tv_source_description">Escaneie o código para configurar pelo celular ou digite aqui.</string>
+    <string name="live_tv_source_m3u">M3U</string>
+    <string name="live_tv_source_xtream">Xtream</string>
+    <string name="live_tv_source_stalker">Stalker</string>
+    <string name="live_tv_m3u_hint">Link da playlist (https://…)</string>
+    <string name="live_tv_xtream_server_hint">URL do servidor</string>
+    <string name="live_tv_username_hint">Usuário</string>
+    <string name="live_tv_password_hint">Senha</string>
+    <string name="live_tv_optional_username_hint">Usuário (opcional)</string>
+    <string name="live_tv_optional_password_hint">Senha (opcional)</string>
+    <string name="live_tv_stalker_portal_hint">URL do portal</string>
+    <string name="live_tv_stalker_mac_hint">Endereço MAC, ex.: 00:1A:79:12:34:56</string>
+    <string name="live_tv_load">Carregar canais</string>
+    <string name="live_tv_remove_source">Remover fonte</string>
+    <string name="live_tv_close">Fechar</string>
+    <string name="live_tv_phone_instruction">Escaneie com o celular para colar um link, digitar um login ou enviar um arquivo M3U.</string>
+
+    <string name="live_tv_categories_title">Categorias</string>
+    <string name="live_tv_categories_description">OK mostra ou oculta uma categoria; ▶ renomeia a categoria ou escolhe os canais dela. Segure OK para movê-la, use ▲▼ e OK para soltá-la. As ocultas saem da lista, da busca e da troca de canais; os favoritos sempre permanecem.</string>
+    <string name="live_tv_category_channels_description">Digite acima para renomear a categoria. OK mostra ou oculta um canal. Os ocultos saem da lista, da busca e da troca de canais; os favoritos sempre permanecem.</string>
+    <string name="live_tv_category_rename_hint">Renomear %1$s</string>
+    <string name="live_tv_categories_sort">A–Z</string>
+    <string name="live_tv_uncategorised">Sem categoria</string>
+    <string name="live_tv_categories_shown">%1$d de %2$d visíveis</string>
+    <string name="live_tv_categories_show_all">Mostrar todas</string>
+    <string name="live_tv_categories_hide_all">Ocultar todas</string>
+    <string name="live_tv_categories_none">As categorias aparecem aqui depois que os canais forem carregados.</string>
+    <string name="live_tv_done">Concluído</string>
+
+    <string name="live_tv_live_badge">AO VIVO</string>
+    <string name="settings_live_tv_previews_title">Prévias dos canais</string>
+    <string name="settings_live_tv_previews_description">Reproduz uma pequena imagem do canal selecionado na lista da TV ao Vivo</string>
+    <string name="settings_live_tv_preview_sound_title">Som da prévia</string>
+    <string name="settings_live_tv_preview_sound_description">Ouça o canal na prévia. O som entra aos poucos e para quando você sai da lista</string>
+
+    <string name="live_tv_player_channels">Canais</string>
+    <string name="live_tv_player_categories_hint">◀ Categorias  ·  ▶ Guia</string>
+    <string name="live_tv_player_hint">▲▼ Trocar de canal  ·  ◀ Lista de canais  ·  OK Info</string>
+    <string name="live_tv_info_hint">OK Controles  ·  ◀ Lista de canais  ·  ▲▼ Trocar de canal</string>
+    <string name="live_tv_info_now">Agora</string>
+    <string name="live_tv_info_next">A seguir · %1$s</string>
+    <string name="live_tv_info_no_guide">Sem guia para este canal</string>
+    <string name="live_tv_guide">Guia</string>
+    <string name="live_tv_preview_mute">Silenciar prévia</string>
+    <string name="live_tv_preview_unmute">Reativar som da prévia</string>
+    <string name="live_tv_guide_ended">Encerrado</string>
+    <string name="live_tv_guide_none">Sem guia</string>
+    <string name="live_tv_guide_hint">OK Assistir  ·  CH+/CH− Página  ·  Voltar Fechar</string>
+
+    <string name="live_tv_error_invalid_url">Digite um link de playlist HTTP ou HTTPS válido.</string>
+    <string name="live_tv_error_no_channels">Nenhum canal reproduzível foi encontrado nesta playlist.</string>
+    <string name="live_tv_error_load_failed">Não foi possível carregar a playlist.</string>
+    <string name="live_tv_error_file_empty">O arquivo M3U está vazio.</string>
+    <string name="live_tv_error_file_no_channels">Nenhum canal reproduzível foi encontrado neste arquivo M3U.</string>
+    <string name="live_tv_error_stalker_required">URL do portal e endereço MAC são obrigatórios.</string>
+    <string name="live_tv_error_stalker_invalid_url">Digite um link de portal HTTP ou HTTPS válido.</string>
+    <string name="live_tv_error_stalker_no_channels">Nenhum canal reproduzível foi encontrado neste portal.</string>
+    <string name="live_tv_error_stalker_failed">Não foi possível carregar o portal Stalker.</string>
+    <string name="live_tv_error_stalker_token">O portal não iniciou uma sessão. Verifique a URL do portal e o endereço MAC.</string>
+    <string name="live_tv_error_stalker_incomplete">Alguns canais não puderam ser carregados do portal. Atualize para tentar novamente.</string>
+    <string name="live_tv_error_xtream_required">URL do servidor, usuário e senha são obrigatórios.</string>
+    <string name="live_tv_error_xtream_invalid_url">Digite uma URL de servidor Xtream HTTP ou HTTPS válida.</string>
+    <string name="live_tv_error_xtream_no_channels">Nenhum canal reproduzível foi encontrado para este login Xtream.</string>
+    <string name="live_tv_error_xtream_failed">Não foi possível carregar o provedor Xtream.</string>
+
+    <!-- Página de configuração pelo celular -->
+    <string name="live_tv_web_title">TV ao Vivo na sua TV</string>
+    <string name="live_tv_web_subtitle">Escolha como o seu provedor entrega os canais. A TV os carrega assim que você enviar.</string>
+    <string name="live_tv_web_m3u_link">Link da playlist</string>
+    <string name="live_tv_web_m3u_file">Arquivo da playlist</string>
+    <string name="live_tv_web_send">Enviar para a TV</string>
+    <string name="live_tv_web_sending">Enviando…</string>
+    <string name="live_tv_web_sent">Enviado. A TV está carregando seus canais.</string>
+    <string name="live_tv_web_choose_file">Escolha primeiro um arquivo .m3u.</string>
+    <string name="live_tv_web_too_large">Esse arquivo é grande demais.</string>
+    <string name="live_tv_web_failed">A TV não conseguiu receber isso. Confira os campos.</string>
+    <string name="live_tv_web_connection_error">Não foi possível alcançar a TV. Ela ainda está na tela de configuração da TV ao Vivo?</string>
+</resources>

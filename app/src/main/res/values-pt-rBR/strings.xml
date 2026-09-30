@@ -218,6 +218,8 @@
     <string name="detail_marked_episodes_watched">Episódios marcados como assistidos: %1$d</string>
     <string name="detail_marked_episodes_unwatched">Episódios marcados como não assistidos: %1$d</string>
     <string name="detail_marked_previous_watched">Episódios anteriores marcados como assistidos: %1$d</string>
+    <string name="playback_unavailable">Reprodução indisponível</string>
+    <string name="playback_unavailable_message">A reprodução não está disponível para este título com a sua configuração atual.</string>
     
     <string name="detail_btn_play">Assistir</string>
     <string name="detail_btn_resume">Continuar</string>
@@ -233,6 +235,7 @@
     <string name="detail_tab_trailer">Trailer</string>
     <string name="detail_more_like_this_powered_by_tmdb">Com tecnologia TMDB</string>
     <string name="detail_more_like_this_powered_by_trakt">Com tecnologia Trakt</string>
+    <string name="detail_more_like_this_powered_by_simkl">Com tecnologia Simkl</string>
     <string name="detail_comments_title">Comentários</string>
     <string name="detail_comments_subtitle">Avaliações do Trakt</string>
     <string name="detail_comments_subtitle_episode">Avaliações do Trakt para T%1$d:E%2$d</string>
@@ -417,6 +420,9 @@
     <string name="licenses_attributions_section_app">LICENÇA DO APP</string>
     <string name="licenses_attributions_section_data">DADOS e SERVIÇOS</string>
     <string name="licenses_attributions_section_playback">LICENÇAS DE REPRODUÇÃO ANDROID</string>
+    <string name="licenses_attributions_section_ui">BIBLIOTECAS DE INTERFACE</string>
+    <string name="licenses_attributions_haze_title">Haze 1.7.2</string>
+    <string name="licenses_attributions_haze_body">Usado para efeitos de desfoque de fundo. Criado por Chris Banes. Licenciado sob a Apache License, Versão 2.0.</string>
     <string name="licenses_attributions_nuvio_title">Nuvio TV</string>
     <string name="licenses_attributions_nuvio_body">Código-fonte e os termos de licença estão disponíveis no repositório do projeto. Licenciado sob a GNU General Public License v3.0.</string>
     <string name="licenses_attributions_tmdb_title">The Movie Database (TMDB)</string>
@@ -475,6 +481,7 @@
     <string name="tracking_simkl_anime_id_imdb">Preferir IMDB</string>
     <string name="tracking_simkl_anime_id_mal">Preferir MyAnimeList</string>
     <string name="tracking_simkl_anime_id_kitsu">Preferir Kitsu</string>
+    <string name="tracking_simkl_anime_id_tvdb">Preferir TVDB</string>
     <string name="tracking_status_connected">Conectado</string>
     <string name="tracking_status_disconnected">Não conectado</string>
     <string name="tracking_status_waiting">Aguardando aprovação</string>
@@ -725,6 +732,10 @@
     <string name="auto_skip_recap_sub">Pula o resumo do episódio anterior</string>
     <string name="auto_skip_outro">Créditos</string>
     <string name="auto_skip_outro_sub">Pula os créditos automaticamente</string>
+    <string name="auto_skip_movie_credits">Créditos finais</string>
+    <string name="auto_skip_movie_credits_sub">Pula os créditos do filme automaticamente, mantendo as cenas pós-créditos.</string>
+    <string name="skip_movie_credits">Pular Créditos</string>
+    <string name="skip_to_post_credits">Ir para a Cena Pós-Créditos</string>
     <string name="playback_auto_frame_rate">Resolução e Quadros Automáticos</string>
     <string name="playback_section_player">Player e Seleção de Fontes</string>
     <string name="playback_section_player_desc">Preferência, reprodução e filtros</string>
@@ -1115,6 +1126,55 @@
     <string name="layout_card_radius">Arredondamento</string>
     <string name="layout_reset_default">Redefinir para Padrão</string>
     <string name="layout_custom">Personalizado</string>
+    <string name="layout_custom_poster_title">Fonte de Pôster Personalizada</string>
+    <string name="layout_custom_poster_description">Informe um padrão de URL de pôster de um serviço externo. Se um placeholder não tiver valor para determinado título, o pôster original é usado no lugar.</string>
+    <string name="layout_custom_poster_clear">Limpar</string>
+    <string name="layout_custom_poster_active">✓ Fonte de pôster personalizada ativa</string>
+    <string name="layout_custom_poster_qr">Configurar pelo Celular</string>
+    <string name="custom_poster_qr_instruction">Escaneie o QR code com o celular para colar um padrão de URL de pôster</string>
+    <string name="layout_custom_poster_apply_to">Aplicar pôsteres personalizados em:</string>
+    <string name="layout_custom_poster_screen_home">Início</string>
+    <string name="layout_custom_poster_screen_continue_watching">Continuar Assistindo</string>
+    <string name="layout_custom_poster_screen_collections">Coleções</string>
+    <string name="layout_custom_poster_screen_library">Biblioteca</string>
+    <string name="layout_custom_poster_screen_search">Busca</string>
+    <string name="layout_custom_poster_screen_details">Tela de Detalhes</string>
+    <string name="web_custom_poster_title">Fonte de Pôster Personalizada</string>
+    <string name="web_custom_poster_subtitle">Cole um padrão de URL de pôster abaixo e pressione Salvar.</string>
+    <string name="web_custom_poster_label">Padrão de URL</string>
+    <string name="web_custom_poster_placeholder">https://example.com/poster?id={id}&amp;id_type={id_type}&amp;type={type}</string>
+    <string name="web_custom_poster_save">Salvar</string>
+    <string name="web_custom_poster_clear">Limpar</string>
+    <string name="web_custom_poster_saved">Salvo!</string>
+    <string name="web_custom_poster_cleared">Limpo</string>
+    <string name="web_custom_poster_error_empty">Digite um padrão de URL</string>
+    <string name="web_custom_poster_error_save">Falha ao salvar</string>
+    <string name="web_custom_poster_error_clear">Falha ao limpar</string>
+    <string name="web_custom_poster_error_connection">Erro de conexão</string>
+    <string name="web_custom_poster_current">Atual:</string>
+    <string name="web_custom_poster_none">Nenhum padrão definido</string>
+    <string name="web_custom_poster_loading">Carregando…</string>
+    <string name="web_custom_poster_placeholders_info">Placeholders: {id} envia todos os IDs do conteúdo. {imdb_id}, {tmdb_id}, {tvdb_id} e {kitsu_id} miram um único tipo de ID - se não estiver disponível, o pôster original é mantido. {imdb_id|tmdb_id|kitsu_id} declara os tipos de ID aceitos - o correspondente é usado, ou o pôster original é mantido. Adicione ? para tornar um placeholder opcional, resolvendo para vazio em vez de ignorar: {imdb_id?}. Outros placeholders: {id_type}, {typed_id}, {type}, {shape}.</string>
+    <string name="mdblist_name">MDBList</string>
+    <string name="mdblist_tracking_description">Sincroniza o histórico de assistidos e o progresso de reprodução entre dispositivos</string>
+    <string name="mdblist_connected_as">Conectado como %1$s</string>
+    <string name="mdblist_account_fallback">Usuário do MDBList</string>
+    <string name="mdblist_insufficient_scope">O MDBList não concedeu permissão para atualizar o histórico de assistidos. Reconecte e permita acesso de gravação.</string>
+    <string name="mdblist_awaiting_instruction">Escaneie o QR code ou digite este código no endereço abaixo.</string>
+    <string name="mdblist_qr_description">QR code para conectar sua conta do MDBList</string>
+    <string name="mdblist_status_enter_code">Aprove a conexão na sua conta do MDBList.</string>
+    <string name="mdblist_status_syncing">Sincronizando histórico de assistidos e progresso de reprodução…</string>
+    <string name="mdblist_last_synced">Última sincronização %1$s</string>
+    <string name="mdblist_disconnect_title">Desconectar o MDBList?</string>
+    <string name="mdblist_disconnect_subtitle">Para de enviar atualizações de reprodução deste perfil. Seu histórico no MDBList é mantido.</string>
+    <string name="mdblist_missing_client">A conexão com o MDBList não está disponível nesta versão.</string>
+    <string name="mdblist_invalid_response">O MDBList retornou uma resposta incompleta. Tente novamente.</string>
+    <string name="mdblist_code_expired">Este código expirou. Tente novamente para obter um novo.</string>
+    <string name="mdblist_access_denied">A conexão foi recusada. Tente novamente para conectar sua conta.</string>
+    <string name="mdblist_authorization_revoked">Sua conexão com o MDBList expirou ou foi revogada. Conecte novamente para retomar a sincronização.</string>
+    <string name="mdblist_unavailable">Não foi possível sincronizar com o MDBList. Tente novamente.</string>
+    <string name="mdblist_rate_limited">O limite de requisições do MDBList foi atingido. A sincronização será retomada após o limite ser redefinido.</string>
+    <string name="mdblist_revoke_failed">Desconectado neste dispositivo. Remova este app nas configurações da sua conta do MDBList para revogar o acesso dele.</string>
 
     
     <string name="mdblist_title">Avaliações do MDBList</string>
@@ -1123,6 +1183,9 @@
     <string name="mdblist_enable_subtitle">Exiba notas externas na tela de detalhes.</string>
     <string name="mdblist_api_key_title">Chave API</string>
     <string name="mdblist_api_key_subtitle">Insira a chave necessária para as avaliações.</string>
+    <string name="mdblist_ratings_credentials_subtitle">Use a sua conta do MDBList conectada em Rastreamento ou informe uma chave de API separada para as avaliações.</string>
+    <string name="mdblist_ratings_connected_account">Usando a conta conectada</string>
+    <string name="mdblist_ratings_key_override_subtitle">Uma chave de API substitui a conta conectada nas avaliações. Limpe-a para usar a conta conectada novamente.</string>
     <string name="mdblist_trakt_title">Trakt</string>
     <string name="mdblist_trakt_subtitle">Exiba as avaliações do Trakt.</string>
     <string name="mdblist_imdb_title">IMDb</string>
@@ -1410,6 +1473,7 @@
     <string name="trakt_more_like_this_source_dialog_subtitle">Selecione a fonte das recomendações exibidas nas telas de detalhes e após a assistir.</string>
     <string name="trakt_more_like_this_source_trakt">Trakt</string>
     <string name="trakt_more_like_this_source_tmdb">TMDB</string>
+    <string name="trakt_more_like_this_source_simkl">Simkl</string>
     <string name="trakt_cached_label">Em cache</string>
     <string name="trakt_stat_movies">Filmes</string>
     <string name="trakt_stat_shows">Séries</string>
@@ -1951,6 +2015,7 @@
     <string name="library_sort_added_asc">Adicionados ↑</string>
     <string name="library_sort_title_asc">Título A-Z</string>
     <string name="library_sort_title_desc">Título Z-A</string>
+    <string name="library_error_sort_failed">Não foi possível carregar a ordem de classificação. Mostrando a ordem do provedor.</string>
     <string name="library_manage_lists">Gerenciar Listas</string>
     <string name="library_manage_trakt_lists">Gerenciar Listas do Trakt</string>
     <string name="library_no_lists">Nenhuma lista pessoal ainda.</string>
@@ -2497,6 +2562,7 @@
     <string name="collections_editor_shape_wide">Largo</string>
     <string name="collections_editor_shape_square">Quadrado</string>
     <string name="collections_editor_addon_missing">Addon não instalado: %1$s</string>
+    <string name="collections_editor_catalog_missing">Catálogo indisponível</string>
     <string name="collections_editor_add_tmdb_source">Adicionar Fonte TMDB</string>
     <string name="collections_editor_add_trakt_source">Adicionar Lista do Trakt</string>
     <string name="collections_editor_edit_tmdb_source">Editar Fonte TMDB</string>
@@ -3103,6 +3169,7 @@
     <string name="playback_cache_info_manual_headroom">O modo manual mantém cerca de %1$dMB de margem.</string>
     <string name="playback_cache_info_free_disk">Espaço livre disponível: %1$s.</string>
     <string name="playback_cache_info_restart">O novo limite de cache é aplicado após reiniciar o app ao trocar de modo ou tamanho.</string>
+    <string name="playback_cache_write_warning">Em dispositivos com armazenamento interno, a gravação é constante e pode causar desgaste ao longo do tempo.</string>
     <string name="playback_reset_to_default">Restaurar padrões</string>
     <string name="playback_net_custom">Rede personalizada</string>
     <string name="playback_net_custom_sub">Usa múltiplas conexões paralelas para buscar streams progressivos. Se desativado, usa uma única conexão.</string>
@@ -3136,8 +3203,15 @@
     <string name="diag_label_source_profile">Perfil da fonte</string>
     <string name="diag_label_conversions">Conversões</string>
     <string name="diag_label_signal_rewrites">Reescritas de sinal</string>
+    <string name="diag_label_last_convert">Última conversão</string>
     <string name="diag_label_custom_buffers">Buffers personalizados</string>
     <string name="diag_label_custom_network_cache">Rede/Cache personalizados</string>
+    <string name="diag_label_disk_cache">Cache em disco</string>
+    <string name="diag_label_disk_cache_usage">Uso do cache em disco</string>
+    <string name="diag_value_disk_cache_on">Ligado - %1$s</string>
+    <string name="diag_value_disk_cache_unavailable">Indisponível</string>
+    <string name="diag_value_disk_cache_not_used">Desligado - não usado neste stream</string>
+    <string name="diag_value_disk_cache_usage">%1$s lidos, %2$s removidos</string>
     <string name="diag_section_outcome">Resultado</string>
     <string name="diag_label_hdr_format_intended">Formato HDR (pretendido)</string>
     <string name="diag_label_first_frame">Primeiro quadro</string>

@@ -2,4 +2,7 @@
 <resources>
     <string name="settings_nuvio_reshaped_description">AutoSync de legendas, prévias ao avançar e escolha de streams</string>
     <string name="settings_nuvio_reshaped_autosync_section">AutoSync de legendas</string>
+    <string name="reshaped_debug_logs_to_phone_title">Enviar logs de depuração para o celular</string>
+    <string name="reshaped_debug_logs_to_phone_description">Mostra um QR code para baixar no celular os logs do AutoSync e do sincronismo de áudio</string>
+    <string name="reshaped_debug_logs_to_phone_instruction">Escaneie com um celular na mesma rede e toque em um log para baixá-lo.</string>
 </resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="player_audio_sync_model_downloading">Baixando o modelo de reconhecimento de voz (%1$s MB) para sincronizar as legendas mais rápido…</string>
+    <string name="player_audio_sync_model_needs_wifi">Conecte-se ao Wi-Fi uma vez para baixar o modelo de voz de %1$s MB e sincronizar as legendas mais rápido</string>
+    <string name="player_audio_sync_live_only">Sem antecipação para o áudio em %1$s neste dispositivo; sincronizando pelo áudio ao vivo (mais lento)</string>
+    <string name="player_audio_sync_withdrawn">Não foi possível confirmar a sincronização das legendas; o tempo original foi restaurado</string>
+    <string name="player_audio_sync_estimated">Sincronizando as legendas com o áudio (%1$s), ajustando…</string>
+    <string name="player_audio_sync_synced">Sincronização das legendas confirmada (%1$s)</string>
+    <string name="player_audio_sync_synced_rate">Sincronização das legendas confirmada (%1$s, taxa de quadros corrigida)</string>
+    <string name="player_audio_sync_adjusted">O tempo da legenda mudou; sincronizada novamente (%1$s)</string>
+    <string name="audio_sync_show_statistics_title">Mostrar estatísticas do AudioSync</string>
+    <string name="audio_sync_show_statistics_subtitle">Mostra um painel ao vivo no canto superior esquerdo do player com o que o AudioSync já ouviu e por que as legendas estão ou ainda não estão sincronizadas.</string>
+</resources>

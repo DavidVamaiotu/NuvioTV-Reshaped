@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_stream_connection_fit_title">Adaptar streams à conexão</string>
+    <string name="settings_stream_connection_fit_description">Mantém a ordem de streams do seu addon, mas move para o fim os streams que provavelmente são pesados demais para a sua conexão. A velocidade é aprendida com a sua própria reprodução.</string>
+    <string name="settings_stream_connection_fit_learning">Aprendendo a velocidade desta rede pela reprodução. Até lá, a ordem dos streams não muda.</string>
+    <string name="settings_stream_connection_fit_measured">Cerca de %1$d Mbps nesta rede. A ordem dos seus streams é mantida; os que provavelmente são pesados demais ficam por último.</string>
+</resources>

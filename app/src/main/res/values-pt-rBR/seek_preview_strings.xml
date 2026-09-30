@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Strings de prévia ao avançar (Seekr), separadas do strings.xml para manter os merges do upstream limpos. -->
+<resources>
+    <string name="player_seek_preview_sync">Sincronia da prévia</string>
+    <string name="player_seek_preview_sync_hint">Ajuste até a miniatura corresponder ao quadro que está tocando atrás deste painel.</string>
+    <string name="player_seek_preview_sync_keys">Esquerda/Direita ajustam · OK redefine · Baixo usa o valor sugerido · Cima ou Voltar fecha</string>
+    <string name="player_seek_preview_sync_suggested">Sugerido: %1$s (diferença de duração em relação à fonte da prévia)</string>
+    <string name="cd_seek_preview_sync">Sincronia da prévia</string>
+    <string name="settings_seek_preview_local">Gerar prévias no dispositivo</string>
+    <string name="settings_seek_preview_local_description">Cria as miniaturas de avanço a partir do que a reprodução já baixou, para que sempre fiquem alinhadas e não gastem dados extras. O Seekr preenche as partes que você ainda não assistiu.</string>
+</resources>

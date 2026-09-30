@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_pill_nav_title">Menu em pílula</string>
+    <string name="settings_pill_nav_description">Um menu de texto flutuante no topo da tela, com um destaque deslizante. Substitui a barra lateral. Pressione Para cima para acessá-lo e Voltar para ir direto a ele.</string>
+</resources>
