@@ -1,3 +1,4 @@
-- **Sync with Google.** Settings > Nuvio Reshaped > Sync keeps Reshaped settings and Live TV (sources and logins, favourites, categories, last channel) the same on your TVs and phone. Sign in by scanning the QR code with your phone. Both switches are off until you turn them on, and the data stays in one file in your own Google Drive.
-- **Faster, steadier seeking.** Rapid seeks cancel the stale connection instead of waiting for it.
-- **Better styled subtitles** and a lighter fallback for the pill navigation glass effect.
+- **Updated to official NuvioTV 1.1.0-beta.3.** Includes the upstream playback, settings, and service updates.
+- **Reshaped functionality preserved.** Keeps Reshaped AutoSync and AudioSync, Live TV, seek previews, disk read-ahead, sync, fonts, and pill navigation.
+- **Settings adapted to the new layout.** The Nuvio Reshaped section remains available with the existing controls and behavior.
+- **Validation:** APK build and Reshaped feature tests passed. The 18 failures in the full unit-test suite also reproduce on the original fork; the merge introduced no new failures. Physical TV playback has not been tested.
