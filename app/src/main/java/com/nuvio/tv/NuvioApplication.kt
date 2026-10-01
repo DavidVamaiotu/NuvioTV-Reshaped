@@ -86,7 +86,6 @@ class NuvioApplication : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         SentryInitializer.start(this, sentrySettingsDataStore)
         PluginRuntimeHooks.onApplicationCreate(this)
-        com.nuvio.tv.ui.screens.player.seekbuffer.SeekBufferSettings.onAppStart(this) // Nuvio RS hook: Seek buffer setting, drops the last run's read-ahead file
         com.nuvio.tv.reshaped.subtitlefont.SubtitleFontStore.warmUp(this) // Nuvio RS hook: custom subtitle font, loaded off the main thread
         com.nuvio.tv.reshaped.sync.ReshapedSync.onAppStart(this) // Nuvio RS hook: sync through the viewer's Google account
         androidTvChannelSyncService.start()
