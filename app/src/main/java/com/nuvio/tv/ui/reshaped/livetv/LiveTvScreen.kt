@@ -264,7 +264,8 @@ fun LiveTvScreen(
         LiveTvRepository.toggleFavorite(channel)
     }
 
-    val play: (LiveTvChannel, Boolean) -> Unit = { channel, fromRecent ->
+    /** Plays [channel] live, or its past [programme] (catch-up) when one is given. */
+    val launchPlay: (LiveTvChannel, Boolean, LiveTvProgramme?) -> Unit = { channel, fromRecent, programme ->
         if (!launching) {
             launching = true
             // The player needs the decoder and, with one-connection providers, the connection.
@@ -289,7 +290,16 @@ fun LiveTvScreen(
                         val list = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
                         LiveTvRepository.setZapList(list, folderKey = filterKey.takeIf { query.isBlank() })
                     }
-                    val route = liveTvPlayerRoute(channel, viewModel.profileId)
+                    val route = if (programme != null) {
+                        liveTvCatchupRoute(channel, programme, viewModel.profileId)
+                    } else {
+                        liveTvPlayerRoute(channel, viewModel.profileId)
+                    }
+                    if (route == null) {
+                        launching = false
+                        android.widget.Toast.makeText(context, R.string.live_tv_catchup_failed, android.widget.Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
                     viewModel.restoreFocusOnReturn = true
                     onPlay(route)
                 } catch (error: Exception) {
@@ -299,6 +309,8 @@ fun LiveTvScreen(
             }
         }
     }
+
+    val play: (LiveTvChannel, Boolean) -> Unit = { channel, fromRecent -> launchPlay(channel, fromRecent, null) }
 
     val openGuide: () -> Unit = {
         val channels = visibleChannels
@@ -310,6 +322,10 @@ fun LiveTvScreen(
                 onPlay = { channel ->
                     guide = null
                     play(channel, false)
+                },
+                onCatchup = { channel, programme ->
+                    guide = null
+                    launchPlay(channel, false, programme)
                 },
                 onClose = {
                     // Back on the list, on the channel the guide ended on.

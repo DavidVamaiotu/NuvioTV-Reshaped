@@ -14,15 +14,16 @@ import java.util.zip.GZIPOutputStream
  */
 internal object LiveTvGuideCache {
     const val FILE_NAME = "guide_kept.bin.gz"
-    private const val VERSION = 1
+    private const val VERSION = 2
     private const val MAX_TITLE = 1_000
 
     class Entry(val schedule: LiveTvSchedule, val logos: Map<String, String>, val nextReadAtMs: Long)
 
     /** What the saved programmes were read for: the guides, the channels and how much is kept. */
-    fun key(epgUrls: List<String>, guideKeys: Set<String>, window: LiveTvGuideWindow): Long {
+    fun key(epgUrls: List<String>, guideKeys: Set<String>, window: LiveTvGuideWindow, catchupKeys: Set<String> = emptySet()): Long {
         var channels = guideKeys.size.toLong()
         guideKeys.forEach { channels += it.hashCode() }
+        catchupKeys.forEach { channels += 31L * it.hashCode() }
         var key = epgUrls.hashCode().toLong()
         key = key * 31 + channels
         key = key * 31 + window.pastMs

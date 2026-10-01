@@ -9,6 +9,8 @@ import androidx.lifecycle.viewModelScope
 import com.nuvio.tv.R
 import com.nuvio.tv.core.profile.ProfileManager
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
+import com.nuvio.tv.reshaped.livetv.LiveTvClock
+import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvError
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
@@ -112,7 +114,31 @@ internal suspend fun liveTvPlayerRoute(channel: LiveTvChannel, profileId: Int): 
     )
 }
 
+/**
+ * The player route for a past programme of [channel] (catch-up): played as a film with no
+ * content id, so it can be paused and sought and no progress is saved; null when the provider
+ * does not keep it.
+ */
+internal suspend fun liveTvCatchupRoute(channel: LiveTvChannel, programme: LiveTvProgramme, profileId: Int): String? {
+    val playback = LiveTvRepository.catchupChannel(channel, programme) ?: return null
+    val playerUrl = PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers).url
+    LiveTvPlaybackRegistry.register(playerUrl, listUrl = channel.streamUrl, catchup = true)
+    return Screen.Player.createRoute(
+        streamUrl = playback.streamUrl,
+        title = programme.title,
+        streamName = channel.name,
+        headers = playback.headers,
+        contentType = LIVE_TV_CATCHUP_CONTENT_TYPE,
+        logo = LiveTvRepository.uiState.value.logoFor(channel),
+        addonName = LIVE_TV_ADDON_NAME,
+        streamDescription = "${channel.name}  ·  ${LiveTvClock.formatSpan(programme)}",
+        profileId = profileId,
+    )
+}
+
 internal const val LIVE_TV_CONTENT_TYPE = "channel"
+/** Catch-up plays as a film (seek bar, pause), still marked as Live TV through the registry. */
+internal const val LIVE_TV_CATCHUP_CONTENT_TYPE = "movie"
 internal const val LIVE_TV_ADDON_NAME = "Live TV"
 
 internal fun LiveTvError.message(context: Context): String = context.getString(

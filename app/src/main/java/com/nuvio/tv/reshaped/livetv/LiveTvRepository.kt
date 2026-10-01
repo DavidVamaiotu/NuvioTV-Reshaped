@@ -118,7 +118,14 @@ object LiveTvRepository {
     private val sourceJobs = ConcurrentHashMap<String, Job>()
 
     /** What each source loaded last. Only touched on [serial]. */
-    private class LoadedSource(val channels: List<LiveTvChannel>, val epgUrls: List<String>)
+    private class LoadedSource(
+        val channels: List<LiveTvChannel>,
+        val epgUrls: List<String>,
+        /** The source's categories in its own order (the panel's category list, else the playlist's). */
+        val groupOrder: List<String>,
+    )
+    /** Every category in the providers' order: sources in the order added, each in its own. Set by [publish]. */
+    @Volatile private var providerGroupOrder: List<String> = emptyList()
     private val loaded = HashMap<String, LoadedSource>()
 
     /**
@@ -248,13 +255,30 @@ object LiveTvRepository {
      * last channel move to the new links once it loaded. A failed load changes nothing.
      */
     fun updateSource(sourceId: String, edited: LiveTvSource) {
-        if (_uiState.value.sources.none { it.id == sourceId }) return
+        val existing = _uiState.value.sources.firstOrNull { it.id == sourceId } ?: return
         val source = when (edited.type) {
             LiveTvSourceType.M3u -> edited.copy(url = edited.url.trim())
             LiveTvSourceType.Xtream -> edited.xtream.normalized().let { edited.copy(url = it.serverUrl, xtream = it) }
             LiveTvSourceType.Stalker -> edited.stalker.normalized().let { edited.copy(url = it.portalUrl, stalker = it) }
         }
-        launchAdd(source.copy(id = sourceId, epgUrl = edited.epgUrl.trim()))
+        val updated = source.copy(id = sourceId, epgUrl = edited.epgUrl.trim(), name = edited.name.trim())
+        if (updated.copy(name = "") == existing.copy(name = "")) {
+            // Only the name changed: nothing to load again.
+            if (updated.name != existing.name) renameSource(updated)
+            _uiState.update { it.copy(addedCount = it.addedCount + 1, error = null) }
+            return
+        }
+        launchAdd(updated)
+    }
+
+    private fun renameSource(source: LiveTvSource) {
+        val store = storage ?: return
+        scope.launch(serial) {
+            val sources = _uiState.value.sources.map { if (it.id == source.id) source else it }
+            _uiState.update { it.copy(sources = sources) }
+            scope.launch(writer) { store.saveSources(sources) }
+            ReshapedSync.onLocalChange()
+        }
     }
 
     /**
@@ -357,7 +381,7 @@ object LiveTvRepository {
         ReshapedSync.onLocalChange()
     }
 
-    /** Back to A to Z. */
+    /** Back to the providers' own order. */
     fun resetGroupOrder() {
         groupOrder = emptyList()
         _uiState.update { it.copy(groups = orderedGroups(it.groupCounts.keys, it.groupNames)) }
@@ -365,10 +389,14 @@ object LiveTvRepository {
         ReshapedSync.onLocalChange()
     }
 
-    /** [names] in the viewer's order, then the ones it does not have yet, A to Z, with "Uncategorised" last. */
+    /**
+     * [names] in the viewer's order, then the ones it does not have yet in the providers' own
+     * order (as IPTV players show them), with "Uncategorised" last.
+     */
     private fun orderedGroups(names: Set<String>, renamed: Map<String, String> = _uiState.value.groupNames): List<String> {
         val ordered = groupOrder.filterTo(ArrayList()) { it in names }
         val placed = ordered.toHashSet()
+        providerGroupOrder.forEach { if (it in names && it != LIVE_TV_UNGROUPED && placed.add(it)) ordered += it }
         names.filterNot(placed::contains)
             .sortedWith(
                 compareBy<String> { it == LIVE_TV_UNGROUPED && it !in renamed }
@@ -376,6 +404,19 @@ object LiveTvRepository {
             )
             .forEach(ordered::add)
         return ordered
+    }
+
+    /** Sorts the categories A to Z (by the names shown), as the viewer's own order. */
+    fun sortGroupsAlphabetically() {
+        val state = _uiState.value
+        val sorted = state.groups.sortedWith(
+            compareBy<String> { it == LIVE_TV_UNGROUPED && it !in state.groupNames }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { state.groupNames[it]?.trim() ?: it },
+        )
+        groupOrder = sorted
+        _uiState.update { it.copy(groups = sorted) }
+        storage?.let { store -> scope.launch(writer) { store.saveGroupOrder(sorted) } }
+        ReshapedSync.onLocalChange()
     }
 
     private fun saveHiddenGroups(groups: Set<String>) {
@@ -444,6 +485,27 @@ object LiveTvRepository {
         LiveTvPlaybackRegistry.register(playback.streamUrl, listUrl = channel.streamUrl)
         recordRecentChannel(channel)
         return playback
+    }
+
+    /**
+     * The channel with the link to its past [programme] (catch-up), registered so the player
+     * treats it as Live TV that can be sought; null when the provider keeps no such programme.
+     */
+    suspend fun catchupChannel(channel: LiveTvChannel, programme: LiveTvProgramme): LiveTvChannel? {
+        val catchup = channel.catchup ?: return null
+        val now = LiveTvClock.nowEpochMs()
+        if (!LiveTvCatchupLinks.isPlayable(catchup, programme, now)) return null
+        val zone = if (LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup)) {
+            LiveTvCatchupLinks.xtreamLogin(channel.streamUrl)?.let { (server, user, pass) -> LiveTvXtream.zone(server, user, pass) }
+        } else {
+            null
+        }
+        // A programme still on air plays from its start up to now.
+        val stop = minOf(programme.stopEpochMs, now)
+        val link = LiveTvCatchupLinks.link(channel.streamUrl, catchup, programme.startEpochMs, stop, now, zone) ?: return null
+        LiveTvPlaybackRegistry.register(link, listUrl = channel.streamUrl, catchup = true)
+        recordRecentChannel(channel)
+        return channel.copy(streamUrl = link)
     }
 
     /** The channel next to the one at [listUrl] in [channels], wrapping around. */
@@ -588,6 +650,7 @@ object LiveTvRepository {
     /** One source's channels (tagged with the source) and guide links, plus a notice for a partial load. */
     private suspend fun loadSource(source: LiveTvSource): Pair<LoadedSource, LiveTvError?> {
         var notice: LiveTvError? = null
+        var providerOrder: List<String> = emptyList()
         val (channels, epgUrls) = when (source.type) {
             LiveTvSourceType.M3u -> {
                 val file = withContext(Dispatchers.IO) { storage?.playlistFile(source.id) }
@@ -606,13 +669,16 @@ object LiveTvRepository {
             }
             LiveTvSourceType.Xtream -> {
                 val settings = source.xtream
-                val channels = LiveTvXtream.channels(settings)
+                val loaded = LiveTvXtream.channels(settings)
+                val channels = loaded.channels
+                providerOrder = loaded.groupOrder
                 if (channels.isEmpty()) throw LiveTvException(LiveTvError.XtreamNoChannels)
                 // Xtream providers publish their guide at xmltv.php.
                 channels to listOf("${settings.serverUrl}/xmltv.php?username=${settings.username.urlEncoded()}&password=${settings.password.urlEncoded()}")
             }
             LiveTvSourceType.Stalker -> {
-                val (channels, incomplete) = LiveTvStalker.channels(source.stalker)
+                val (channels, incomplete, genres) = LiveTvStalker.channels(source.stalker)
+                providerOrder = genres
                 if (channels.isEmpty()) throw LiveTvException(LiveTvError.StalkerNoChannels)
                 if (incomplete) notice = LiveTvError.StalkerIncomplete
                 // The portal's own guide (see [stalkerGuideLink]).
@@ -637,7 +703,16 @@ object LiveTvRepository {
         }
         // A guide link the viewer added comes first: it is what they chose over the source's own.
         val guides = (listOfNotNull(source.epgUrl.trim().takeIf(String::isNotEmpty)) + epgUrls).distinct()
-        return LoadedSource(tagged, guides) to notice
+        // The provider's category order, keeping only categories with channels, then any it did not list, as they appear.
+        val used = LinkedHashSet<String>()
+        tagged.forEach { used += it.group }
+        val order = ArrayList<String>(used.size)
+        providerOrder.forEach { if (it in used && it !in order) order += it }
+        if (order.size < used.size) {
+            val placed = order.toHashSet()
+            used.forEach { if (placed.add(it)) order += it }
+        }
+        return LoadedSource(tagged, guides, order) to notice
     }
 
     /**
@@ -701,6 +776,7 @@ object LiveTvRepository {
             groupCounts[channel.group] = (groupCounts[channel.group] ?: 0) + 1
             sourceCounts[channel.sourceId] = (sourceCounts[channel.sourceId] ?: 0) + 1
         }
+        providerGroupOrder = parts.flatMap { it.groupOrder }.distinct()
         val groups = orderedGroups(groupCounts.keys)
         val epgUrls = parts.flatMap { it.epgUrls }.distinct()
         val guideKeys = channels.mapTo(HashSet(channels.size * 2)) { it.guideKey }
@@ -892,7 +968,8 @@ object LiveTvRepository {
         val generation = epgGeneration
         val guideFiles = epgUrls.map { File(guideDir(), "guide_${Integer.toHexString(it.hashCode())}.xml.gz") }
         val cacheFile = File(guideDir(), LiveTvGuideCache.FILE_NAME)
-        val cacheKey = LiveTvGuideCache.key(epgUrls, guideKeys, window)
+        val catchupKeys = channels.mapNotNullTo(HashSet()) { channel -> channel.guideKey.takeIf { channel.catchup != null } }
+        val cacheKey = LiveTvGuideCache.key(epgUrls, guideKeys, window, catchupKeys)
         guideWindow = window
         // Which sources each guide belongs to, and how a portal's guide is fetched. Read here, on [serial].
         val sourceLinks = _uiState.value.sources.associate { it.id to loaded[it.id]?.epgUrls.orEmpty() }

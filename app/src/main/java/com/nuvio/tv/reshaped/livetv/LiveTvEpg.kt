@@ -25,11 +25,28 @@ private const val RELAXED_FEATURE = "http://xmlpull.org/v1/doc/features.html#rel
  * How much of the guide is kept per channel: programmes that ended up to [pastMs] ago (at most
  * [maxPast]) and ones starting within [aheadMs] (at most [maxAhead]). Weak TVs keep less.
  */
-internal class LiveTvGuideWindow(val pastMs: Long, val maxPast: Int, val aheadMs: Long, val maxAhead: Int) {
+internal class LiveTvGuideWindow(
+    val pastMs: Long,
+    val maxPast: Int,
+    val aheadMs: Long,
+    val maxAhead: Int,
+    /** How far back channels with catch-up keep programmes, so past ones can be played again. */
+    val catchupPastMs: Long,
+    val maxCatchupPast: Int,
+) {
+    /** How far back [key]'s programmes are kept, given the request's catch-up channels. */
+    fun pastMsFor(catchup: Boolean): Long = if (catchup) catchupPastMs else pastMs
+
     companion object {
         private const val HOUR = 60L * 60 * 1000
-        val Regular = LiveTvGuideWindow(pastMs = 3 * HOUR, maxPast = 6, aheadMs = 12 * HOUR, maxAhead = 18)
-        val LowMemory = LiveTvGuideWindow(pastMs = 2 * HOUR, maxPast = 4, aheadMs = 8 * HOUR, maxAhead = 10)
+        val Regular = LiveTvGuideWindow(
+            pastMs = 3 * HOUR, maxPast = 6, aheadMs = 12 * HOUR, maxAhead = 18,
+            catchupPastMs = 24 * HOUR, maxCatchupPast = 48,
+        )
+        val LowMemory = LiveTvGuideWindow(
+            pastMs = 2 * HOUR, maxPast = 4, aheadMs = 8 * HOUR, maxAhead = 10,
+            catchupPastMs = 12 * HOUR, maxCatchupPast = 24,
+        )
     }
 }
 
@@ -41,13 +58,17 @@ internal class LiveTvGuideRequest(
     val keysByName: Map<String, List<String>>,
     /** Keys of channels the playlist gives no logo: the guide's own logo is used for them. */
     val keysWithoutLogo: Set<String>,
+    /** Keys of channels with catch-up: they keep more past programmes. */
+    val catchupKeys: Set<String> = emptySet(),
 ) {
     companion object {
         fun from(channels: List<LiveTvChannel>): LiveTvGuideRequest {
             val keys = HashSet<String>(channels.size * 2)
             val byName = HashMap<String, MutableList<String>>(channels.size * 2)
             val withoutLogo = HashSet<String>()
+            val catchup = HashSet<String>()
             channels.forEach { channel ->
+                if (channel.catchup != null) catchup += channel.guideKey
                 if (!keys.add(channel.guideKey)) return@forEach
                 val name = liveTvNameKey(channel.name)
                 if (name.isNotEmpty()) byName.getOrPut(name) { ArrayList(1) } += channel.guideKey
@@ -57,7 +78,7 @@ internal class LiveTvGuideRequest(
                 }
                 if (channel.logoUrl.isNullOrBlank()) withoutLogo += channel.guideKey
             }
-            return LiveTvGuideRequest(keys, byName, withoutLogo)
+            return LiveTvGuideRequest(keys, byName, withoutLogo, catchup)
         }
     }
 }
@@ -248,7 +269,8 @@ internal class LiveTvScheduleBuilder(
 
     /** [key] must be one of the request's keys. */
     fun add(key: String, title: String, startEpochMs: Long, stopEpochMs: Long) {
-        if (stopEpochMs <= startEpochMs || stopEpochMs <= nowEpochMs - window.pastMs) return
+        val catchup = key in request.catchupKeys
+        if (stopEpochMs <= startEpochMs || stopEpochMs <= nowEpochMs - window.pastMsFor(catchup)) return
         if (startEpochMs >= nowEpochMs + window.aheadMs) {
             truncated += key
             return
@@ -261,7 +283,7 @@ internal class LiveTvScheduleBuilder(
             if (programme.startEpochMs == startEpochMs) return
             if ((programme.stopEpochMs <= nowEpochMs) == past) kept++
         }
-        if (past && kept >= window.maxPast) {
+        if (past && kept >= (if (catchup) window.maxCatchupPast else window.maxPast)) {
             // Keep the latest programmes that have ended.
             val earliest = list.filter { it.stopEpochMs <= nowEpochMs }.minBy { it.startEpochMs }
             if (earliest.startEpochMs >= startEpochMs) return

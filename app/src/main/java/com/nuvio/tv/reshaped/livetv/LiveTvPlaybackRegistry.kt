@@ -11,12 +11,19 @@ object LiveTvPlaybackRegistry {
 
     /** Playback URL to the list entry's URL, most recent last. */
     @Volatile private var entries: List<Pair<String, String>> = emptyList()
+    /** The registered URLs that are a past programme (catch-up), not the live channel. */
+    @Volatile private var catchups: Set<String> = emptySet()
 
     @Synchronized
-    fun register(playbackUrl: String, listUrl: String = playbackUrl) {
+    fun register(playbackUrl: String, listUrl: String = playbackUrl, catchup: Boolean = false) {
         if (playbackUrl.isBlank()) return
         entries = (entries.filterNot { it.first == playbackUrl } + (playbackUrl to listUrl)).takeLast(MAX_URLS)
+        val kept = entries.mapTo(HashSet()) { it.first }
+        catchups = catchups.filterTo(HashSet()) { it in kept && it != playbackUrl }.apply { if (catchup) add(playbackUrl) }
     }
+
+    /** Whether [url] plays a past programme: it can be paused and sought like a film. */
+    fun isCatchup(url: String?): Boolean = url != null && url in catchups
 
     fun isLiveTv(url: String?): Boolean = url != null && entries.any { it.first == url }
 

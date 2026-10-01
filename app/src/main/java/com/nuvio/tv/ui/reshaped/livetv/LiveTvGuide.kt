@@ -18,7 +18,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.History
+import androidx.tv.material3.Icon
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -55,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
+import com.nuvio.tv.reshaped.livetv.LiveTvCatchupLinks
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
@@ -84,6 +89,8 @@ internal class LiveTvGuideState(
     startIndex: Int,
     private val onPlay: (LiveTvChannel) -> Unit,
     private val onClose: () -> Unit,
+    /** A past programme of a channel with catch-up was picked. */
+    private val onCatchup: (LiveTvChannel, LiveTvProgramme) -> Unit = { channel, _ -> onPlay(channel) },
 ) {
     var row by mutableIntStateOf(startIndex.coerceIn(0, (channels.size - 1).coerceAtLeast(0)))
         private set
@@ -114,7 +121,17 @@ internal class LiveTvGuideState(
                 // OK and Back act on release, as Nuvio's own buttons do, so no release is left
                 // for the screen underneath (Back would leave Live TV, OK would pause the player).
                 when (event.keyCode) {
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> channel?.let(onPlay)
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> channel?.let { picked ->
+                        // A programme that has ended plays again where the provider keeps it; anything else plays live.
+                        val programme = selected()
+                        if (programme != null && programme.stopEpochMs <= LiveTvClock.nowEpochMs() &&
+                            LiveTvCatchupLinks.isPlayable(picked.catchup, programme, LiveTvClock.nowEpochMs())
+                        ) {
+                            onCatchup(picked, programme)
+                        } else {
+                            onPlay(picked)
+                        }
+                    }
                     KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> onClose()
                 }
             }
@@ -143,7 +160,7 @@ internal class LiveTvGuideState(
 
     private fun moveProgramme(step: Int): Boolean {
         val now = LiveTvClock.nowEpochMs()
-        val first = floorSlot(now - windowPastMs())
+        val first = floorSlot(now - windowPastMs(channel?.catchup != null))
         val last = now + windowAheadMs()
         val programmes = channel?.let { LiveTvRepository.schedule(it.guideKey) }.orEmpty()
         val current = programmes.indexOfFirst { anchorMs >= it.startEpochMs && anchorMs < it.stopEpochMs }
@@ -183,7 +200,7 @@ internal class LiveTvGuideState(
         )
 
         fun floorSlot(ms: Long): Long = ms - Math.floorMod(ms, SLOT)
-        fun windowPastMs(): Long = LiveTvRepository.guideWindow.pastMs
+        fun windowPastMs(catchup: Boolean): Long = LiveTvRepository.guideWindow.pastMsFor(catchup)
         fun windowAheadMs(): Long = LiveTvRepository.guideWindow.aheadMs
     }
 }
@@ -306,7 +323,10 @@ private fun GuideHeader(state: LiveTvGuideState, guideVersion: Int, clock: State
                     programme.startEpochMs <= clock.value -> liveTvTimeLeft(programme, clock)
                     else -> null
                 }
-                listOfNotNull(LiveTvClock.formatSpan(programme), status).joinToString("  ·  ")
+                val catchup = channel?.catchup?.takeIf { programme.startEpochMs < clock.value }
+                    ?.takeIf { LiveTvCatchupLinks.isPlayable(it, programme, clock.value) }
+                    ?.let { stringResource(R.string.live_tv_catchup) }
+                listOfNotNull(LiveTvClock.formatSpan(programme), status, catchup).joinToString("  ·  ")
             }
             Text(
                 text = listOfNotNull(channel?.name?.takeIf { selected != null }, timing).joinToString("  ·  "),
@@ -377,8 +397,16 @@ private fun GuideRow(
                 color = Color.White.copy(alpha = if (selectedRow) 1f else 0.75f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 10.dp),
+                modifier = Modifier.padding(start = 10.dp).weight(1f),
             )
+            if (channel.catchup != null) {
+                Icon(
+                    imageVector = Icons.Default.History,
+                    contentDescription = stringResource(R.string.live_tv_catchup),
+                    tint = Color.White.copy(alpha = 0.55f),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
         // Programmes in view (and a slot either side, for the glide).
         val viewStart = state.viewStartMs - SLOT
@@ -402,7 +430,9 @@ private fun GuideRow(
                     title = programme.title,
                     selected = programme === selected,
                     state = when {
-                        programme.stopEpochMs <= clock.value -> GuideCellState.Past
+                        // Past programmes the provider keeps can be played again: they stay bright.
+                        programme.stopEpochMs <= clock.value ->
+                            if (LiveTvCatchupLinks.isPlayable(channel.catchup, programme, clock.value)) GuideCellState.Future else GuideCellState.Past
                         programme.startEpochMs <= clock.value -> GuideCellState.Now
                         else -> GuideCellState.Future
                     },

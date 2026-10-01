@@ -29,8 +29,14 @@ internal fun LiveTvXtreamSettings.normalized(): LiveTvXtreamSettings = copy(
     password = password.trim(),
 )
 
+/** A provider's channels and its categories in the provider's own order. */
+internal class ProviderChannels(val channels: List<LiveTvChannel>, val groupOrder: List<String>, val incomplete: Boolean = false)
+
 internal object LiveTvXtream {
-    suspend fun channels(settings: LiveTvXtreamSettings): List<LiveTvChannel> {
+    /** Each panel's time zone (by server URL): catch-up start times are given in it. */
+    private val zones = java.util.concurrent.ConcurrentHashMap<String, java.time.ZoneId>()
+
+    suspend fun channels(settings: LiveTvXtreamSettings): ProviderChannels {
         val categories = LiveTvHttp.stream(apiUrl(settings, "get_live_categories"), LIVE_TV_PLAYLIST_HEADERS) { input ->
             readObjects(input) { fields ->
                 val id = fields["category_id"] ?: fields["id"] ?: return@readObjects null
@@ -39,6 +45,8 @@ internal object LiveTvXtream {
             }
         }.toMap()
         val extension = liveExtension(settings)
+        // One catch-up instance per archive length, shared by the channels that have it.
+        val catchups = HashMap<Int, LiveTvCatchup>()
         val seen = HashSet<String>()
         val channels = LiveTvHttp.stream(apiUrl(settings, "get_live_streams"), LIVE_TV_PLAYLIST_HEADERS) { input ->
             var index = 0
@@ -58,11 +66,34 @@ internal object LiveTvXtream {
                     logoUrl = fields["stream_icon"] ?: fields["logo"],
                     group = fields["category_id"]?.let(categories::get).orEmpty(),
                     headers = LIVE_TV_STREAM_HEADERS,
+                    catchup = if (fields["tv_archive"] == "1") {
+                        val days = fields["tv_archive_duration"]?.toIntOrNull()?.coerceIn(1, 30) ?: 1
+                        catchups.getOrPut(days) { LiveTvCatchup(LiveTvCatchup.Kind.Xtream, days) }
+                    } else {
+                        null
+                    },
                 )
             }
         }
-        return channels
+        return ProviderChannels(channels, categories.values.map(String::trim).distinct())
     }
+
+    /**
+     * The panel's time zone, which catch-up links give their start time in: from the login's
+     * `server_info.timezone`, read with the channel list (or now, once, when it was not), else the TV's.
+     */
+    suspend fun zone(serverUrl: String, username: String, password: String): java.time.ZoneId {
+        zones[serverUrl]?.let { return it }
+        val settings = LiveTvXtreamSettings(serverUrl, username, password)
+        val zone = runCatching { zoneOf(JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS))) }
+            .onFailure { if (it is CancellationException) throw it }
+            .getOrNull()
+        return (zone ?: java.time.ZoneId.systemDefault()).also { zones[serverUrl] = it }
+    }
+
+    private fun zoneOf(login: JSONObject): java.time.ZoneId? =
+        login.optJSONObject("server_info")?.optString("timezone")?.trim()?.takeIf(String::isNotEmpty)
+            ?.let { runCatching { java.time.ZoneId.of(it) }.getOrNull() }
 
     /**
      * The live format this account may use: MPEG-TS, as IPTV players prefer, unless the account only
@@ -71,6 +102,7 @@ internal object LiveTvXtream {
     private suspend fun liveExtension(settings: LiveTvXtreamSettings): String {
         val formats = try {
             val login = JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS))
+            zoneOf(login)?.let { zones[settings.serverUrl] = it }
             val allowed = login.optJSONObject("user_info")?.optJSONArray("allowed_output_formats")
             if (allowed == null) emptyList() else List(allowed.length()) { allowed.optString(it).trim().lowercase() }
         } catch (cancel: CancellationException) {
@@ -105,7 +137,7 @@ internal fun LiveTvStalkerSettings.normalized(): LiveTvStalkerSettings = copy(
     password = password.trim(),
 )
 
-internal data class StalkerChannels(val channels: List<LiveTvChannel>, val incomplete: Boolean)
+internal data class StalkerChannels(val channels: List<LiveTvChannel>, val incomplete: Boolean, val groupOrder: List<String> = emptyList())
 
 private class StalkerSession(val settings: LiveTvStalkerSettings, val token: String) {
     /** Built once per session and shared by every channel, not copied into each. */
@@ -133,7 +165,10 @@ internal object LiveTvStalker {
             .getOrElse { if (it is CancellationException) throw it else emptyList() }
         val seen = HashSet<String>()
         val result = if (all.isNotEmpty()) StalkerChannels(all, incomplete = false) else orderedPages(session, toChannel)
-        result.copy(channels = ArrayList(result.channels.filter { seen.add(it.id.ifBlank { it.streamUrl }) }))
+        result.copy(
+            channels = ArrayList(result.channels.filter { seen.add(it.id.ifBlank { it.streamUrl }) }),
+            groupOrder = genres.values.map(String::trim).distinct(),
+        )
     }
 
     /**

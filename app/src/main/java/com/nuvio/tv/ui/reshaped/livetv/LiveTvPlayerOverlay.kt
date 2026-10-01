@@ -141,6 +141,10 @@ internal class LiveTvPlayerState(
                 pickFromPanel(channel)
             },
             onClose = { guide = null },
+            onCatchup = { channel, programme ->
+                guide = null
+                playCatchup(channel, programme)
+            },
         )
     }
 
@@ -247,6 +251,23 @@ internal class LiveTvPlayerState(
             swallowOkRelease = false
             return true
         }
+        if (isCatchup()) {
+            // A past programme seeks and pauses like a film: only ▲▼ (back to live channels) and
+            // Back on the bare picture (back to this channel live) stay Live TV's.
+            if (uiState.showControls || nuvioOverlayOpen || uiState.error != null) return false
+            return when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (down) zap(if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
+                    true
+                }
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                    if (uiState.showPauseOverlay) return false
+                    if (!down) currentChannel()?.let(::switchTo)
+                    true
+                }
+                else -> false
+            }
+        }
         // ▲▼◀ and OK are Live TV's only on the bare picture: never over controls, panels or errors.
         if (uiState.showControls || nuvioOverlayOpen || uiState.error != null || uiState.showPauseOverlay) {
             if (infoOpen) hideInfo()
@@ -328,8 +349,38 @@ internal class LiveTvPlayerState(
         switchTo(channel)
     }
 
+    /** Whether the player shows a past programme (catch-up) rather than the live channel. */
+    internal fun isCatchup(): Boolean = LiveTvPlaybackRegistry.isCatchup(controller.currentStreamUrl)
+
+    /** The list entry of the channel playing (live or catch-up). */
+    private fun currentChannel(): LiveTvChannel? =
+        currentListUrl?.let { url -> LiveTvRepository.uiState.value.channels.firstOrNull { it.streamUrl == url } }
+
+    /** Plays [channel]'s past [programme] in this player; it stays the channel ▲▼ zap from. */
+    internal fun playCatchup(channel: LiveTvChannel, programme: LiveTvProgramme) {
+        closePanel()
+        hideInfo()
+        currentListUrl = channel.streamUrl
+        bannerKey++
+        controller._uiState.update { it.copy(title = programme.title, logo = LiveTvRepository.uiState.value.logoFor(channel)) }
+        switchJob?.cancel()
+        switchJob = scope.launch {
+            val playback = LiveTvRepository.catchupChannel(channel, programme)
+            if (playback == null) {
+                android.widget.Toast.makeText(controller.context, R.string.live_tv_catchup_failed, android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            LiveTvPlaybackRegistry.register(
+                PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers).url,
+                listUrl = channel.streamUrl,
+                catchup = true,
+            )
+            controller.switchToSourceStream(channel.toStream(playback))
+        }
+    }
+
     internal fun switchTo(channel: LiveTvChannel) {
-        if (channel.streamUrl == currentListUrl) {
+        if (channel.streamUrl == currentListUrl && !isCatchup()) {
             closePanel()
             return
         }

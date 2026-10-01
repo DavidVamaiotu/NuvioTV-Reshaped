@@ -52,9 +52,10 @@
     <string name="live_tv_remove_source">Remove source</string>
     <string name="live_tv_edit_source">Edit</string>
     <string name="live_tv_source_edit_title">Edit source</string>
-    <string name="live_tv_source_edit_description">Change the address, login or guide. Hidden channels and favorites stay.</string>
+    <string name="live_tv_source_edit_description">Rename it, or change its address, login or guide. Hidden channels and favorites stay.</string>
     <string name="live_tv_save_source">Save</string>
     <string name="live_tv_imported_file">Imported file: %1$s</string>
+    <string name="live_tv_source_name_hint">Name (%1$s)</string>
     <string name="live_tv_epg_hint">Guide link (XMLTV, optional)</string>
     <string name="live_tv_source_guide_none">no guide</string>
     <string name="live_tv_source_guide_loading">loading guide</string>
@@ -68,7 +69,10 @@
     <string name="live_tv_categories_description">OK shows or hides a category, ▶ renames it or picks its channels. Hold OK to move it, then ▲▼, and OK to drop it. Hidden ones leave the list, search and channel switching; favorites always stay.</string>
     <string name="live_tv_category_channels_description">Type above to rename the category. OK shows or hides a channel. Hidden ones leave the list, search and channel switching; favorites always stay.</string>
     <string name="live_tv_category_rename_hint">Rename %1$s</string>
+    <string name="live_tv_catchup">Catch-up</string>
+    <string name="live_tv_catchup_failed">This programme can\'t be played again</string>
     <string name="live_tv_categories_sort">A–Z</string>
+    <string name="live_tv_categories_provider_order">Provider order</string>
     <string name="live_tv_uncategorised">Uncategorised</string>
     <string name="live_tv_categories_shown">%1$d of %2$d shown</string>
     <string name="live_tv_categories_show_all">Show all</string>

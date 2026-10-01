@@ -24,6 +24,9 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
     var metadata: M3uMetadata? = null
     var pendingHeaders = emptyMap<String, String>()
     var isHlsStream = false
+    // Catch-up the playlist header gives every channel, and one shared instance per kind.
+    var defaultCatchup: Map<String, String> = emptyMap()
+    val catchups = HashMap<LiveTvCatchup, LiveTvCatchup>()
 
     for (rawLine in lines) {
         val line = rawLine.trim().removePrefix("﻿")
@@ -31,6 +34,7 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
             line.isEmpty() -> Unit
             line.startsWith("#EXTM3U", ignoreCase = true) -> {
                 val attributes = parseM3uAttributes(line)
+                defaultCatchup = attributes.filterKeys { it in CATCHUP_ATTRIBUTES }
                 listOfNotNull(attributes["url-tvg"], attributes["x-tvg-url"], attributes["tvg-url"])
                     .flatMap { it.split(',', ';') }
                     .map(String::trim)
@@ -69,6 +73,7 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
                     tvgId = current?.tvgId,
                     logoUrl = current?.logoUrl,
                     tvgName = current?.tvgName?.takeIf { it != name },
+                    catchup = m3uCatchup(current?.catchup.orEmpty(), defaultCatchup)?.let { catchups.getOrPut(it) { it } },
                     group = groups.getOrPut(group) { group },
                     headers = if (extraHeaders.isEmpty()) {
                         defaults
@@ -84,7 +89,42 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
     return ParsedM3uPlaylist(channels = channels, epgUrls = epgUrls.toList())
 }
 
-private class M3uMetadata(val name: String, val tvgId: String?, val tvgName: String?, val logoUrl: String?, val group: String)
+private class M3uMetadata(
+    val name: String,
+    val tvgId: String?,
+    val tvgName: String?,
+    val logoUrl: String?,
+    val group: String,
+    /** The entry's catch-up attributes, usually none. */
+    val catchup: Map<String, String>,
+)
+
+private val CATCHUP_ATTRIBUTES = setOf("catchup", "catchup-type", "catchup-days", "catchup-source", "tvg-rec", "timeshift")
+
+/**
+ * A channel's catch-up from its `catchup*` attributes (falling back on the playlist header's),
+ * as IPTV players read them: `catchup`/`catchup-type` the kind, `catchup-days` (or `tvg-rec`,
+ * `timeshift`) how far back, `catchup-source` the link template.
+ */
+internal fun m3uCatchup(entry: Map<String, String>, playlist: Map<String, String>): LiveTvCatchup? {
+    if (entry.isEmpty() && playlist.isEmpty()) return null
+    fun value(name: String) = entry[name]?.takeIf(String::isNotBlank) ?: playlist[name]?.takeIf(String::isNotBlank)
+    val type = (value("catchup") ?: value("catchup-type"))?.trim()?.lowercase()
+    val days = (value("catchup-days") ?: value("tvg-rec") ?: value("timeshift"))?.trim()?.toIntOrNull()
+    val template = value("catchup-source")?.trim()
+    if (type == null && (days ?: 0) <= 0) return null
+    if (type == "disabled" || type == "none" || type == "0" || days == 0) return null
+    val kind = when (type) {
+        null, "default", "1" -> if (template == null) LiveTvCatchup.Kind.Shift else LiveTvCatchup.Kind.Default
+        "append" -> LiveTvCatchup.Kind.Append
+        "shift", "timeshift" -> LiveTvCatchup.Kind.Shift
+        "flussonic", "flussonic-hls", "flussonic-ts", "fs" -> LiveTvCatchup.Kind.Flussonic
+        "xc", "xtream" -> LiveTvCatchup.Kind.Xtream
+        else -> if (template != null) LiveTvCatchup.Kind.Default else return null
+    }
+    if ((kind == LiveTvCatchup.Kind.Default || kind == LiveTvCatchup.Kind.Append) && template == null) return null
+    return LiveTvCatchup(kind, (days ?: 1).coerceIn(1, 30), template)
+}
 
 private val m3uAttributeRegex = Regex("""([\w-]+)="([^"]*)"""")
 
@@ -98,6 +138,7 @@ private fun parseExtInf(line: String): M3uMetadata {
         name = displayName,
         tvgId = attributes["tvg-id"]?.takeIf(String::isNotBlank),
         tvgName = attributes["tvg-name"]?.takeIf(String::isNotBlank),
+        catchup = if (attributes.keys.any(CATCHUP_ATTRIBUTES::contains)) attributes.filterKeys(CATCHUP_ATTRIBUTES::contains) else emptyMap(),
         logoUrl = attributes["tvg-logo"]?.takeIf(String::isNotBlank),
         group = attributes["group-title"].orEmpty(),
     )

@@ -79,6 +79,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
     var stalkerUser by rememberSaveable { mutableStateOf("") }
     var stalkerPassword by rememberSaveable { mutableStateOf("") }
     var epgLink by rememberSaveable { mutableStateOf("") }
+    var sourceName by rememberSaveable { mutableStateOf("") }
     /** The saved source the form edits; null while adding. */
     var editingId by rememberSaveable { mutableStateOf<String?>(null) }
     val editing = editingId?.let { id -> uiState.sources.firstOrNull { it.id == id } }
@@ -95,7 +96,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
             adding = false
             editingId = null
             m3uUrl = ""; xtreamServer = ""; xtreamUser = ""; xtreamPassword = ""
-            stalkerPortal = ""; stalkerMac = ""; stalkerUser = ""; stalkerPassword = ""; epgLink = ""
+            stalkerPortal = ""; stalkerMac = ""; stalkerUser = ""; stalkerPassword = ""; epgLink = ""; sourceName = ""
         }
     }
 
@@ -207,6 +208,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                                 stalkerUser = source.stalker.username
                                 stalkerPassword = source.stalker.password
                                 epgLink = source.epgUrl
+                                sourceName = source.name
                                 editingId = source.id
                                 adding = true
                             },
@@ -256,8 +258,16 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                     }
                 }
                 if (adding) {
-                    // Editing has no kind to pick: the first field takes the focus instead.
-                    val fieldFocus = if (editing != null) Modifier.focusRequester(firstFocus) else Modifier
+                    // Editing has no kind to pick: its name field takes the focus instead.
+                    if (editing != null) {
+                        LiveTvTextField(
+                            sourceName,
+                            { sourceName = it },
+                            stringResource(R.string.live_tv_source_name_hint, editing.copy(name = "").label),
+                            Modifier.focusRequester(firstFocus),
+                            keyboardType = KeyboardType.Text,
+                        )
+                    }
                     when (tab) {
                         LiveTvSourceType.M3u -> {
                             if (editing != null && !editing.url.startsWith("http", ignoreCase = true)) {
@@ -268,18 +278,18 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                                     color = NuvioTheme.colors.TextSecondary,
                                 )
                             } else {
-                                LiveTvTextField(m3uUrl, { m3uUrl = it }, stringResource(R.string.live_tv_m3u_hint), fieldFocus)
+                                LiveTvTextField(m3uUrl, { m3uUrl = it }, stringResource(R.string.live_tv_m3u_hint))
                             }
                         }
                         LiveTvSourceType.Xtream -> {
-                            LiveTvTextField(xtreamServer, { xtreamServer = it }, stringResource(R.string.live_tv_xtream_server_hint), fieldFocus)
+                            LiveTvTextField(xtreamServer, { xtreamServer = it }, stringResource(R.string.live_tv_xtream_server_hint))
                             Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm)) {
                                 LiveTvTextField(xtreamUser, { xtreamUser = it }, stringResource(R.string.live_tv_username_hint), Modifier.weight(1f), keyboardType = KeyboardType.Text)
                                 LiveTvTextField(xtreamPassword, { xtreamPassword = it }, stringResource(R.string.live_tv_password_hint), Modifier.weight(1f), password = true)
                             }
                         }
                         LiveTvSourceType.Stalker -> {
-                            LiveTvTextField(stalkerPortal, { stalkerPortal = it }, stringResource(R.string.live_tv_stalker_portal_hint), fieldFocus)
+                            LiveTvTextField(stalkerPortal, { stalkerPortal = it }, stringResource(R.string.live_tv_stalker_portal_hint))
                             LiveTvTextField(stalkerMac, { stalkerMac = it }, stringResource(R.string.live_tv_stalker_mac_hint), keyboardType = KeyboardType.Ascii)
                             Row(horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm)) {
                                 LiveTvTextField(stalkerUser, { stalkerUser = it }, stringResource(R.string.live_tv_optional_username_hint), Modifier.weight(1f), keyboardType = KeyboardType.Text)
@@ -287,13 +297,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                             }
                         }
                     }
-                    // An imported file being edited has no other field to take the focus.
-                    val guideFocus = if (editing != null && tab == LiveTvSourceType.M3u && !editing.url.startsWith("http", ignoreCase = true)) {
-                        Modifier.focusRequester(firstFocus)
-                    } else {
-                        Modifier
-                    }
-                    LiveTvTextField(epgLink, { epgLink = it }, stringResource(R.string.live_tv_epg_hint), guideFocus)
+                    LiveTvTextField(epgLink, { epgLink = it }, stringResource(R.string.live_tv_epg_hint))
 
                     val status = when {
                         uiState.isLoading -> stringResource(R.string.live_tv_loading)
@@ -326,7 +330,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                                 if (editing != null) {
                                     LiveTvRepository.updateSource(
                                         editing.id,
-                                        LiveTvSource(editing.id, editing.type, m3uUrl, stalker = stalker, xtream = xtream, epgUrl = epgLink),
+                                        LiveTvSource(editing.id, editing.type, m3uUrl, stalker = stalker, xtream = xtream, epgUrl = epgLink, name = sourceName),
                                     )
                                 } else {
                                     when (tab) {
