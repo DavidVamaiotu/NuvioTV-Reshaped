@@ -2,6 +2,7 @@ package com.nuvio.tv.reshaped.livetv
 
 import android.content.Context
 import android.util.Log
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.File
 import java.io.InputStream
 import java.util.concurrent.ConcurrentHashMap
@@ -495,14 +496,18 @@ object LiveTvRepository {
         val catchup = channel.catchup ?: return null
         val now = LiveTvClock.nowEpochMs()
         if (!LiveTvCatchupLinks.isPlayable(catchup, programme, now)) return null
-        val zone = if (LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup)) {
+        // Only an Xtream panel answers its /timeshift/ form; other "shift" servers take ?utc=.
+        val source = _uiState.value.sources.firstOrNull { it.id == channel.sourceId }
+        val xtreamPanel = source == null || source.type == LiveTvSourceType.Xtream ||
+            (source.type == LiveTvSourceType.M3u && xtreamGuideUrlFor(source.url) != null)
+        val zone = if (LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup, xtreamPanel)) {
             LiveTvCatchupLinks.xtreamLogin(channel.streamUrl)?.let { (server, user, pass) -> LiveTvXtream.zone(server, user, pass) }
         } else {
             null
         }
         // A programme still on air plays from its start up to now.
         val stop = minOf(programme.stopEpochMs, now)
-        val link = LiveTvCatchupLinks.link(channel.streamUrl, catchup, programme.startEpochMs, stop, now, zone) ?: return null
+        val link = LiveTvCatchupLinks.link(channel.streamUrl, catchup, programme.startEpochMs, stop, now, zone, xtreamPanel) ?: return null
         LiveTvPlaybackRegistry.register(link, listUrl = channel.streamUrl, catchup = true)
         recordRecentChannel(channel)
         return channel.copy(streamUrl = link)
@@ -583,7 +588,14 @@ object LiveTvRepository {
                 outcome.onSuccess { (result, notice) ->
                     val previous = loaded[source.id]
                     loaded[source.id] = result
-                    if (adding && known && previous != null) carryOverFavorites(source, previous, result, store)
+                    if (adding && known) {
+                        if (previous != null) {
+                            carryOverFavorites(source, previous, result, store)
+                        } else {
+                            // The old list never loaded (its server moved): Xtream links still name their channel.
+                            _uiState.value.sources.firstOrNull { it.id == source.id }?.let { old -> carryOverXtreamFavorites(old, result, store) }
+                        }
+                    }
                     if (adding) {
                         val sources = _uiState.value.sources.let { current ->
                             if (known) current.map { if (it.id == source.id) source else it } else current + source
@@ -750,6 +762,48 @@ object LiveTvRepository {
             store.saveFavoriteUrls(favorites)
             newRecent?.let(store::saveRecentChannel)
         }
+    }
+
+    /**
+     * Favourites and the last channel of [old] (an Xtream login, or its get.php list) follow
+     * [after]'s channels with the same stream id, for a source edited before its list loaded.
+     */
+    private fun carryOverXtreamFavorites(old: LiveTvSource, after: LoadedSource, store: LiveTvStorage) {
+        val login = xtreamLoginOf(old) ?: return
+        val state = _uiState.value
+        val recent = state.recentChannel
+        fun matches(url: String): Boolean = LiveTvCatchupLinks.xtreamLogin(url)?.let { (server, user, pass) ->
+            server.trimEnd('/').equals(login.first.trimEnd('/'), ignoreCase = true) && user == login.second && pass == login.third
+        } == true
+        val wanted = (state.favoriteUrls + listOfNotNull(recent?.streamUrl)).filter(::matches)
+        if (wanted.isEmpty()) return
+        val byFile = HashMap<String, LiveTvChannel>(after.channels.size * 2)
+        after.channels.forEach { byFile.putIfAbsent(it.streamUrl.substringBefore('?').substringAfterLast('/').substringBefore('.'), it) }
+        val moved = HashMap<String, LiveTvChannel>()
+        wanted.forEach { url ->
+            val now = byFile[url.substringBefore('?').substringAfterLast('/').substringBefore('.')] ?: return@forEach
+            if (now.streamUrl != url) moved[url] = now
+        }
+        if (moved.isEmpty()) return
+        val favorites = state.favoriteUrls.mapTo(HashSet()) { moved[it]?.streamUrl ?: it }
+        val newRecent = recent?.let { r -> moved[r.streamUrl]?.let { r.copy(streamUrl = it.streamUrl, logoUrl = it.logoUrl) } ?: r }
+        _uiState.update { it.copy(favoriteUrls = favorites, recentChannel = newRecent) }
+        scope.launch(writer) {
+            store.saveFavoriteUrls(favorites)
+            newRecent?.let(store::saveRecentChannel)
+        }
+    }
+
+    /** The server, user and password of an Xtream source, or of an M3U get.php link. */
+    private fun xtreamLoginOf(source: LiveTvSource): Triple<String, String, String>? = when (source.type) {
+        LiveTvSourceType.Xtream -> source.xtream.takeIf { it.isConfigured }?.let { Triple(it.serverUrl, it.username, it.password) }
+        LiveTvSourceType.M3u -> source.url.toHttpUrlOrNull()?.takeIf { it.encodedPath.endsWith("/get.php", ignoreCase = true) }?.let { url ->
+            val user = url.queryParameter("username") ?: return@let null
+            val pass = url.queryParameter("password") ?: return@let null
+            val folder = url.encodedPath.dropLast("/get.php".length)
+            Triple(url.newBuilder().encodedPath(folder.ifEmpty { "/" }).query(null).build().toString().trimEnd('/'), user, pass)
+        }
+        LiveTvSourceType.Stalker -> null
     }
 
     private suspend fun fetchM3u(url: String): ParsedM3uPlaylist {
@@ -969,7 +1023,14 @@ object LiveTvRepository {
         val guideFiles = epgUrls.map { File(guideDir(), "guide_${Integer.toHexString(it.hashCode())}.xml.gz") }
         val cacheFile = File(guideDir(), LiveTvGuideCache.FILE_NAME)
         val catchupKeys = channels.mapNotNullTo(HashSet()) { channel -> channel.guideKey.takeIf { channel.catchup != null } }
-        val cacheKey = LiveTvGuideCache.key(epgUrls, guideKeys, window, catchupKeys)
+        // Names (and missing logos) decide name matches and guide logos: a list that renames
+        // channels keeping their ids must not be served the matches kept for the old names.
+        var matching = 0L
+        channels.forEach { channel ->
+            matching = matching * 31 + channel.name.hashCode() + 7L * (channel.tvgName?.hashCode() ?: 0) +
+                if (channel.logoUrl.isNullOrBlank()) 1 else 0
+        }
+        val cacheKey = LiveTvGuideCache.key(epgUrls, guideKeys, window, catchupKeys) * 31 + matching
         guideWindow = window
         // Which sources each guide belongs to, and how a portal's guide is fetched. Read here, on [serial].
         val sourceLinks = _uiState.value.sources.associate { it.id to loaded[it.id]?.epgUrls.orEmpty() }
@@ -986,7 +1047,7 @@ object LiveTvRepository {
                     LiveTvStalker.downloadGuide(portal.stalker, ids, aheadHours, file)
                 }
             } else {
-                { file -> LiveTvHttp.download(url, LIVE_TV_STREAM_HEADERS, file, LiveTvHttp.GUIDE_READ_TIMEOUT_S) }
+                { file -> LiveTvHttp.download(url, LIVE_TV_STREAM_HEADERS, file, LiveTvHttp.GUIDE_READ_TIMEOUT_S, expectXml = true) }
             }
             fetch
         }
@@ -1041,12 +1102,14 @@ object LiveTvRepository {
                             val logos = HashMap<String, String>()
                             val truncated = HashSet<String>()
                             val failedLinks = HashSet<String>()
+                            var partial = false
                             epgUrls.forEachIndexed { index, epgUrl ->
                                 val guide = readGuide(downloads[index], guideFiles[index], request, nowMs, window, force)
                                 if (guide == null) {
                                     failedLinks += epgUrl
                                     return@forEachIndexed
                                 }
+                                if (!guide.complete) partial = true
                                 guide.schedule.forEach { (key, list) ->
                                     if (loaded.putIfAbsent(key, list) == null && key in guide.truncated) truncated += key
                                 }
@@ -1058,8 +1121,8 @@ object LiveTvRepository {
                             }
                             val failed = failedLinks.isNotEmpty()
                             if (force && epgGeneration == generation) forceGuideDownload = false
-                            // A guide that failed keeps what it showed before.
-                            schedule = if (failed && previous.isNotEmpty()) HashMap(previous).apply { putAll(loaded) } else loaded
+                            // A guide that failed, or broke off part way, keeps what it showed before.
+                            schedule = if ((failed || partial) && previous.isNotEmpty()) HashMap(previous).apply { putAll(loaded) } else loaded
                             val regular = if (loaded.isEmpty()) {
                                 nowMs + EPG_RETRY_MS
                             } else {
@@ -1067,7 +1130,8 @@ object LiveTvRepository {
                             }
                             nextReadAtMs = if (failed) minOf(regular, nowMs + EPG_RETRY_MS) else regular
                             publishGuide(schedule, logos, nowMs, failedLinks)
-                            if (!failed && loaded.isNotEmpty() && epgGeneration == generation) {
+                            // A guide that broke off part way is not saved as the kept programmes.
+                            if (!failed && !partial && loaded.isNotEmpty() && epgGeneration == generation) {
                                 val entry = LiveTvGuideCache.Entry(loaded, logos, nextReadAtMs)
                                 withContext(Dispatchers.IO) { LiveTvGuideCache.write(cacheFile, cacheKey, guideFiles, entry) }
                             }

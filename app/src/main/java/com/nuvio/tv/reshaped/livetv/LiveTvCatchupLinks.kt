@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * Links to past programmes (catch-up) in the forms IPTV providers use. Everything here is plain
@@ -17,7 +18,7 @@ internal object LiveTvCatchupLinks {
         catchup != null && programme.startEpochMs < nowMs && nowMs - programme.startEpochMs <= catchup.days * DAY_MS
 
     /** An Xtream live link `http://host/live/user/pass/id.ext` (or without `/live`), split up. */
-    private val XTREAM_LIVE = Regex("""^(https?://[^/]+)/(?:live/)?([^/]+)/([^/]+)/(\d+)(\.[A-Za-z0-9]+)?$""")
+    private val XTREAM_LIVE = Regex("""^(https?://[^/]+)/(?:live/)?([^/]+)/([^/]+)/(\d+)(\.[A-Za-z0-9]+)?$""", RegexOption.IGNORE_CASE)
 
     /** The panel login an Xtream live link carries: server, user, password. */
     fun xtreamLogin(liveUrl: String): Triple<String, String, String>? =
@@ -36,6 +37,8 @@ internal object LiveTvCatchupLinks {
         stopMs: Long,
         nowMs: Long,
         panelZone: ZoneId?,
+        /** Whether the channel comes from an Xtream panel (its own source, or its get.php list). */
+        xtreamPanel: Boolean = true,
     ): String? {
         val start = startMs / 1000
         val end = maxOf(stopMs / 1000, start + 60)
@@ -50,14 +53,16 @@ internal object LiveTvCatchupLinks {
                 else -> liveUrl + fill(template, start, end, now)
             }
             // Xtream panels list "shift" catch-up in their M3U too, but only answer their own form.
-            LiveTvCatchup.Kind.Shift -> xtream(liveUrl, startMs, end - start, panelZone) ?: shift(liveUrl, start, now)
+            LiveTvCatchup.Kind.Shift ->
+                (if (xtreamPanel) xtream(liveUrl, startMs, end - start, panelZone) else null) ?: shift(liveUrl, start, now)
             LiveTvCatchup.Kind.Flussonic -> flussonic(liveUrl, start, end - start)
         }
     }
 
     /** Whether the link for [catchup] on [liveUrl] needs the Xtream panel's time zone. */
-    fun needsPanelZone(liveUrl: String, catchup: LiveTvCatchup): Boolean =
-        (catchup.kind == LiveTvCatchup.Kind.Xtream || catchup.kind == LiveTvCatchup.Kind.Shift) && xtreamLogin(liveUrl) != null
+    fun needsPanelZone(liveUrl: String, catchup: LiveTvCatchup, xtreamPanel: Boolean = true): Boolean =
+        (catchup.kind == LiveTvCatchup.Kind.Xtream || (catchup.kind == LiveTvCatchup.Kind.Shift && xtreamPanel)) &&
+            xtreamLogin(liveUrl) != null
 
     private val XTREAM_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd:HH-mm")
 
@@ -75,11 +80,12 @@ internal object LiveTvCatchupLinks {
         return "$liveUrl${separator}utc=$start&lutc=$now"
     }
 
-    private val FLUSSONIC = Regex("""^(https?://[^/]+)/(.*)/([^/?]*)(\?.*)?$""")
+    private val FLUSSONIC = Regex("""^(https?://[^/]+)/([^?]*?)(?:/([^/?]*))?(\?.*)?$""", RegexOption.IGNORE_CASE)
 
     private fun flussonic(liveUrl: String, start: Long, duration: Long): String? {
         val match = FLUSSONIC.find(liveUrl) ?: return null
         val (host, stream, file, query) = match.destructured
+        if (stream.isEmpty()) return null
         return if (file.isEmpty() || file.endsWith(".m3u8")) {
             val base = file.removeSuffix(".m3u8").ifEmpty { "index" }
             "$host/$stream/$base-$start-$duration.m3u8$query"
@@ -117,12 +123,12 @@ internal object LiveTvCatchupLinks {
             when (val name = match.groupValues[1]) {
                 "duration" -> duration.toString()
                 "offset" -> (now - start).toString()
-                "Y" -> "%04d".format(local.year)
-                "m" -> "%02d".format(local.monthValue)
-                "d" -> "%02d".format(local.dayOfMonth)
-                "H" -> "%02d".format(local.hour)
-                "M" -> "%02d".format(local.minute)
-                "S" -> "%02d".format(local.second)
+                "Y" -> "%04d".format(Locale.ROOT, local.year)
+                "m" -> "%02d".format(Locale.ROOT, local.monthValue)
+                "d" -> "%02d".format(Locale.ROOT, local.dayOfMonth)
+                "H" -> "%02d".format(Locale.ROOT, local.hour)
+                "M" -> "%02d".format(Locale.ROOT, local.minute)
+                "S" -> "%02d".format(Locale.ROOT, local.second)
                 else -> epochFor(name).toString()
             }
         }
@@ -135,17 +141,19 @@ internal object LiveTvCatchupLinks {
         return buildString {
             pattern.forEach { char ->
                 when (char) {
-                    'Y' -> append("%04d".format(time.year))
-                    'm' -> append("%02d".format(time.monthValue))
-                    'd' -> append("%02d".format(time.dayOfMonth))
-                    'H' -> append("%02d".format(time.hour))
-                    'M' -> append("%02d".format(time.minute))
-                    'S' -> append("%02d".format(time.second))
+                    'Y' -> append("%04d".format(Locale.ROOT, time.year))
+                    'm' -> append("%02d".format(Locale.ROOT, time.monthValue))
+                    'd' -> append("%02d".format(Locale.ROOT, time.dayOfMonth))
+                    'H' -> append("%02d".format(Locale.ROOT, time.hour))
+                    'M' -> append("%02d".format(Locale.ROOT, time.minute))
+                    'S' -> append("%02d".format(Locale.ROOT, time.second))
                     else -> append(char)
                 }
             }
         }
     }
 
-    private fun decode(text: String): String = runCatching { java.net.URLDecoder.decode(text, "UTF-8") }.getOrDefault(text)
+    /** A path segment decoded: "%xx" only (a "+" in a path is a plus, not a space). */
+    private fun decode(text: String): String =
+        runCatching { java.net.URLDecoder.decode(text.replace("+", "%2B"), "UTF-8") }.getOrDefault(text)
 }

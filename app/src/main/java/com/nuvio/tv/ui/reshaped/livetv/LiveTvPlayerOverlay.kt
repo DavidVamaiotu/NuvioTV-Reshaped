@@ -262,7 +262,9 @@ internal class LiveTvPlayerState(
                 }
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                     if (uiState.showPauseOverlay) return false
-                    if (!down) currentChannel()?.let(::switchTo)
+                    // A channel gone since (removed, or its source edited) leaves Back to the player.
+                    val channel = currentChannel() ?: return false
+                    if (!down) switchTo(channel)
                     true
                 }
                 else -> false
@@ -360,16 +362,17 @@ internal class LiveTvPlayerState(
     internal fun playCatchup(channel: LiveTvChannel, programme: LiveTvProgramme) {
         closePanel()
         hideInfo()
-        currentListUrl = channel.streamUrl
-        bannerKey++
-        controller._uiState.update { it.copy(title = programme.title, logo = LiveTvRepository.uiState.value.logoFor(channel)) }
         switchJob?.cancel()
         switchJob = scope.launch {
             val playback = LiveTvRepository.catchupChannel(channel, programme)
             if (playback == null) {
+                // What plays stays as it was.
                 android.widget.Toast.makeText(controller.context, R.string.live_tv_catchup_failed, android.widget.Toast.LENGTH_SHORT).show()
                 return@launch
             }
+            currentListUrl = channel.streamUrl
+            bannerKey++
+            controller._uiState.update { it.copy(title = programme.title, logo = LiveTvRepository.uiState.value.logoFor(channel)) }
             LiveTvPlaybackRegistry.register(
                 PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers).url,
                 listUrl = channel.streamUrl,

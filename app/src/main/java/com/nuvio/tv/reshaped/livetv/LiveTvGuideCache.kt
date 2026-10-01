@@ -29,6 +29,9 @@ internal object LiveTvGuideCache {
         key = key * 31 + window.pastMs
         key = key * 31 + window.aheadMs
         key = key * 31 + window.maxPast * 1_000 + window.maxAhead
+        key = key * 31 + window.catchupPastMs + window.maxCatchupPast
+        key = key * 31 + window.detailsMs + window.maxDescription * 1_000L + window.detailsPerChannel
+        key = key * 31 + window.detailsBudgetChars + window.maxCatchupProgrammes
         return key
     }
 
@@ -50,15 +53,18 @@ internal object LiveTvGuideCache {
             repeat(input.readInt()) { logos[input.readUTF()] = input.readUTF() }
             val channels = input.readInt()
             val schedule = HashMap<String, List<LiveTvProgramme>>(channels * 2)
+            // Repeated titles share one copy, as after a full read.
+            val shared = HashMap<String, String>()
+            fun DataInputStream.readShared(): String = readUTF().let { shared.getOrPut(it) { it } }
             repeat(channels) {
                 val guideKey = input.readUTF()
                 val count = input.readInt()
                 schedule[guideKey] = List(count) {
                     LiveTvProgramme(
-                        title = input.readUTF(),
+                        title = input.readShared(),
                         startEpochMs = input.readLong(),
                         stopEpochMs = input.readLong(),
-                        description = input.readOptional(),
+                        description = if (input.readBoolean()) input.readShared() else null,
                         image = input.readOptional(),
                     )
                 }
@@ -91,7 +97,8 @@ internal object LiveTvGuideCache {
                         out.writeLong(programme.startEpochMs)
                         out.writeLong(programme.stopEpochMs)
                         out.writeOptional(programme.description?.take(MAX_TITLE))
-                        out.writeOptional(programme.image?.take(MAX_TITLE))
+                        // A cut link would be a broken one.
+                        out.writeOptional(programme.image?.takeIf { it.length <= MAX_TITLE })
                     }
                 }
             }

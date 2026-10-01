@@ -84,12 +84,21 @@ internal object LiveTvXtream {
      */
     suspend fun zone(serverUrl: String, username: String, password: String): java.time.ZoneId {
         zones[serverUrl]?.let { return it }
+        // A login that failed (panel busy, timeout) is asked again, at most once a minute.
+        zoneFailedAt[serverUrl]?.let { if (System.currentTimeMillis() - it < 60_000L) return java.time.ZoneId.systemDefault() }
         val settings = LiveTvXtreamSettings(serverUrl, username, password)
-        val zone = runCatching { zoneOf(JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS))) }
+        val login = runCatching { JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS)) }
             .onFailure { if (it is CancellationException) throw it }
             .getOrNull()
-        return (zone ?: java.time.ZoneId.systemDefault()).also { zones[serverUrl] = it }
+        if (login == null) {
+            zoneFailedAt[serverUrl] = System.currentTimeMillis()
+            return java.time.ZoneId.systemDefault()
+        }
+        // A panel that gives no zone answers in the TV's own, as players assume.
+        return (zoneOf(login) ?: java.time.ZoneId.systemDefault()).also { zones[serverUrl] = it }
     }
+
+    private val zoneFailedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     private fun zoneOf(login: JSONObject): java.time.ZoneId? =
         login.optJSONObject("server_info")?.optString("timezone")?.trim()?.takeIf(String::isNotEmpty)
@@ -190,14 +199,13 @@ internal object LiveTvStalker {
                         count = writeStalkerGuide(input, channels, writer)
                         writer.flush()
                     }
+                    // An empty answer keeps the guide saved before.
+                    count > 0
                 }
                 count
             }
             // An expired session answers with no programmes: withSession renews it and asks once more.
-            if (programmes == 0) {
-                target.delete()
-                throw java.io.IOException("Portal sent no guide")
-            }
+            if (programmes == 0) throw java.io.IOException("Portal sent no guide")
         }
     }
 

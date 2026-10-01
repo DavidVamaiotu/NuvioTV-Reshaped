@@ -52,9 +52,16 @@ internal object LiveTvHttp {
     /**
      * Saves [url] to [target] gzip-compressed (as sent when the server already gzipped it, else
      * compressed quickly on the way), so a 100+ MB guide takes a few MB on the TV's storage.
-     * The old file stays until the new one is complete.
+     * The old file stays until the new one is complete, and, with [expectXml], until the new one
+     * is XML: a panel answering with an HTML login or error page keeps the guide it had.
      */
-    suspend fun download(url: String, headers: Map<String, String>, target: File, readTimeoutSeconds: Long = 0L) {
+    suspend fun download(
+        url: String,
+        headers: Map<String, String>,
+        target: File,
+        readTimeoutSeconds: Long = 0L,
+        expectXml: Boolean = false,
+    ) {
         runInterruptible(Dispatchers.IO) {
             // Some panels build their guide on request and send nothing for a minute or more.
             val http = if (readTimeoutSeconds > 0) client.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build() else client
@@ -75,6 +82,7 @@ internal object LiveTvHttp {
                         }
                     }
                 }
+                if (expectXml && !temp.startsLikeXml()) throw IOException("Not a guide")
                 if (!temp.renameTo(target)) throw IOException("Could not save ${target.name}")
             } finally {
                 temp.delete()
@@ -82,16 +90,31 @@ internal object LiveTvHttp {
         }
     }
 
+    /** Whether this gzip file's text starts with `<` (after a byte order mark and spaces). */
+    private fun File.startsLikeXml(): Boolean = runCatching {
+        GZIPInputStream(inputStream(), 512).use { input ->
+            val head = ByteArray(512)
+            val read = input.read(head)
+            if (read <= 0) return false
+            var index = 0
+            if (read >= 3 && head[0] == 0xEF.toByte() && head[1] == 0xBB.toByte() && head[2] == 0xBF.toByte()) index = 3
+            while (index < read && head[index].toInt().toChar().isWhitespace()) index++
+            index < read && head[index] == '<'.code.toByte()
+        }
+    }.getOrDefault(false)
+
     /**
      * Writes [target] gzip-compressed through [write] (blocking; call on the IO pool). The old
-     * file stays until the new one is complete.
+     * file stays until the new one is complete, and when [write] returns false.
      */
-    fun writeGzip(target: File, write: (java.io.OutputStream) -> Unit) {
+    fun writeGzip(target: File, write: (java.io.OutputStream) -> Boolean): Boolean {
         target.parentFile?.mkdirs()
         val temp = File(target.path + ".part")
         try {
-            FastGzipOutputStream(temp.outputStream()).use(write)
+            val keep = FastGzipOutputStream(temp.outputStream()).use(write)
+            if (!keep) return false
             if (!temp.renameTo(target)) throw IOException("Could not save ${target.name}")
+            return true
         } finally {
             temp.delete()
         }

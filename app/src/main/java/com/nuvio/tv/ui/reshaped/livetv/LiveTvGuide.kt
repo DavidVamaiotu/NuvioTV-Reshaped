@@ -29,6 +29,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
@@ -71,6 +76,8 @@ import kotlin.math.roundToInt
 
 private const val MINUTE = 60_000L
 private const val SLOT = 30 * MINUTE
+/** The rows keep programmes for this much on either side of the view. */
+private const val BLOCK = 4 * SLOT
 private val MINUTE_WIDTH = 6.dp
 private val ROW_HEIGHT = 56.dp
 private val CHANNEL_COLUMN = 220.dp
@@ -126,12 +133,15 @@ internal class LiveTvGuideState(
             programmes.firstOrNull { anchorMs >= it.startEpochMs && anchorMs < it.stopEpochMs }
         }
 
-    /** Shows [list] (another category), on [keepUrl]'s channel when it is in it, back at now. */
-    fun showChannels(list: List<LiveTvChannel>, keepUrl: String?) {
+    /**
+     * Shows [list], on [keepUrl]'s channel when it is in it; [toNow] (another category or search)
+     * also brings the timeline back to now, while a list only filtered again stays where it was.
+     */
+    fun showChannels(list: List<LiveTvChannel>, keepUrl: String?, toNow: Boolean) {
         if (list === channels) return
         channels = list
         row = list.indexOfFirst { it.streamUrl == keepUrl }.coerceAtLeast(0)
-        backToNow()
+        if (toNow) backToNow()
     }
 
     /** Selects the channel at [index] (focus coming back from the player). */
@@ -143,7 +153,18 @@ internal class LiveTvGuideState(
         val now = LiveTvClock.nowEpochMs()
         anchorMs = now
         viewStartMs = floorSlot(now - leadMs)
+        followsNow = true
     }
+
+    /**
+     * Until ◀▶ move the selection, it stays on what is on now as time passes (the guide stays
+     * open for hours on the Live TV screen); call on each minute.
+     */
+    fun followNow() {
+        if (followsNow) backToNow()
+    }
+
+    private var followsNow = true
 
     private var handledDown = -1
     private var longPressed = false
@@ -178,7 +199,8 @@ internal class LiveTvGuideState(
         }
         val acted = when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> if (row == 0 && onExitUp != null) {
-                onExitUp.invoke()
+                // Only a fresh press leaves: a held ▲ stops on the first channel.
+                if (event.repeatCount == 0) onExitUp.invoke()
                 return true
             } else {
                 moveRow(-1)
@@ -186,9 +208,10 @@ internal class LiveTvGuideState(
             KeyEvent.KEYCODE_DPAD_DOWN -> moveRow(1)
             KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_UP -> moveRow(-PAGE)
             KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_DOWN -> moveRow(PAGE)
-            KeyEvent.KEYCODE_DPAD_LEFT -> moveProgramme(-1)
-            KeyEvent.KEYCODE_DPAD_RIGHT -> moveProgramme(1)
+            KeyEvent.KEYCODE_DPAD_LEFT -> moveProgramme(-1, event.repeatCount > 0)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> moveProgramme(1, event.repeatCount > 0)
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (event.repeatCount == 0) longPressed = false
                 // Held: a long press, once, instead of playing on release.
                 if (event.repeatCount > 0 && handledDown == event.keyCode && onLongPress != null && !longPressed) {
                     longPressed = true
@@ -209,7 +232,7 @@ internal class LiveTvGuideState(
         return true
     }
 
-    private fun moveProgramme(step: Int): Boolean {
+    private fun moveProgramme(step: Int, repeating: Boolean = false): Boolean {
         val now = LiveTvClock.nowEpochMs()
         val first = floorSlot(now - windowPastMs(channel?.catchup != null))
         val last = now + windowAheadMs()
@@ -224,9 +247,11 @@ internal class LiveTvGuideState(
         if (step < 0 && onExitLeft != null && anchorMs <= now &&
             (target == null || !LiveTvCatchupLinks.isPlayable(channel?.catchup, target, now))
         ) {
-            onExitLeft.invoke()
+            // Only a fresh press leaves: a held ◀ stops at the oldest programme.
+            if (!repeating) onExitLeft.invoke()
             return true
         }
+        followsNow = false
         anchorMs = when {
             // Adjacent programme; one that started before the view is anchored where it shows.
             target != null && (current < 0 || target.startEpochMs - programmes[current].stopEpochMs < SLOT) ->
@@ -327,24 +352,38 @@ internal fun LiveTvGuideGrid(
         val density = LocalDensity.current
         val timelineWidth = maxWidth - channelColumn
         state.viewSpanMs = (timelineWidth / MINUTE_WIDTH).toLong().coerceAtLeast(60) * MINUTE
-        // The timeline glides to its new place; programmes are placed at layout, not recomposed per frame.
-        val scroll = remember { Animatable(state.viewStartMs.toFloat()) }
-        LaunchedEffect(state.viewStartMs) {
-            scroll.animateTo(state.viewStartMs.toFloat(), spring(dampingRatio = 0.9f, stiffness = 420f))
-        }
         val pxPerMs = with(density) { MINUTE_WIDTH.toPx() } / MINUTE
+        // The timeline glides to its new place; programmes are placed at layout, not recomposed per
+        // frame. It moves as an offset from a fixed time: epoch milliseconds in a Float would be
+        // rounded to two minutes.
+        val timeline = remember { GuideTimeline(Snapshot.withoutReadObservation { state.viewStartMs }, pxPerMs) }
+        timeline.pxPerMs = pxPerMs
+        LaunchedEffect(state.viewStartMs) {
+            timeline.scroll.animateTo((state.viewStartMs - timeline.origin).toFloat(), spring(dampingRatio = 0.9f, stiffness = 420f))
+        }
         Column {
             Row(modifier = Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.width(channelColumn).padding(start = 8.dp)) { corner() }
-                TimeRuler(state, scroll, pxPerMs, clock, modifier = Modifier.weight(1f))
+                TimeRuler(state, timeline, clock, modifier = Modifier.weight(1f))
             }
-            val listState = rememberLazyListState(initialFirstVisibleItemIndex = (state.row - 3).coerceAtLeast(0))
-            LaunchedEffect(state.row, state.channels) {
-                val visible = listState.layoutInfo.visibleItemsInfo
-                val first = visible.firstOrNull()?.index ?: 0
-                val last = visible.lastOrNull()?.index ?: 0
-                if (visible.isEmpty() || state.row <= first || state.row >= last) {
-                    listState.animateScrollToItem((state.row - 3).coerceAtLeast(0))
+            val listState = rememberLazyListState(
+                initialFirstVisibleItemIndex = remember { Snapshot.withoutReadObservation { (state.row - 2).coerceAtLeast(0) } },
+            )
+            // Read here, not in composition: moving the selection recomposes only the rows it leaves and enters.
+            LaunchedEffect(state, listState) {
+                snapshotFlow { state.row to state.channels }.collectLatest { (row, _) ->
+                    val visible = listState.layoutInfo.visibleItemsInfo
+                    // Whole rows in view; the selection is kept off the first and last of them.
+                    val shown = visible.count { it.offset >= 0 && it.offset + it.size <= listState.layoutInfo.viewportEndOffset }.coerceAtLeast(1)
+                    val first = listState.firstVisibleItemIndex
+                    if (visible.isNotEmpty() && row > first && row < first + shown - 1) return@collectLatest
+                    val target = (row - shown / 2).coerceAtLeast(0)
+                    // A jump (a page, back from the player) lands at once; a step glides.
+                    if (visible.isEmpty() || kotlin.math.abs(target - first) > shown) {
+                        listState.scrollToItem(target)
+                    } else {
+                        listState.animateScrollToItem(target)
+                    }
                 }
             }
             Box(modifier = Modifier.fillMaxSize()) {
@@ -358,8 +397,7 @@ internal fun LiveTvGuideGrid(
                             active = active,
                             guideVersion = liveState.guideVersion,
                             state = state,
-                            scroll = scroll,
-                            pxPerMs = pxPerMs,
+                            timeline = timeline,
                             clock = clock,
                             channelColumn = channelColumn,
                             rowHeight = rowHeight,
@@ -373,7 +411,7 @@ internal fun LiveTvGuideGrid(
                         .fillMaxSize()
                         .clipToBounds()
                         .drawBehind {
-                            val x = (clock.value - scroll.value) * pxPerMs
+                            val x = timeline.x(clock.value)
                             if (x in 0f..size.width) {
                                 drawLine(NOW_LINE, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2f)
                             }
@@ -433,11 +471,19 @@ private fun GuideHeader(state: LiveTvGuideState, guideVersion: Int, clock: State
     }
 }
 
+/** Where the timeline is: [scroll] is the left edge's offset from [origin], in ms. */
+@Stable
+private class GuideTimeline(val origin: Long, var pxPerMs: Float) {
+    val scroll: Animatable<Float, AnimationVector1D> = Animatable(0f)
+
+    /** The x position of [epochMs] in the timeline now, in px. Read at layout or draw time. */
+    fun x(epochMs: Long): Float = ((epochMs - origin).toFloat() - scroll.value) * pxPerMs
+}
+
 @Composable
 private fun TimeRuler(
     state: LiveTvGuideState,
-    scroll: Animatable<Float, AnimationVector1D>,
-    pxPerMs: Float,
+    timeline: GuideTimeline,
     clock: State<Long>,
     modifier: Modifier = Modifier,
 ) {
@@ -449,7 +495,7 @@ private fun TimeRuler(
                 text = LiveTvClock.formatClock(slot),
                 style = MaterialTheme.typography.labelMedium,
                 color = Color.White.copy(alpha = if (slot <= clock.value && clock.value < slot + SLOT) 0.9f else 0.5f),
-                modifier = Modifier.offset { IntOffset(((slot - scroll.value) * pxPerMs).roundToInt() + 8, 0) },
+                modifier = Modifier.offset { IntOffset(timeline.x(slot).roundToInt() + 8, 0) },
             )
         }
     }
@@ -464,8 +510,7 @@ private fun GuideRow(
     active: Boolean,
     guideVersion: Int,
     state: LiveTvGuideState,
-    scroll: Animatable<Float, AnimationVector1D>,
-    pxPerMs: Float,
+    timeline: GuideTimeline,
     clock: State<Long>,
     channelColumn: Dp,
     rowHeight: Dp,
@@ -508,9 +553,11 @@ private fun GuideRow(
                 )
             }
         }
-        // Programmes in view (and a slot either side, for the glide).
-        val viewStart = state.viewStartMs - SLOT
-        val viewEnd = state.viewStartMs + state.viewSpanMs + SLOT
+        // Programmes in view and two hours either side: the rows recompose only when the timeline
+        // moves into another two hours, not on each step.
+        val block by remember(state) { derivedStateOf { state.viewStartMs / BLOCK } }
+        val viewStart = block * BLOCK - BLOCK
+        val viewEnd = block * BLOCK + state.viewSpanMs + 2 * BLOCK
         val programmes = remember(channel.guideKey, viewStart, viewEnd, guideVersion) {
             LiveTvRepository.schedule(channel.guideKey).filter { it.stopEpochMs > viewStart && it.startEpochMs < viewEnd }
         }
@@ -524,8 +571,9 @@ private fun GuideRow(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
+            val density = LocalDensity.current
             programmes.forEach { programme ->
-                val widthDp = with(LocalDensity.current) { ((programme.stopEpochMs - programme.startEpochMs) * pxPerMs).toDp() }
+                val widthDp = with(density) { ((programme.stopEpochMs - programme.startEpochMs) * timeline.pxPerMs).toDp() }
                 val cellState = when {
                     // Past programmes the provider keeps can be played again: they stay bright.
                     programme.stopEpochMs <= clock.value ->
@@ -537,17 +585,15 @@ private fun GuideRow(
                     title = programme.title,
                     selected = programme === selected && active,
                     state = cellState,
-                    // Began before the left edge: marked, as TV guides do.
-                    startsEarlier = programme.startEpochMs < state.viewStartMs,
                     progress = if (cellState == GuideCellState.Now) programme else null,
                     clock = clock,
                     modifier = Modifier
-                        .offset { IntOffset(((programme.startEpochMs - scroll.value) * pxPerMs).roundToInt(), 0) }
+                        .offset { IntOffset(timeline.x(programme.startEpochMs).roundToInt(), 0) }
                         .width(widthDp)
                         .fillMaxHeight()
                         .padding(end = 4.dp),
-                    // A programme that began before the view keeps its title in view.
-                    titleShift = { ((scroll.value - programme.startEpochMs) * pxPerMs).coerceAtLeast(0f).roundToInt() },
+                    // A programme that began before the view keeps its title in view, marked ‹ as TV guides do.
+                    titleShift = { (-timeline.x(programme.startEpochMs)).coerceAtLeast(0f).roundToInt() },
                 )
             }
         }
@@ -562,7 +608,6 @@ private fun GuideCell(
     selected: Boolean,
     state: GuideCellState,
     modifier: Modifier = Modifier,
-    startsEarlier: Boolean = false,
     /** The programme on now, whose progress shows as a line along the bottom. */
     progress: LiveTvProgramme? = null,
     clock: State<Long>? = null,
@@ -597,7 +642,17 @@ private fun GuideCell(
         contentAlignment = Alignment.CenterStart,
     ) {
         Text(
-            text = if (startsEarlier) "‹ $title" else title,
+            // Drawn only while the title is pushed in from the cell's start (it began earlier).
+            text = "‹",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (selected) Color.Black else Color.White.copy(alpha = 0.6f),
+            modifier = Modifier
+                .offset { IntOffset(titleShift(), 0) }
+                .padding(start = 6.dp)
+                .graphicsLayer { alpha = if (titleShift() > 0) 1f else 0f },
+        )
+        Text(
+            text = title,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = if (selected || state == GuideCellState.Now) FontWeight.Medium else FontWeight.Normal,
             color = when {
@@ -609,7 +664,7 @@ private fun GuideCell(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .offset { IntOffset(titleShift(), 0) }
-                .padding(horizontal = 10.dp),
+                .padding(start = 16.dp, end = 10.dp),
         )
     }
 }
