@@ -14,7 +14,7 @@ import java.util.zip.GZIPOutputStream
  */
 internal object LiveTvGuideCache {
     const val FILE_NAME = "guide_kept.bin.gz"
-    private const val VERSION = 2
+    private const val VERSION = 3
     private const val MAX_TITLE = 1_000
 
     class Entry(val schedule: LiveTvSchedule, val logos: Map<String, String>, val nextReadAtMs: Long)
@@ -53,7 +53,15 @@ internal object LiveTvGuideCache {
             repeat(channels) {
                 val guideKey = input.readUTF()
                 val count = input.readInt()
-                schedule[guideKey] = List(count) { LiveTvProgramme(input.readUTF(), input.readLong(), input.readLong()) }
+                schedule[guideKey] = List(count) {
+                    LiveTvProgramme(
+                        title = input.readUTF(),
+                        startEpochMs = input.readLong(),
+                        stopEpochMs = input.readLong(),
+                        description = input.readOptional(),
+                        image = input.readOptional(),
+                    )
+                }
             }
             Entry(schedule, logos, nextReadAtMs)
         }
@@ -82,6 +90,8 @@ internal object LiveTvGuideCache {
                         out.writeUTF(programme.title.take(MAX_TITLE))
                         out.writeLong(programme.startEpochMs)
                         out.writeLong(programme.stopEpochMs)
+                        out.writeOptional(programme.description?.take(MAX_TITLE))
+                        out.writeOptional(programme.image?.take(MAX_TITLE))
                     }
                 }
             }
@@ -93,5 +103,12 @@ internal object LiveTvGuideCache {
             temp.delete()
             file.delete()
         }
+    }
+
+    private fun DataInputStream.readOptional(): String? = if (readBoolean()) readUTF() else null
+
+    private fun DataOutputStream.writeOptional(value: String?) {
+        writeBoolean(value != null)
+        if (value != null) writeUTF(value)
     }
 }

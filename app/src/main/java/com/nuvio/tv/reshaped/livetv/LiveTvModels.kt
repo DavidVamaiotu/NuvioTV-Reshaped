@@ -88,6 +88,10 @@ data class LiveTvProgramme(
     val title: String,
     val startEpochMs: Long,
     val stopEpochMs: Long,
+    /** The guide's description, kept only for programmes near now (see [LiveTvGuideWindow.detailsMs]). */
+    val description: String? = null,
+    /** The guide's picture for it (an http link), kept like [description]. */
+    val image: String? = null,
 )
 
 enum class LiveTvSourceType { M3u, Stalker, Xtream }

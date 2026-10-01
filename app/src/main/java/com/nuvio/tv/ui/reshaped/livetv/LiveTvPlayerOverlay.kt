@@ -893,6 +893,11 @@ private fun LiveTvChannelColumn(
         folderKey == FILTER_FAVORITES -> stringResource(R.string.live_tv_favorites)
         folderKey.startsWith(FILTER_SOURCE_PREFIX) ->
             liveState.sources.firstOrNull { FILTER_SOURCE_PREFIX + it.id == folderKey }?.label
+        // One source's category: its name, as the Live TV screen shows it under the source.
+        folderKey.startsWith(FILTER_SOURCE_GROUP_PREFIX) -> (filterFor(folderKey) as LiveTvFilter.SourceGroup).let { group ->
+            val source = liveState.sources.firstOrNull { it.id == group.id }?.label
+            listOfNotNull(liveTvGroupLabel(group.name, liveState.groupNames), source).joinToString("  ·  ")
+        }
         else -> folderKey
     }
     Column(

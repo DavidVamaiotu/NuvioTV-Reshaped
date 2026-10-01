@@ -275,6 +275,35 @@ internal fun LiveTvLogo(
     }
 }
 
+/** A programme's picture from the guide, cropped to fill; nothing shows when there is none or it fails. */
+@Composable
+internal fun LiveTvPoster(url: String?, width: Dp, height: Dp, modifier: Modifier = Modifier) {
+    var failed by remember(url) { mutableStateOf(false) }
+    if (url.isNullOrBlank() || failed) return
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val request = remember(url, width, height) {
+        with(density) {
+            ImageRequest.Builder(context)
+                .data(url)
+                .size(width.roundToPx(), height.roundToPx())
+                .httpHeaders(LOGO_HEADERS)
+                .fetcherFactory<coil3.Uri>(LOGO_FETCHER)
+                .build()
+        }
+    }
+    AsyncImage(
+        model = request,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        onError = { failed = true },
+        modifier = modifier
+            .size(width, height)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.White.copy(alpha = 0.06f)),
+    )
+}
+
 private val LOGO_HEADERS = NetworkHeaders.Builder().set("User-Agent", "VLC/3.0.0 LibVLC/3.0.0").build()
 
 /** Logos load through Live TV's own client ([LiveTvHttp.logoClient]), still into Nuvio's image caches. */

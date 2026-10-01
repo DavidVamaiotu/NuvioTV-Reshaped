@@ -2,8 +2,9 @@
 
 package com.nuvio.tv.ui.reshaped.livetv
 
-import androidx.compose.animation.animateColorAsState
+import android.text.format.DateFormat
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,26 +21,29 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -50,12 +54,12 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -68,15 +72,17 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
+import com.nuvio.tv.reshaped.livetv.LiveTvCatchupLinks
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
+import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvPreferences
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
-import com.nuvio.tv.reshaped.livetv.LiveTvRecentChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvSource
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewsEnabled
 import com.nuvio.tv.ui.theme.NuvioTheme
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -88,11 +94,16 @@ internal sealed interface LiveTvFilter {
     data object Favorites : LiveTvFilter
     data class Source(val id: String) : LiveTvFilter
     data class Group(val name: String) : LiveTvFilter
+    /** One category of one source, picked under that source's heading. */
+    data class SourceGroup(val id: String, val name: String) : LiveTvFilter
 }
 
 internal const val FILTER_ALL = "\u0000all"
 internal const val FILTER_FAVORITES = "\u0000favorites"
 internal const val FILTER_SOURCE_PREFIX = "\u0000source:"
+internal const val FILTER_SOURCE_GROUP_PREFIX = "\u0000sourcegroup:"
+
+internal fun sourceGroupKey(sourceId: String, group: String): String = "$FILTER_SOURCE_GROUP_PREFIX$sourceId\u0000$group"
 
 /**
  * The channels a filter key shows: hidden categories and hidden channels leave everything but
@@ -114,22 +125,30 @@ internal fun filterChannels(
             LiveTvFilter.Favorites -> channel.streamUrl in favorites
             is LiveTvFilter.Source -> channel.sourceId == filter.id && channel.group !in hidden && channel.hideKey !in hiddenChannels
             is LiveTvFilter.Group -> channel.group == filter.name && channel.hideKey !in hiddenChannels
+            is LiveTvFilter.SourceGroup ->
+                channel.sourceId == filter.id && channel.group == filter.name && channel.hideKey !in hiddenChannels
         } && (needle.isEmpty() || channel.name.contains(needle, ignoreCase = true))
     }
 }
 
-private fun filterFor(key: String): LiveTvFilter = when {
+internal fun filterFor(key: String): LiveTvFilter = when {
     key == FILTER_ALL -> LiveTvFilter.All
     key == FILTER_FAVORITES -> LiveTvFilter.Favorites
     key.startsWith(FILTER_SOURCE_PREFIX) -> LiveTvFilter.Source(key.removePrefix(FILTER_SOURCE_PREFIX))
+    key.startsWith(FILTER_SOURCE_GROUP_PREFIX) -> key.removePrefix(FILTER_SOURCE_GROUP_PREFIX).let {
+        LiveTvFilter.SourceGroup(it.substringBefore('\u0000'), it.substringAfter('\u0000'))
+    }
     else -> LiveTvFilter.Group(key)
 }
 
+/** A source's heading in the category column: its visible channels and categories, in order. */
+private class LiveTvSourceSection(val source: LiveTvSource, val channelCount: Int, val groups: List<String>)
+
 /**
- * Live TV: categories on the left, channels with what is on now in the middle, the last channel
- * on top, and a live preview of the focused channel on the right. Rows are plain and fixed
- * height (no blur, no images larger than drawn) so thousands of channels scroll smoothly on
- * low-end TVs.
+ * Live TV, laid out as TV channel guides are: what is selected on top (picture, channel, programme,
+ * time left, description) with the live preview on the right; below, the categories on the left
+ * (search, favorites, each source's categories under its own heading) and the programme guide.
+ * The guide draws only the rows and programmes in view, so thousands of channels stay light.
  */
 @Composable
 fun LiveTvScreen(
@@ -157,25 +176,25 @@ fun LiveTvScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var showSourceDialog by remember { mutableStateOf(false) }
     var showCategoryDialog by remember { mutableStateOf(false) }
-    var guide by remember { mutableStateOf<LiveTvGuideState?>(null) }
     var launching by remember { mutableStateOf(false) }
-    val channelListState = rememberLazyListState()
-    val channelFocus = remember { FocusRequester() }
     val previewsEnabled = rememberLiveTvPreviewsEnabled()
     val preview = rememberLiveTvPreviewPlayer()
-    var focusedChannel by remember { mutableStateOf<LiveTvChannel?>(null) }
-    var listFocused by remember { mutableStateOf(false) }
-    var previewActionsFocused by remember { mutableStateOf(false) }
-    val previewSound = rememberLiveTvPreviewSoundEnabled()
+    var gridFocused by remember { mutableStateOf(false) }
+    var actionsFocused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
     val started = LocalLifecycleOwner.current.lifecycle.currentStateAsState().value.isAtLeast(Lifecycle.State.STARTED)
-    // Under the pill menu the screen starts below it, as Settings does, so the pill never covers the search field.
+    // Under the pill menu the screen starts below it, as Settings does, so the pill never covers the header.
     val topPadding = if (showBuiltInHeader) NuvioTheme.spacing.xl else 68.dp
+    val gridFocus = remember { FocusRequester() }
+    val categoryFocus = remember { FocusRequester() }
+    val actionsFocus = remember { FocusRequester() }
 
     // A category that was hidden, or a source that was removed, falls back to all channels.
     LaunchedEffect(uiState.hiddenGroups, uiState.sources) {
         val stale = when (val current = filterFor(filterKey)) {
             is LiveTvFilter.Group -> current.name in uiState.hiddenGroups
             is LiveTvFilter.Source -> uiState.sources.none { it.id == current.id }
+            is LiveTvFilter.SourceGroup -> current.name in uiState.hiddenGroups || uiState.sources.none { it.id == current.id }
             else -> false
         }
         if (stale) filterKey = FILTER_ALL
@@ -197,99 +216,22 @@ fun LiveTvScreen(
         }
         viewModel.setVisible(filterInput, filtered)
     }
-    // Back to the top only when the category changes, not each time the screen comes back.
-    var scrolledForKey by rememberSaveable { mutableStateOf(filterKey) }
-    LaunchedEffect(filterKey) {
-        if (scrolledForKey != filterKey) {
-            scrolledForKey = filterKey
-            channelListState.scrollToItem(0)
-        }
-    }
 
-    // Back from the player: focus the channel last watched (or the first one), scrolled into view.
-    val showsRecentRow = uiState.recentChannel != null && filter == LiveTvFilter.All && query.isEmpty()
-    var focusTargetUrl by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(visibleChannels, filtering) {
-        if (!viewModel.restoreFocusOnReturn || filtering || visibleChannels.isEmpty()) return@LaunchedEffect
-        viewModel.restoreFocusOnReturn = false
-        val index = visibleChannels.indexOfFirst { it.streamUrl == uiState.recentChannel?.streamUrl }.coerceAtLeast(0)
-        focusTargetUrl = visibleChannels[index].streamUrl
-        val itemIndex = index + if (showsRecentRow) 1 else 0
-        val shown = channelListState.layoutInfo.visibleItemsInfo
-        if (shown.none { it.index == itemIndex }) {
-            channelListState.scrollToItem((itemIndex - 2).coerceAtLeast(0))
-        }
-        withFrameNanos { }
-        withFrameNanos { }
-        runCatching { channelFocus.requestFocus() }
-    }
     val minuteClock = rememberLiveTvMinuteClock()
     // Stays set until the player has taken over the screen, so the preview can't start again
     // beside it during the navigation.
     LaunchedEffect(started) { if (!started) launching = false }
 
-    // Unfavouriting a channel in Favorites removes its row: focus moves to the next one (or the
-    // category when none is left) instead of falling back to the top of the categories, whose
-    // focus would switch the list to All channels.
-    var refocusAfterRemoval by remember { mutableStateOf(false) }
-    val categoryFocus = remember { FocusRequester() }
-    LaunchedEffect(visibleChannels, filtering) {
-        if (!refocusAfterRemoval || filtering) return@LaunchedEffect
-        refocusAfterRemoval = false
-        val target = if (visibleChannels.any { it.streamUrl == focusTargetUrl }) channelFocus else categoryFocus
-        repeat(10) {
-            withFrameNanos { }
-            if (runCatching { target.requestFocus() }.isSuccess) return@LaunchedEffect
-        }
-    }
-    var refocusAfterGuide by remember { mutableStateOf(false) }
-    LaunchedEffect(refocusAfterGuide) {
-        if (!refocusAfterGuide) return@LaunchedEffect
-        refocusAfterGuide = false
-        val index = visibleChannels.indexOfFirst { it.streamUrl == focusTargetUrl }
-        if (index >= 0 && channelListState.layoutInfo.visibleItemsInfo.none { it.key == visibleChannels[index].id }) {
-            channelListState.scrollToItem((index - 2).coerceAtLeast(0))
-        }
-        repeat(10) {
-            withFrameNanos { }
-            if (runCatching { channelFocus.requestFocus() }.isSuccess) return@LaunchedEffect
-        }
-    }
-    val toggleFavorite: (LiveTvChannel) -> Unit = { channel ->
-        if (filter == LiveTvFilter.Favorites && channel.streamUrl in uiState.favoriteUrls) {
-            val index = visibleChannels.indexOfFirst { it.streamUrl == channel.streamUrl }
-            focusTargetUrl = (visibleChannels.getOrNull(index + 1) ?: visibleChannels.getOrNull(index - 1))?.streamUrl
-            refocusAfterRemoval = true
-        }
-        LiveTvRepository.toggleFavorite(channel)
-    }
-
     /** Plays [channel] live, or its past [programme] (catch-up) when one is given. */
-    val launchPlay: (LiveTvChannel, Boolean, LiveTvProgramme?) -> Unit = { channel, fromRecent, programme ->
+    val launchPlay: (LiveTvChannel, LiveTvProgramme?) -> Unit = { channel, programme ->
         if (!launching) {
             launching = true
             // The player needs the decoder and, with one-connection providers, the connection.
             preview.release()
             scope.launch {
                 try {
-                    if (fromRecent) {
-                        // The last channel is listed above every category: in the player, the
-                        // categories open on its own, and zapping stays in it, as when it was picked there.
-                        val state = uiState
-                        val group = channel.group
-                        val shown = group !in state.hiddenGroups && channel.hideKey !in state.hiddenChannelKeys
-                        val list = if (!shown) {
-                            emptyList()
-                        } else {
-                            withContext(Dispatchers.Default) {
-                                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelKeys, group)
-                            }
-                        }
-                        LiveTvRepository.setZapList(list, folderKey = group.takeIf { list.isNotEmpty() })
-                    } else {
-                        val list = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
-                        LiveTvRepository.setZapList(list, folderKey = filterKey.takeIf { query.isBlank() })
-                    }
+                    val list = visibleChannels.takeIf { list -> list.any { it.streamUrl == channel.streamUrl } }.orEmpty()
+                    LiveTvRepository.setZapList(list, folderKey = filterKey.takeIf { query.isBlank() })
                     val route = if (programme != null) {
                         liveTvCatchupRoute(channel, programme, viewModel.profileId)
                     } else {
@@ -309,31 +251,40 @@ fun LiveTvScreen(
             }
         }
     }
+    val currentLaunchPlay by rememberUpdatedState(launchPlay)
 
-    val play: (LiveTvChannel, Boolean) -> Unit = { channel, fromRecent -> launchPlay(channel, fromRecent, null) }
+    val toCategories: () -> Unit = {
+        if (runCatching { categoryFocus.requestFocus() }.isFailure) focusManager.moveFocus(FocusDirection.Left)
+    }
+    val currentToCategories by rememberUpdatedState(toCategories)
+    val guide = remember {
+        LiveTvGuideState(
+            channels = emptyList(),
+            startIndex = 0,
+            onPlay = { channel -> currentLaunchPlay(channel, null) },
+            onCatchup = { channel, programme -> currentLaunchPlay(channel, programme) },
+            // Back, and ◀ from what is on now, go to the categories, as in TV guides: to the one
+            // selected, or (scrolled out of view) the nearest one.
+            onClose = { currentToCategories() },
+            onExitLeft = { currentToCategories() },
+            onExitUp = { runCatching { actionsFocus.requestFocus() } },
+            onLongPress = { channel -> LiveTvRepository.toggleFavorite(channel) },
+            leadMs = 0L,
+        )
+    }
+    LaunchedEffect(visibleChannels) {
+        guide.showChannels(visibleChannels, keepUrl = guide.channel?.streamUrl ?: uiState.recentChannel?.streamUrl)
+    }
 
-    val openGuide: () -> Unit = {
-        val channels = visibleChannels
-        if (channels.isNotEmpty()) {
-            val start = channels.indexOfFirst { it.streamUrl == focusedChannel?.streamUrl }.coerceAtLeast(0)
-            guide = LiveTvGuideState(
-                channels = channels,
-                startIndex = start,
-                onPlay = { channel ->
-                    guide = null
-                    play(channel, false)
-                },
-                onCatchup = { channel, programme ->
-                    guide = null
-                    launchPlay(channel, false, programme)
-                },
-                onClose = {
-                    // Back on the list, on the channel the guide ended on.
-                    focusTargetUrl = guide?.channel?.streamUrl
-                    guide = null
-                    refocusAfterGuide = true
-                },
-            )
+    // Back from the player: the guide on the channel last watched, focused.
+    LaunchedEffect(visibleChannels, filtering) {
+        if (!viewModel.restoreFocusOnReturn || filtering || visibleChannels.isEmpty()) return@LaunchedEffect
+        viewModel.restoreFocusOnReturn = false
+        guide.selectRow(visibleChannels.indexOfFirst { it.streamUrl == uiState.recentChannel?.streamUrl }.coerceAtLeast(0))
+        guide.backToNow()
+        repeat(10) {
+            withFrameNanos { }
+            if (runCatching { gridFocus.requestFocus() }.isSuccess) return@LaunchedEffect
         }
     }
 
@@ -345,182 +296,72 @@ fun LiveTvScreen(
         if (!uiState.isLoaded && !uiState.isLoading && !uiState.hasSource) {
             LiveTvEmptyState(onAddSource = { showSourceDialog = true })
         } else {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(start = NuvioTheme.spacing.xxxl, end = NuvioTheme.spacing.xl, top = topPadding),
-                horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xl),
             ) {
-                val visibleGroups = remember(uiState.groups, uiState.hiddenGroups) { uiState.visibleGroups }
-                LiveTvCategoryColumn(
-                    showHeader = showBuiltInHeader,
-                    channelCount = uiState.channels.size,
-                    sources = if (uiState.sources.size > 1) uiState.sources else emptyList(),
-                    groups = visibleGroups,
-                    groupNames = uiState.groupNames,
-                    selectedKey = filterKey,
-                    selectedFocus = categoryFocus,
-                    onSelect = { filterKey = it },
-                    modifier = Modifier.width(if (previewsEnabled) 220.dp else 260.dp).fillMaxHeight(),
+                LiveTvHeader(
+                    guide = guide,
+                    uiState = uiState,
+                    gridFocused = gridFocused,
+                    clock = minuteClock,
+                    showTitle = showBuiltInHeader,
+                    preview = if (previewsEnabled) preview else null,
+                    // Keeps playing while the buttons above the guide have focus, so mute can be heard to work.
+                    playVideo = (gridFocused || actionsFocused) && started && !launching && !showSourceDialog && !showCategoryDialog,
+                    actionsFocus = actionsFocus,
+                    onActionsFocused = { actionsFocused = it },
+                    onDownToGuide = { visibleChannels.isNotEmpty() && runCatching { gridFocus.requestFocus() }.isSuccess },
+                    onOpenCategories = { showCategoryDialog = true },
+                    onOpenSources = { showSourceDialog = true },
                 )
-                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
+                Spacer(Modifier.height(NuvioTheme.spacing.md))
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.lg),
+                ) {
+                    LiveTvCategoryColumn(
+                        uiState = uiState,
+                        query = query,
+                        onQueryChange = { query = it },
+                        selectedKey = filterKey,
+                        selectedFocus = categoryFocus,
+                        onSelect = { filterKey = it },
+                        modifier = Modifier.width(240.dp).fillMaxHeight(),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .focusRequester(gridFocus)
+                            .onFocusChanged { gridFocused = it.isFocused }
+                            .onPreviewKeyEvent { guide.onKey(it.nativeKeyEvent) }
+                            .focusable(enabled = visibleChannels.isNotEmpty()),
                     ) {
-                        LiveTvTextField(
-                            value = query,
-                            onValueChange = { query = it },
-                            placeholder = stringResource(R.string.live_tv_search),
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
-                            modifier = Modifier.weight(1f),
+                        LiveTvGuideGrid(
+                            state = guide,
+                            active = gridFocused,
+                            clock = minuteClock,
+                            channelColumn = 236.dp,
+                            rowHeight = 54.dp,
+                            modifier = Modifier.fillMaxSize(),
+                            corner = { LiveTvGuideDate(guide.viewStartMs, minuteClock) },
                         )
-                        // With previews, Guide sits under the picture instead.
-                        if (!previewsEnabled) {
-                            LiveTvPillButton(text = stringResource(R.string.live_tv_guide), onClick = openGuide)
-                        }
-                        LiveTvPillButton(
-                            text = stringResource(R.string.live_tv_refresh),
-                            onClick = { LiveTvRepository.refresh() },
-                            enabled = !uiState.isLoading,
-                        )
-                        LiveTvPillButton(
-                            text = stringResource(R.string.live_tv_edit_categories),
-                            onClick = { showCategoryDialog = true },
-                        )
-                        LiveTvPillButton(
-                            text = stringResource(R.string.live_tv_sources),
-                            onClick = { showSourceDialog = true },
-                        )
-                    }
-                    Spacer(Modifier.height(NuvioTheme.spacing.md))
-                    val failedSource = uiState.sources.firstOrNull { it.id in uiState.sourceErrors }
-                    val status = when {
-                        uiState.isLoading -> stringResource(R.string.live_tv_loading)
-                        failedSource != null -> stringResource(
-                            R.string.live_tv_source_error,
-                            failedSource.label,
-                            uiState.sourceErrors[failedSource.id]?.message(context).orEmpty(),
-                        )
-                        uiState.error != null -> uiState.error?.message(context)
-                        uiState.isEpgLoading -> stringResource(R.string.live_tv_guide_loading)
-                        else -> null
-                    }
-                    if (status != null) {
-                        Text(
-                            text = status,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if ((failedSource != null || uiState.error != null) && !uiState.isLoading) NuvioTheme.colors.Error else NuvioTheme.colors.TextSecondary,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(bottom = NuvioTheme.spacing.sm),
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.xl),
-                    ) {
-                        LazyColumn(
-                            state = channelListState,
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .onFocusChanged { listFocused = it.hasFocus },
-                            contentPadding = PaddingValues(bottom = NuvioTheme.spacing.xxl, top = 4.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            val recent = uiState.recentChannel
-                            if (recent != null && showsRecentRow) {
-                                item(key = "recent", contentType = "recent") {
-                                    LiveTvRecentRow(
-                                        recent = recent,
-                                        logo = recent.logoUrl ?: uiState.guideLogos[recent.guideKey],
-                                        programme = uiState.currentProgrammes[recent.guideKey],
-                                        clock = minuteClock,
-                                        onClick = { play(LiveTvRepository.channelFor(recent), true) },
-                                        onFocused = { focusedChannel = LiveTvRepository.channelFor(recent) },
-                                    )
-                                }
-                            }
-                            items(visibleChannels, key = { it.id }, contentType = { "channel" }) { channel ->
-                                LiveTvChannelRow(
-                                    channel = channel,
-                                    logo = uiState.logoFor(channel),
-                                    programme = uiState.currentProgrammes[channel.guideKey],
-                                    clock = minuteClock,
-                                    isFavorite = channel.streamUrl in uiState.favoriteUrls,
-                                    groupName = liveTvGroupName(channel.group, uiState.groupNames),
-                                    onClick = { play(channel, false) },
-                                    onLongClick = { toggleFavorite(channel) },
-                                    onFocused = { focusedChannel = channel },
-                                    modifier = if (channel.streamUrl == focusTargetUrl) Modifier.focusRequester(channelFocus) else Modifier,
-                                )
-                            }
-                            if (visibleChannels.isEmpty() && !filtering && uiState.isLoaded && !uiState.isLoading) {
-                                item(key = "empty") {
-                                    Text(
-                                        text = stringResource(
-                                            if (filter == LiveTvFilter.Favorites) R.string.live_tv_no_favorites else R.string.live_tv_no_channels_found,
-                                        ),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = NuvioTheme.colors.TextSecondary,
-                                        modifier = Modifier.padding(vertical = NuvioTheme.spacing.lg),
-                                    )
-                                }
-                            }
-                        }
-                        if (previewsEnabled) {
-                            val shownChannel = focusedChannel
-                            LiveTvPreviewPanel(
-                                preview = preview,
-                                channel = shownChannel,
-                                logo = shownChannel?.let(uiState::logoFor),
-                                programme = shownChannel?.guideKey?.let(uiState.currentProgrammes::get),
-                                clock = minuteClock,
-                                groupName = shownChannel?.let { liveTvGroupName(it.group, uiState.groupNames) },
-                                sourceLabel = if (uiState.sources.size > 1) {
-                                    uiState.sources.firstOrNull { it.id == shownChannel?.sourceId }?.label
-                                } else {
-                                    null
-                                },
-                                // Keeps playing while its buttons have focus, so mute can be heard to work.
-                                playVideo = (listFocused || previewActionsFocused) && started && !launching &&
-                                    !showSourceDialog && !showCategoryDialog && guide == null,
-                                hint = stringResource(R.string.live_tv_favorite_hint),
-                                modifier = Modifier
-                                    .width(300.dp)
-                                    .padding(top = 4.dp)
-                                    .onFocusChanged {
-                                        previewActionsFocused = it.hasFocus
-                                        // ◀ goes back to the channel the preview shows.
-                                        if (it.hasFocus) focusTargetUrl = shownChannel?.streamUrl
-                                    },
-                            ) {
-                                LiveTvPillButton(
-                                    text = stringResource(R.string.live_tv_guide),
-                                    onClick = openGuide,
-                                    modifier = Modifier.onPreviewKeyEvent { event ->
-                                        val back = event.key == Key.DirectionLeft && event.type == KeyEventType.KeyDown
-                                        back && runCatching { channelFocus.requestFocus() }.isSuccess
-                                    },
-                                )
-                                LiveTvPillButton(
-                                    text = "",
-                                    icon = if (previewSound) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
-                                    iconDescription = stringResource(
-                                        if (previewSound) R.string.live_tv_preview_mute else R.string.live_tv_preview_unmute,
-                                    ),
-                                    onClick = { LiveTvPreferences.setPreviewSound(context, !previewSound) },
-                                )
-                            }
+                        if (visibleChannels.isEmpty() && !filtering && uiState.isLoaded && !uiState.isLoading) {
+                            Text(
+                                text = stringResource(
+                                    if (filter == LiveTvFilter.Favorites) R.string.live_tv_no_favorites else R.string.live_tv_no_channels_found,
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = NuvioTheme.colors.TextSecondary,
+                                modifier = Modifier.padding(top = 40.dp, start = 8.dp),
+                            )
                         }
                     }
                 }
             }
         }
-        // Over the whole screen, the pill menu included, as Nuvio's own full-screen pages are.
-        guide?.let { LiveTvGuide(it, takeFocus = true, modifier = Modifier.zIndex(10f)) }
     }
 
     if (showSourceDialog) {
@@ -531,70 +372,351 @@ fun LiveTvScreen(
     }
 }
 
+/** The header above the guide: what is selected, the buttons, and the live preview on the right. */
+@Composable
+private fun LiveTvHeader(
+    guide: LiveTvGuideState,
+    uiState: com.nuvio.tv.reshaped.livetv.LiveTvUiState,
+    gridFocused: Boolean,
+    clock: State<Long>,
+    showTitle: Boolean,
+    preview: LiveTvPreviewPlayer?,
+    playVideo: Boolean,
+    actionsFocus: FocusRequester,
+    onActionsFocused: (Boolean) -> Unit,
+    onDownToGuide: () -> Boolean,
+    onOpenCategories: () -> Unit,
+    onOpenSources: () -> Unit,
+) {
+    val context = LocalContext.current
+    val previewSound = rememberLiveTvPreviewSoundEnabled()
+    val shownChannel = guide.channel
+    val shownProgramme = remember(shownChannel, guide.anchorMs, uiState.guideVersion, gridFocused) {
+        // The programme selected in the guide, or what is on now on the selected channel.
+        (if (gridFocused) guide.selected() else null) ?: shownChannel?.guideKey?.let(uiState.currentProgrammes::get)
+    }
+    val failedSource = uiState.sources.firstOrNull { it.id in uiState.sourceErrors }
+    val status = when {
+        uiState.isLoading -> stringResource(R.string.live_tv_loading)
+        failedSource != null -> stringResource(
+            R.string.live_tv_source_error,
+            failedSource.label,
+            uiState.sourceErrors[failedSource.id]?.message(context).orEmpty(),
+        )
+        uiState.error != null -> uiState.error?.message(context)
+        uiState.isEpgLoading -> stringResource(R.string.live_tv_guide_loading)
+        else -> null
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(180.dp)
+            .onFocusChanged { onActionsFocused(it.hasFocus) },
+    ) {
+        LiveTvGuideInfo(
+            channel = shownChannel,
+            logo = shownChannel?.let(uiState::logoFor),
+            programme = shownProgramme,
+            clock = clock,
+            status = status,
+            statusIsError = (failedSource != null || uiState.error != null) && !uiState.isLoading,
+            showTitle = showTitle && shownChannel == null,
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+        ) {
+            // ▼ goes back to the guide, not to whatever lies below these buttons.
+            val toGuide = Modifier.onPreviewKeyEvent { event ->
+                val down = event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown
+                down && onDownToGuide()
+            }
+            LiveTvPillButton(
+                text = stringResource(R.string.live_tv_refresh),
+                onClick = { LiveTvRepository.refresh() },
+                enabled = !uiState.isLoading,
+                modifier = toGuide.focusRequester(actionsFocus),
+            )
+            LiveTvPillButton(
+                text = stringResource(R.string.live_tv_edit_categories),
+                onClick = onOpenCategories,
+                modifier = toGuide,
+            )
+            LiveTvPillButton(
+                text = stringResource(R.string.live_tv_sources),
+                onClick = onOpenSources,
+                modifier = toGuide,
+            )
+            if (preview != null) {
+                LiveTvPillButton(
+                    text = "",
+                    icon = if (previewSound) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                    iconDescription = stringResource(
+                        if (previewSound) R.string.live_tv_preview_mute else R.string.live_tv_preview_unmute,
+                    ),
+                    onClick = { LiveTvPreferences.setPreviewSound(context, !previewSound) },
+                    modifier = toGuide,
+                )
+            }
+        }
+        if (preview != null) {
+            LiveTvPreviewVideo(
+                preview = preview,
+                channel = shownChannel,
+                logo = shownChannel?.let(uiState::logoFor),
+                playVideo = playVideo,
+                modifier = Modifier.padding(start = NuvioTheme.spacing.xl).fillMaxHeight(),
+            )
+        }
+    }
+}
+
+/** "Wed, Sep 30 · 9:43 AM": the day the guide shows, and the time now. */
+@Composable
+private fun LiveTvGuideDate(viewStartMs: Long, clock: State<Long>) {
+    val pattern = remember { DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEMMMd") }
+    val day = remember(pattern, viewStartMs / 3_600_000L) {
+        java.text.SimpleDateFormat(pattern, Locale.getDefault()).format(java.util.Date(maxOf(viewStartMs, LiveTvClock.nowEpochMs())))
+    }
+    Text(
+        text = "$day  ·  ${LiveTvClock.formatClock(clock.value)}",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Medium,
+        color = NuvioTheme.colors.TextSecondary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/**
+ * What is selected: the programme's picture when the guide has one, the channel, the title, its
+ * times, time left and catch-up, how far it has got and its description. [actions] sit at the bottom.
+ */
+@Composable
+private fun LiveTvGuideInfo(
+    channel: LiveTvChannel?,
+    logo: String?,
+    programme: LiveTvProgramme?,
+    clock: State<Long>,
+    status: String?,
+    statusIsError: Boolean,
+    showTitle: Boolean,
+    modifier: Modifier = Modifier,
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+) {
+    Row(modifier = modifier) {
+        LiveTvPoster(
+            url = programme?.image,
+            width = 104.dp,
+            height = 156.dp,
+            modifier = Modifier.padding(end = NuvioTheme.spacing.lg),
+        )
+        Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+            if (channel == null) {
+                if (showTitle) {
+                    Text(
+                        text = stringResource(R.string.live_tv_title),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = NuvioTheme.colors.TextPrimary,
+                    )
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LiveTvLogo(url = logo, name = channel.name, width = 46.dp, height = 28.dp)
+                    Text(
+                        text = channel.name.uppercase(),
+                        style = MaterialTheme.typography.labelLarge,
+                        letterSpacing = 1.sp,
+                        color = NuvioTheme.colors.TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 10.dp),
+                    )
+                }
+                Text(
+                    text = programme?.title ?: channel.name,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = NuvioTheme.colors.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                if (programme != null) {
+                    val now = clock.value
+                    val timing = listOfNotNull(
+                        LiveTvClock.formatSpan(programme),
+                        when {
+                            programme.stopEpochMs <= now -> stringResource(R.string.live_tv_guide_ended)
+                            programme.startEpochMs <= now -> liveTvTimeLeft(programme, clock)
+                            else -> null
+                        },
+                        stringResource(R.string.live_tv_catchup).takeIf {
+                            programme.startEpochMs < now && LiveTvCatchupLinks.isPlayable(channel.catchup, programme, now)
+                        },
+                    ).joinToString("  ·  ")
+                    Row(modifier = Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = timing,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = NuvioTheme.colors.TextSecondary,
+                            maxLines = 1,
+                        )
+                        if (programme.startEpochMs <= now && now < programme.stopEpochMs) {
+                            LiveTvProgressBar(
+                                programme = programme,
+                                clock = clock,
+                                fill = NuvioTheme.colors.TextPrimary,
+                                track = Color.White.copy(alpha = 0.12f),
+                                modifier = Modifier.padding(start = 12.dp).widthIn(max = 140.dp).fillMaxWidth(),
+                            )
+                        }
+                    }
+                    programme.description?.let { description ->
+                        Text(
+                            text = description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NuvioTheme.colors.TextTertiary,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 6.dp),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            if (status != null) {
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (statusIsError) NuvioTheme.colors.Error else NuvioTheme.colors.TextSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                )
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
+                verticalAlignment = Alignment.CenterVertically,
+                content = actions,
+            )
+        }
+    }
+}
+
+/**
+ * Search, Favorites, All channels, then the categories; with several sources, each source's
+ * categories sit under its own heading (with its channel count), which OK folds away.
+ */
 @Composable
 private fun LiveTvCategoryColumn(
-    showHeader: Boolean,
-    channelCount: Int,
-    sources: List<LiveTvSource>,
-    groups: List<String>,
-    groupNames: Map<String, String>,
+    uiState: com.nuvio.tv.reshaped.livetv.LiveTvUiState,
+    query: String,
+    onQueryChange: (String) -> Unit,
     selectedKey: String,
     selectedFocus: FocusRequester,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val selectedModifier = Modifier.focusRequester(selectedFocus)
-    Column(modifier = modifier) {
-        Text(
-            text = stringResource(R.string.live_tv_title),
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 0.5.sp,
-            color = if (showHeader) NuvioTheme.colors.TextPrimary else Color.Transparent,
-        )
-        Text(
-            text = stringResource(R.string.live_tv_channel_count, channelCount),
-            style = MaterialTheme.typography.labelLarge,
-            color = NuvioTheme.colors.TextTertiary,
-            modifier = Modifier.padding(top = 2.dp, bottom = NuvioTheme.spacing.md),
-        )
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = NuvioTheme.spacing.xxl),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            item(key = FILTER_ALL) {
-                LiveTvCategoryItem(stringResource(R.string.live_tv_all_channels), selectedKey == FILTER_ALL, selectedModifier) { onSelect(FILTER_ALL) }
+    val visibleGroups = remember(uiState.groups, uiState.hiddenGroups) { uiState.visibleGroups }
+    val multiSource = uiState.sources.size > 1
+    // Which categories each source has, in the list's order: one pass over the channels, off the main thread.
+    val sections by produceState<List<LiveTvSourceSection>>(emptyList(), uiState.channels, visibleGroups, uiState.hiddenChannelKeys, uiState.sources) {
+        if (!multiSource) {
+            value = emptyList()
+            return@produceState
+        }
+        value = withContext(Dispatchers.Default) {
+            val counts = HashMap<String, Int>()
+            val groupsBySource = HashMap<String, HashSet<String>>()
+            val shownGroups = visibleGroups.toHashSet()
+            uiState.channels.forEach { channel ->
+                if (channel.group !in shownGroups || channel.hideKey in uiState.hiddenChannelKeys) return@forEach
+                counts[channel.sourceId] = (counts[channel.sourceId] ?: 0) + 1
+                groupsBySource.getOrPut(channel.sourceId) { HashSet() }.add(channel.group)
             }
-            item(key = FILTER_FAVORITES) {
-                LiveTvCategoryItem(stringResource(R.string.live_tv_favorites), selectedKey == FILTER_FAVORITES, selectedModifier) { onSelect(FILTER_FAVORITES) }
+            uiState.sources.map { source ->
+                val own = groupsBySource[source.id].orEmpty()
+                LiveTvSourceSection(source, counts[source.id] ?: 0, visibleGroups.filter { it in own })
             }
-            // With several sources, each can be browsed on its own.
-            items(sources, key = { FILTER_SOURCE_PREFIX + it.id }) { source ->
-                val key = FILTER_SOURCE_PREFIX + source.id
-                LiveTvCategoryItem(source.label, selectedKey == key, selectedModifier) { onSelect(key) }
-            }
-            if (sources.isNotEmpty()) {
-                item(key = "\u0000divider") {
-                    Box(
-                        modifier = Modifier
-                            .padding(horizontal = 14.dp, vertical = 6.dp)
-                            .fillMaxWidth()
-                            .height(1.dp)
-                            .background(NuvioTheme.colors.TextPrimary.copy(alpha = 0.08f)),
-                    )
+        }
+    }
+    val collapsed = remember { mutableStateMapOf<String, Boolean>() }
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(top = 2.dp, bottom = NuvioTheme.spacing.xxl),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        item(key = "\u0000search") {
+            LiveTvTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                placeholder = stringResource(R.string.live_tv_search),
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            )
+        }
+        item(key = FILTER_FAVORITES) {
+            LiveTvCategoryItem(stringResource(R.string.live_tv_favorites), selectedKey == FILTER_FAVORITES, selectedModifier) { onSelect(FILTER_FAVORITES) }
+        }
+        item(key = FILTER_ALL) {
+            LiveTvCategoryItem(
+                label = stringResource(R.string.live_tv_all_channels),
+                selected = selectedKey == FILTER_ALL,
+                selectedModifier = selectedModifier,
+                count = uiState.channels.size,
+            ) { onSelect(FILTER_ALL) }
+        }
+        if (multiSource) {
+            sections.forEach { section ->
+                val sourceKey = FILTER_SOURCE_PREFIX + section.source.id
+                val folded = collapsed[section.source.id] == true
+                item(key = sourceKey) {
+                    LiveTvCategoryItem(
+                        label = section.source.label.uppercase(),
+                        selected = selectedKey == sourceKey,
+                        selectedModifier = selectedModifier,
+                        count = section.channelCount,
+                        heading = true,
+                        folded = folded,
+                        onClick = { collapsed[section.source.id] = !folded },
+                    ) { onSelect(sourceKey) }
+                }
+                if (!folded) {
+                    items(section.groups, key = { sourceGroupKey(section.source.id, it) }) { group ->
+                        val key = sourceGroupKey(section.source.id, group)
+                        LiveTvCategoryItem(
+                            label = liveTvGroupLabel(group, uiState.groupNames),
+                            selected = selectedKey == key,
+                            selectedModifier = selectedModifier,
+                            indent = true,
+                        ) { onSelect(key) }
+                    }
                 }
             }
-            items(groups, key = { it }) { group ->
-                LiveTvCategoryItem(liveTvGroupLabel(group, groupNames), selectedKey == group, selectedModifier) { onSelect(group) }
+        } else {
+            items(visibleGroups, key = { it }) { group ->
+                LiveTvCategoryItem(liveTvGroupLabel(group, uiState.groupNames), selectedKey == group, selectedModifier) { onSelect(group) }
             }
         }
     }
 }
 
-/** A category: selecting happens on focus, like Netflix's genre rail, so the list follows the remote. */
+/**
+ * A category: selecting happens on focus, like Netflix's genre rail, so the guide follows the
+ * remote. A source heading ([heading]) folds its categories on OK ([onClick]).
+ */
 @Composable
-private fun LiveTvCategoryItem(label: String, selected: Boolean, selectedModifier: Modifier, onSelect: () -> Unit) {
+private fun LiveTvCategoryItem(
+    label: String,
+    selected: Boolean,
+    selectedModifier: Modifier,
+    count: Int? = null,
+    heading: Boolean = false,
+    folded: Boolean = false,
+    indent: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    onSelect: () -> Unit,
+) {
     var focused by remember { mutableStateOf(false) }
     LaunchedEffect(focused) {
         if (focused && !selected) {
@@ -604,9 +726,10 @@ private fun LiveTvCategoryItem(label: String, selected: Boolean, selectedModifie
     }
     val shape = RoundedCornerShape(10.dp)
     Card(
-        onClick = onSelect,
+        onClick = onClick ?: onSelect,
         modifier = (if (selected) selectedModifier else Modifier)
             .fillMaxWidth()
+            .padding(top = if (heading) 8.dp else 0.dp)
             .onFocusChanged { focused = it.isFocused },
         shape = CardDefaults.shape(shape),
         colors = CardDefaults.colors(
@@ -615,157 +738,37 @@ private fun LiveTvCategoryItem(label: String, selected: Boolean, selectedModifie
         ),
         scale = CardDefaults.scale(focusedScale = 1.02f),
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (focused) Color.Black else if (selected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextSecondary,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-        )
-    }
-}
-
-@Composable
-private fun LiveTvRecentRow(
-    recent: LiveTvRecentChannel,
-    logo: String?,
-    programme: LiveTvProgramme?,
-    clock: State<Long>,
-    onClick: () -> Unit,
-    onFocused: () -> Unit,
-) {
-    LiveTvRowCard(onClick = onClick, onLongClick = null, tall = true, onFocused = onFocused) { focused ->
-        LiveTvLogo(url = logo, name = recent.name, width = 88.dp, height = 54.dp)
-        Column(modifier = Modifier.weight(1f).padding(start = NuvioTheme.spacing.md)) {
-            Text(
-                text = stringResource(R.string.live_tv_continue).uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                letterSpacing = 1.5.sp,
-                color = if (focused) Color.Black.copy(alpha = 0.6f) else NuvioTheme.colors.TextTertiary,
-            )
-            Text(
-                text = recent.name,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = if (focused) Color.Black else NuvioTheme.colors.TextPrimary,
-            )
-            ProgrammeLine(programme, clock, focused)
-        }
-    }
-}
-
-@Composable
-private fun LiveTvChannelRow(
-    channel: LiveTvChannel,
-    logo: String?,
-    programme: LiveTvProgramme?,
-    clock: State<Long>,
-    isFavorite: Boolean,
-    groupName: String?,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onFocused: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    LiveTvRowCard(onClick = onClick, onLongClick = onLongClick, tall = false, onFocused = onFocused, modifier = modifier) { focused ->
-        LiveTvLogo(url = logo, name = channel.name, width = 66.dp, height = 40.dp)
-        Column(modifier = Modifier.weight(1f).padding(start = NuvioTheme.spacing.md)) {
-            Text(
-                text = channel.name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = if (focused) Color.Black else NuvioTheme.colors.TextPrimary,
-            )
-            ProgrammeLine(programme, clock, focused, fallback = groupName ?: channel.group)
-        }
-        if (isFavorite) {
-            Icon(
-                imageVector = Icons.Filled.Star,
-                contentDescription = stringResource(R.string.live_tv_favorites),
-                tint = if (focused) Color.Black else NuvioTheme.colors.TextSecondary,
-                modifier = Modifier.padding(start = NuvioTheme.spacing.sm).size(18.dp),
-            )
-        }
-    }
-}
-
-/** What is on now, a thin progress bar and the time left, or the category when there is no guide. */
-@Composable
-private fun ProgrammeLine(programme: LiveTvProgramme?, clock: State<Long>, focused: Boolean, fallback: String = "") {
-    val secondary = if (focused) Color.Black.copy(alpha = 0.65f) else NuvioTheme.colors.TextSecondary
-    if (programme == null) {
-        if (fallback.isNotBlank()) {
-            Text(text = fallback, style = MaterialTheme.typography.bodySmall, color = secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        return
-    }
-    Text(
-        text = programme.title,
-        style = MaterialTheme.typography.bodySmall,
-        color = secondary,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
-    Row(modifier = Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        LiveTvProgressBar(
-            programme = programme,
-            clock = clock,
-            fill = if (focused) Color.Black else NuvioTheme.colors.TextPrimary,
-            track = if (focused) Color.Black.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.12f),
-            modifier = Modifier.weight(1f, fill = false).widthIn(max = 160.dp).fillMaxWidth(),
-        )
-        Text(
-            text = liveTvTimeLeft(programme, clock),
-            style = MaterialTheme.typography.labelSmall,
-            color = if (focused) Color.Black.copy(alpha = 0.55f) else NuvioTheme.colors.TextTertiary,
-            maxLines = 1,
-            modifier = Modifier.padding(start = 8.dp),
-        )
-    }
-}
-
-@Composable
-private fun LiveTvRowCard(
-    onClick: () -> Unit,
-    onLongClick: (() -> Unit)?,
-    tall: Boolean,
-    onFocused: () -> Unit,
-    modifier: Modifier = Modifier,
-    content: @Composable androidx.compose.foundation.layout.RowScope.(focused: Boolean) -> Unit,
-) {
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(12.dp)
-    val container by animateColorAsState(
-        if (focused) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextPrimary.copy(alpha = 0.035f),
-        label = "liveTvRow",
-    )
-    Card(
-        onClick = onClick,
-        onLongClick = onLongClick,
-        modifier = modifier
-            .fillMaxWidth()
-            .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onFocused()
-            },
-        shape = CardDefaults.shape(shape),
-        colors = CardDefaults.colors(containerColor = container, focusedContainerColor = container),
-        scale = CardDefaults.scale(focusedScale = 1.015f),
-    ) {
+        val content = if (focused) Color.Black else if (selected) NuvioTheme.colors.TextPrimary else NuvioTheme.colors.TextSecondary
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(if (tall) 76.dp else 58.dp)
-                .padding(horizontal = NuvioTheme.spacing.md),
+            modifier = Modifier.padding(start = if (indent) 22.dp else 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            content(focused)
+            if (heading) {
+                Icon(
+                    imageVector = if (folded) Icons.AutoMirrored.Filled.KeyboardArrowRight else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = content,
+                    modifier = Modifier.padding(end = 6.dp).size(18.dp),
+                )
+            }
+            Text(
+                text = label,
+                style = if (heading) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected || heading) FontWeight.SemiBold else FontWeight.Normal,
+                letterSpacing = if (heading) 1.sp else androidx.compose.ui.unit.TextUnit.Unspecified,
+                color = content,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (count != null) {
+                Text(
+                    text = count.toString(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (focused) Color.Black.copy(alpha = 0.6f) else NuvioTheme.colors.TextTertiary,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
         }
     }
 }

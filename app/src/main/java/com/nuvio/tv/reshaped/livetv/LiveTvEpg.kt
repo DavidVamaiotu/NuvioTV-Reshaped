@@ -31,8 +31,15 @@ internal class LiveTvGuideWindow(
     val aheadMs: Long,
     val maxAhead: Int,
     /** How far back channels with catch-up keep programmes, so past ones can be played again. */
-    val catchupPastMs: Long,
-    val maxCatchupPast: Int,
+    val catchupPastMs: Long = pastMs,
+    val maxCatchupPast: Int = maxPast,
+    /**
+     * Descriptions and pictures are kept only for programmes within this of now (either side),
+     * cut to [maxDescription] characters: they are what the guide's header shows, and keeping
+     * them for every programme would take tens of MB with big lists.
+     */
+    val detailsMs: Long = 0L,
+    val maxDescription: Int = 0,
 ) {
     /** How far back [key]'s programmes are kept, given the request's catch-up channels. */
     fun pastMsFor(catchup: Boolean): Long = if (catchup) catchupPastMs else pastMs
@@ -42,10 +49,12 @@ internal class LiveTvGuideWindow(
         val Regular = LiveTvGuideWindow(
             pastMs = 3 * HOUR, maxPast = 6, aheadMs = 12 * HOUR, maxAhead = 18,
             catchupPastMs = 24 * HOUR, maxCatchupPast = 48,
+            detailsMs = 4 * HOUR, maxDescription = 320,
         )
         val LowMemory = LiveTvGuideWindow(
             pastMs = 2 * HOUR, maxPast = 4, aheadMs = 8 * HOUR, maxAhead = 10,
             catchupPastMs = 12 * HOUR, maxCatchupPast = 24,
+            detailsMs = 90 * 60 * 1000L, maxDescription = 160,
         )
     }
 }
@@ -134,8 +143,11 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder) {
                     } else {
                         val start = parser.getAttributeValue(null, "start")?.let(LiveTvClock::parseXmlTvTimestamp)
                         val stop = parser.getAttributeValue(null, "stop")?.let(LiveTvClock::parseXmlTvTimestamp)
-                        val title = parser.readFirstTitle()
-                        if (start != null && stop != null && title != null) builder.add(keys, title, start, stop)
+                        val programme = parser.readProgramme(start != null && stop != null && builder.wantsDetails(start, stop))
+                        val title = programme.title
+                        if (start != null && stop != null && title != null) {
+                            builder.add(keys, title, start, stop, programme.description, programme.image)
+                        }
                     }
                 }
                 parser.name.equals("channel", ignoreCase = true) -> {
@@ -185,25 +197,39 @@ private fun XmlPullParser.readChannel(channelId: String, builder: LiveTvSchedule
     builder.channel(channelId, names, icon)
 }
 
-/** From a programme's START_TAG: its first title, leaving the parser on the programme's END_TAG. */
-private fun XmlPullParser.readFirstTitle(): String? {
+/** What [readProgramme] takes from a programme. */
+private class ProgrammeText {
     var title: String? = null
+    var description: String? = null
+    var image: String? = null
+}
+
+/**
+ * From a programme's START_TAG: its first title (and with [details], its first description and
+ * picture), leaving the parser on the programme's END_TAG.
+ */
+private fun XmlPullParser.readProgramme(details: Boolean): ProgrammeText {
+    val text = ProgrammeText()
     var depth = 1
     while (depth > 0) {
         when (next()) {
-            XmlPullParser.START_TAG -> {
-                if (title == null && depth == 1 && name.equals("title", ignoreCase = true)) {
-                    // nextText() ends on the title's END_TAG, so the depth is unchanged.
-                    title = nextText().trim().takeIf(String::isNotBlank)
-                } else {
+            XmlPullParser.START_TAG -> when {
+                // nextText() ends on the element's END_TAG, so the depth is unchanged.
+                depth == 1 && text.title == null && name.equals("title", ignoreCase = true) ->
+                    text.title = nextText().trim().takeIf(String::isNotBlank)
+                details && depth == 1 && text.description == null && name.equals("desc", ignoreCase = true) ->
+                    text.description = nextText().trim().takeIf(String::isNotBlank)
+                details && depth == 1 && text.image == null && name.equals("icon", ignoreCase = true) -> {
+                    text.image = getAttributeValue(null, "src")?.trim()?.takeIf(String::isHttpUrl)
                     depth++
                 }
+                else -> depth++
             }
             XmlPullParser.END_TAG -> depth--
-            XmlPullParser.END_DOCUMENT -> return title
+            XmlPullParser.END_DOCUMENT -> return text
         }
     }
-    return title
+    return text
 }
 
 /** Collects programmes for the requested channels while a guide is read. */
@@ -263,12 +289,30 @@ internal class LiveTvScheduleBuilder(
         return if (channelId in request.keys) listOf(channelId) else null
     }
 
-    fun add(keys: List<String>, title: String, startEpochMs: Long, stopEpochMs: Long) {
-        keys.forEach { add(it, title, startEpochMs, stopEpochMs) }
+    /** Whether a programme from [startEpochMs] to [stopEpochMs] keeps its description and picture. */
+    fun wantsDetails(startEpochMs: Long, stopEpochMs: Long): Boolean =
+        window.maxDescription > 0 && stopEpochMs > nowEpochMs - window.detailsMs && startEpochMs < nowEpochMs + window.detailsMs
+
+    fun add(
+        keys: List<String>,
+        title: String,
+        startEpochMs: Long,
+        stopEpochMs: Long,
+        description: String? = null,
+        image: String? = null,
+    ) {
+        keys.forEach { add(it, title, startEpochMs, stopEpochMs, description, image) }
     }
 
     /** [key] must be one of the request's keys. */
-    fun add(key: String, title: String, startEpochMs: Long, stopEpochMs: Long) {
+    fun add(
+        key: String,
+        title: String,
+        startEpochMs: Long,
+        stopEpochMs: Long,
+        description: String? = null,
+        image: String? = null,
+    ) {
         val catchup = key in request.catchupKeys
         if (stopEpochMs <= startEpochMs || stopEpochMs <= nowEpochMs - window.pastMsFor(catchup)) return
         if (startEpochMs >= nowEpochMs + window.aheadMs) {
@@ -295,11 +339,23 @@ internal class LiveTvScheduleBuilder(
             if (latest.startEpochMs <= startEpochMs) return
             list.remove(latest)
         }
+        val details = wantsDetails(startEpochMs, stopEpochMs)
         list += LiveTvProgramme(
             title = titles.getOrPut(title) { title },
             startEpochMs = startEpochMs,
             stopEpochMs = stopEpochMs,
+            // Repeats share one copy, as titles do.
+            description = description?.takeIf { details }?.let(::shortDescription)?.let { titles.getOrPut(it) { it } },
+            image = image?.takeIf { details }?.let { titles.getOrPut(it) { it } },
         )
+    }
+
+    /** Cut at a word near [LiveTvGuideWindow.maxDescription], with an ellipsis. */
+    private fun shortDescription(text: String): String {
+        val max = window.maxDescription
+        if (text.length <= max) return text
+        val cut = text.lastIndexOf(' ', max - 1).takeIf { it > max / 2 } ?: (max - 1)
+        return text.substring(0, cut).trimEnd() + "…"
     }
 
     fun build(): LiveTvGuide = LiveTvGuide(

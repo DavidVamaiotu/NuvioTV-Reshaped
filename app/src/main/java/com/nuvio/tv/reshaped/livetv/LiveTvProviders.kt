@@ -433,6 +433,7 @@ private fun writeStalkerGuide(input: InputStream, channels: Map<String, String>,
         fun programme(channelId: String?) {
             var chId = channelId
             var title: String? = null
+            var description: String? = null
             var start: Long? = null
             var stop: Long? = null
             var startText: String? = null
@@ -442,6 +443,7 @@ private fun writeStalkerGuide(input: InputStream, channels: Map<String, String>,
                 when (reader.nextName()) {
                     "ch_id" -> reader.nextScalar()?.let { if (chId == null) chId = it }
                     "name" -> title = reader.nextScalar()
+                    "descr" -> description = reader.nextScalar()?.trim()?.takeIf(String::isNotEmpty)
                     "start_timestamp" -> start = reader.nextScalar()?.toLongOrNull()
                     "stop_timestamp" -> stop = reader.nextScalar()?.toLongOrNull()
                     "time" -> startText = reader.nextScalar()
@@ -464,7 +466,13 @@ private fun writeStalkerGuide(input: InputStream, channels: Map<String, String>,
             out.write(xmlEscaped(guideId))
             out.write("\"><title>")
             out.write(xmlEscaped(name))
-            out.write("</title></programme>\n")
+            out.write("</title>")
+            description?.let {
+                out.write("<desc>")
+                out.write(xmlEscaped(it))
+                out.write("</desc>")
+            }
+            out.write("</programme>\n")
             count++
         }
         fun programmes(channelId: String?) {
