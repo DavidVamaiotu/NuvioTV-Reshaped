@@ -88,11 +88,11 @@ class LiveTvScreenModel @Inject constructor(
     private var sections: LiveTvSections? = null
 
     /** The sections already worked out for these inputs, or null. */
-    fun sourceSections(state: LiveTvUiState, visibleGroups: List<String>): LiveTvSections? =
+    internal fun sourceSections(state: LiveTvUiState, visibleGroups: List<String>): LiveTvSections? =
         sections.takeIf { sectionsFor?.sameAs(sectionInputs(state, visibleGroups)) == true }
 
     /** Works out the sections (slow for big lists: off the main thread) and keeps them. */
-    fun computeSourceSections(state: LiveTvUiState, visibleGroups: List<String>): LiveTvSections {
+    internal fun computeSourceSections(state: LiveTvUiState, visibleGroups: List<String>): LiveTvSections {
         val inputs = sectionInputs(state, visibleGroups)
         val counts = HashMap<String, Int>()
         val groupsBySource = HashMap<String, HashSet<String>>()
