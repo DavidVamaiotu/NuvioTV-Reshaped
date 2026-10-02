@@ -677,9 +677,8 @@ class NuvioMpvSurfaceView @JvmOverloads constructor(
         mpv.setOptionString("tls-verify", "yes")
         mpv.setOptionString("tls-ca-file", "${context.filesDir.path}/cacert.pem")
         mpv.setOptionString("input-default-bindings", "yes")
-        val (mpvAheadBytes, mpvBackBytes) = com.nuvio.tv.ui.screens.player.seekbuffer.SeekBufferSettings.mpvCacheBytes(context) // Nuvio RS hook: Seek buffer setting
-        mpv.setOptionString("demuxer-max-bytes", "$mpvAheadBytes")
-        mpv.setOptionString("demuxer-max-back-bytes", "$mpvBackBytes")
+        mpv.setOptionString("demuxer-max-bytes", "${64 * 1024 * 1024}")
+        mpv.setOptionString("demuxer-max-back-bytes", "${64 * 1024 * 1024}")
         mpv.setOptionString("keep-open", "yes")
         mpv.setOptionString("softvol", "yes")
         mpv.setOptionString("volume-max", MPV_MAX_VOLUME_PERCENT.toInt().toString())
