@@ -100,9 +100,9 @@ internal object LiveTvCatchupLinks {
         }
     }
 
-    private val FORMATTED = Regex("""\$?\{(utc|start|utcend|end|lutc|now|timestamp):([^}]+)}""")
-    private val DIVIDED = Regex("""\$?\{(duration|offset):(\d+)}""")
-    private val PLAIN = Regex("""\$?\{(utc|start|utcend|end|lutc|now|timestamp|duration|offset|Y|m|d|H|M|S)}""")
+    private val FORMATTED = Regex("""\$?\{(utc|start|utcend|end|lutc|now|timestamp):([^}]+)\}""")
+    private val DIVIDED = Regex("""\$?\{(duration|offset):(\d+)\}""")
+    private val PLAIN = Regex("""\$?\{(utc|start|utcend|end|lutc|now|timestamp|duration|offset|Y|m|d|H|M|S)\}""")
 
     /**
      * Fills a `catchup-source` template: `{utc}`, `{lutc}`, `{utcend}`, `{duration}`, `{offset}` (also
