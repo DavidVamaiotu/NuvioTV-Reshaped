@@ -150,6 +150,18 @@ internal object ReshapedSync {
         }
     }
 
+    /**
+     * Live TV opened (or came back from the player): fetch what other devices changed, so a TV
+     * left open for hours shows them. At most once a minute, shared with the foreground sync.
+     */
+    fun onLiveTvOpened() {
+        if (!::appContext.isInitialized || !_syncLiveTv.value) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastForegroundSyncMs != 0L && now - lastForegroundSyncMs < FOREGROUND_MIN_GAP_MS) return
+        lastForegroundSyncMs = now
+        scope.launch { sync(appContext, onlyIfChanged = false) }
+    }
+
     fun syncNow(context: Context) {
         scope.launch { sync(context.applicationContext, onlyIfChanged = false) }
     }
