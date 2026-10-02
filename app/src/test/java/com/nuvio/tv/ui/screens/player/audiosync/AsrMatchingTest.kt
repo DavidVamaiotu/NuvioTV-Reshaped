@@ -2,6 +2,7 @@ package com.nuvio.tv.ui.screens.player.audiosync
 
 import com.nuvio.tv.ui.screens.player.audiosync.asr.AsrSyncEngine
 import com.nuvio.tv.ui.screens.player.audiosync.asr.HeardWord
+import com.nuvio.tv.ui.screens.player.audiosync.asr.ReferenceSubtitle
 import com.nuvio.tv.ui.screens.player.audiosync.asr.SubtitleBridge
 import com.nuvio.tv.ui.screens.player.audiosync.asr.WordAnchorMatcher
 import kotlin.math.abs
@@ -50,6 +51,61 @@ class AsrMatchingTest {
     }
 
     @Test
+    fun frameRateIsFoundFromWordsHeardLateInTheFilm() {
+        // Subtitle made for 23.976 fps, video at 25 fps: past ~23 minutes every word is more than a
+        // minute off at 1x. Words heard only between minutes 30 and 40 (a resume) must still lock.
+        // Every subtitle word is distinct, so no chance match lands within a minute at 1x either.
+        val random = Random(11)
+        val cues = List(900) { line ->
+            val start = 20_000L + line * 5_000L
+            Triple(start, start + 3_000L, "word${line}a word${line}b word${line}c word${line}d")
+        }
+        val scale = 23.976 / 25.0
+        val heard = cues.withIndex()
+            .filter { (_, cue) -> cue.first in 1_800_000L..2_400_000L }
+            .flatMap { (line, cue) ->
+                val (start, end, text) = cue
+                val words = text.split(' ')
+                words.mapIndexedNotNull { k, word ->
+                    if (random.nextFloat() < 0.3f) return@mapIndexedNotNull null
+                    val subSec = (start + (end - start) * k / words.size) / 1_000.0
+                    HeardWord(subSec * scale + random.nextDouble(-0.15, 0.15), word, line)
+                }
+            }
+        val fit = assertNotNull(WordAnchorMatcher(cues).fit(heard))
+        assertEquals(scale, fit.scale, 1e-9, "fit $fit")
+        assertTrue(fit.isConfident, "fit $fit")
+        assertTrue(abs(fit.shiftSec) < 0.3, "shift ${fit.shiftSec}")
+    }
+
+    @Test
+    fun recognitionWaitsForAReferenceAndStopsListeningWhenUseless() {
+        val cues = script(Random(12), 30)
+        val recognised = java.util.concurrent.atomic.AtomicInteger()
+        val engine = AsrSyncEngine(SpeechTimeline(), onLock = {})
+        engine.setRecognizer { recognised.incrementAndGet(); emptyList() }
+        engine.startSession(SubtitleSpeechTrack.fromCues(cues), emptyList())
+        fun segment(frame: Int) = FloatArray(SileroVad.CHUNK_SAMPLES * 10) { frame.toFloat() }
+        engine.offerSegment(100, segment(100))
+        Thread.sleep(300)
+        assertEquals(0, recognised.get(), "nothing to match against: not recognised yet")
+        engine.addReference(ReferenceSubtitle("en", cues, null))
+        val deadline = System.currentTimeMillis() + 5_000
+        while (recognised.get() < 1 && System.currentTimeMillis() < deadline) Thread.sleep(10)
+        assertEquals(1, recognised.get(), "recognised once a reference arrived")
+        engine.setListening(false)
+        engine.offerSegment(200, segment(200))
+        Thread.sleep(300)
+        assertEquals(1, recognised.get(), "not listening: speech is not kept")
+        engine.setListening(true)
+        engine.offerSegment(300, segment(300))
+        val again = System.currentTimeMillis() + 5_000
+        while (recognised.get() < 2 && System.currentTimeMillis() < again) Thread.sleep(10)
+        engine.release()
+        assertEquals(2, recognised.get())
+    }
+
+    @Test
     fun unrelatedWordsDoNotLock() {
         val random = Random(2)
         val matcher = WordAnchorMatcher(script(random, 60))
@@ -75,7 +131,8 @@ class AsrMatchingTest {
         val order = java.util.Collections.synchronizedList(ArrayList<Int>())
         val done = java.util.concurrent.CountDownLatch(6)
         val engine = AsrSyncEngine(SpeechTimeline(), onLock = {})
-        engine.startSession(SubtitleSpeechTrack.fromCues(script(Random(6), 30)), emptyList())
+        val cues = script(Random(6), 30)
+        engine.startSession(SubtitleSpeechTrack.fromCues(cues), listOf(ReferenceSubtitle("en", cues, null)))
         fun segment(frame: Int) = FloatArray(SileroVad.CHUNK_SAMPLES * 10) { frame.toFloat() }
         engine.onPlayhead(0L)
         listOf(100, 200, 300).forEach { engine.offerSegment(it, segment(it)) }
