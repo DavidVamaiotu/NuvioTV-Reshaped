@@ -230,6 +230,13 @@ internal val LIVE_TV_PLAYLIST_HEADERS = mapOf(
 
 internal val LIVE_TV_STREAM_HEADERS = mapOf("User-Agent" to "VLC/3.0.0 LibVLC/3.0.0")
 
+/** [headers] with the user agent a source was given ([LiveTvSource.userAgent]); as they are when it has none. */
+internal fun withLiveTvUserAgent(headers: Map<String, String>, userAgent: String): Map<String, String> {
+    val agent = userAgent.trim()
+    if (agent.isEmpty()) return headers
+    return headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) } + ("User-Agent" to agent)
+}
+
 private fun firstUnquotedComma(line: String): Int {
     var quoted = false
     for (i in line.indices) {

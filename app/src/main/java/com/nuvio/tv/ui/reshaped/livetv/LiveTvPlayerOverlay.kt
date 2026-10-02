@@ -75,6 +75,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.LiveTvPreferences
 import com.nuvio.tv.reshaped.livetv.LiveTvUiState
 import com.nuvio.tv.ui.screens.player.PlayerEvent
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
@@ -778,10 +779,12 @@ private fun LiveTvFolderColumn(state: LiveTvPlayerState, liveState: LiveTvUiStat
     val allLabel = stringResource(R.string.live_tv_all_channels)
     val favoritesLabel = stringResource(R.string.live_tv_favorites)
     val uncategorisedLabel = liveTvGroupLabel(LIVE_TV_UNGROUPED)
-    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, liveState.groupNames, liveState.customLists, allLabel, favoritesLabel, uncategorisedLabel) {
+    val showAll by LiveTvPreferences.showAll.collectAsStateWithLifecycle()
+    val showFavorites by LiveTvPreferences.showFavorites.collectAsStateWithLifecycle()
+    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, liveState.groupNames, liveState.customLists, allLabel, favoritesLabel, uncategorisedLabel, showAll, showFavorites) {
         buildList {
-            add(FILTER_ALL to allLabel)
-            add(FILTER_FAVORITES to favoritesLabel)
+            if (showAll) add(FILTER_ALL to allLabel)
+            if (showFavorites) add(FILTER_FAVORITES to favoritesLabel)
             liveState.customLists.forEach { add(FILTER_LIST_PREFIX + it.id to it.name) }
             if (liveState.sources.size > 1) liveState.sources.forEach { add(FILTER_SOURCE_PREFIX + it.id to it.label) }
             liveState.visibleGroups.forEach {

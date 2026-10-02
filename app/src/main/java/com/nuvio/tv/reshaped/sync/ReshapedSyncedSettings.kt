@@ -44,6 +44,14 @@ internal object ReshapedSyncedSettings {
                     ?.let { AutoSyncPreferences.setSyncToleranceMs(context, it) }
             },
         ),
+        bool(TV, "live_tv_show_favorites", { LiveTvPreferences.ensureLoaded(it); LiveTvPreferences.showFavorites.value }, LiveTvPreferences::setShowFavorites),
+        bool(TV, "live_tv_show_all", { LiveTvPreferences.ensureLoaded(it); LiveTvPreferences.showAll.value }, LiveTvPreferences::setShowAll),
+        bool(TV, "live_tv_prefer_hls", { LiveTvPreferences.ensureLoaded(it); LiveTvPreferences.preferHls.value }, LiveTvPreferences::setPreferHls),
+        Setting(
+            TV, "live_tv_guide_refresh_hours",
+            read = { LiveTvPreferences.ensureLoaded(it); JsonPrimitive(LiveTvPreferences.guideRefreshHours.value) },
+            write = { context, value -> value.intOrNull?.let { LiveTvPreferences.setGuideRefreshHours(context, it) } },
+        ),
         bool(TV, "autosync", { AutoSyncPreferences.ensureLoaded(it); AutoSyncPreferences.enabled.value }, AutoSyncPreferences::setEnabled),
         bool(TV, "seek_previews", { LocalSeekPreviewSettings.enabled(it).value }, LocalSeekPreviewSettings::setEnabled),
         bool(TV, "pill_nav", { PillNavPreferences.ensureLoaded(it); PillNavPreferences.enabled.value }, PillNavPreferences::setEnabled),

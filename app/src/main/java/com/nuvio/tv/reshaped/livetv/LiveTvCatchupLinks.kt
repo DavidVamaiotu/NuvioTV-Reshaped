@@ -39,13 +39,15 @@ internal object LiveTvCatchupLinks {
         panelZone: ZoneId?,
         /** Whether the channel comes from an Xtream panel (its own source, or its get.php list). */
         xtreamPanel: Boolean = true,
+        /** An Xtream panel's replay as HLS (`.m3u8`), which has a length and seeks, whatever the live link's format. */
+        hls: Boolean = false,
     ): String? {
         val start = startMs / 1000
         val end = maxOf(stopMs / 1000, start + 60)
         val now = nowMs / 1000
         val template = catchup.template
         return when (catchup.kind) {
-            LiveTvCatchup.Kind.Xtream -> xtream(liveUrl, startMs, end - start, panelZone)
+            LiveTvCatchup.Kind.Xtream -> xtream(liveUrl, startMs, end - start, panelZone, hls)
             LiveTvCatchup.Kind.Append -> template?.let { liveUrl + fill(it, start, end, now) }
             LiveTvCatchup.Kind.Default -> when {
                 template == null -> shift(liveUrl, start, now)
@@ -54,10 +56,14 @@ internal object LiveTvCatchupLinks {
             }
             // Xtream panels list "shift" catch-up in their M3U too, but only answer their own form.
             LiveTvCatchup.Kind.Shift ->
-                (if (xtreamPanel) xtream(liveUrl, startMs, end - start, panelZone) else null) ?: shift(liveUrl, start, now)
+                (if (xtreamPanel) xtream(liveUrl, startMs, end - start, panelZone, hls) else null) ?: shift(liveUrl, start, now)
             LiveTvCatchup.Kind.Flussonic -> flussonic(liveUrl, start, end - start)
         }
     }
+
+    /** Whether [catchup] on [liveUrl] is an Xtream panel's /timeshift/ replay, which can be asked for as HLS. */
+    fun isXtreamReplay(liveUrl: String, catchup: LiveTvCatchup, xtreamPanel: Boolean): Boolean =
+        needsPanelZone(liveUrl, catchup, xtreamPanel) && !liveUrl.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
 
     /** Whether the link for [catchup] on [liveUrl] needs the Xtream panel's time zone. */
     fun needsPanelZone(liveUrl: String, catchup: LiveTvCatchup, xtreamPanel: Boolean = true): Boolean =
@@ -66,10 +72,10 @@ internal object LiveTvCatchupLinks {
 
     private val XTREAM_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd:HH-mm")
 
-    private fun xtream(liveUrl: String, startMs: Long, durationSeconds: Long, zone: ZoneId?): String? {
+    private fun xtream(liveUrl: String, startMs: Long, durationSeconds: Long, zone: ZoneId?, hls: Boolean = false): String? {
         val match = XTREAM_LIVE.find(liveUrl.substringBefore('?')) ?: return null
         val (host, user, pass, id) = match.destructured
-        val extension = match.groupValues[5].ifEmpty { ".ts" }
+        val extension = if (hls) ".m3u8" else match.groupValues[5].ifEmpty { ".ts" }
         val minutes = (durationSeconds + 59) / 60
         val time = XTREAM_TIME.format(Instant.ofEpochMilli(startMs).atZone(zone ?: ZoneId.systemDefault()))
         return "$host/timeshift/$user/$pass/$minutes/$time/$id$extension"

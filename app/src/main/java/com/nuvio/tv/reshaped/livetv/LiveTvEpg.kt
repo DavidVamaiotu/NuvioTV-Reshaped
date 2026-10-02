@@ -140,6 +140,10 @@ internal class LiveTvGuide(
 ) {
     val canReplaceSavedGuide: Boolean get() = complete && elements > 0 && !refreshFailed
 
+    /** Whether any channel has a programme still to come: false once a saved guide has run out. */
+    fun hasAhead(nowEpochMs: Long): Boolean =
+        schedule.values.any { programmes -> programmes.isNotEmpty() && programmes.last().stopEpochMs > nowEpochMs }
+
     fun afterFailedRefresh(): LiveTvGuide = LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true)
 }
 

@@ -42,8 +42,14 @@ import com.nuvio.tv.reshaped.sync.ReshapedSync
 object LiveTvRepository {
     private const val TAG = "LiveTv"
     private const val EPG_TICK_MS = 60_000L
-    /** How long a downloaded guide is used before it is downloaded again. */
-    private const val EPG_DOWNLOAD_MS = 10L * 60 * 60 * 1000
+    /** How long a replay waits for the panel's HLS playlist before playing its TS replay. */
+    private const val HLS_CHECK_MS = 6_000L
+    /** How long a downloaded guide is used before it is downloaded again (Live TV settings, 12 h by default). */
+    private val EPG_DOWNLOAD_MS: Long
+        get() {
+            LiveTvPreferences.ensureLoaded(appContext)
+            return LiveTvPreferences.guideRefreshHours.value * 60L * 60 * 1000
+        }
     /** The saved guide is read again when channels run out of kept programmes, at most this often. */
     private const val EPG_MIN_READ_GAP_MS = 60L * 60 * 1000
     /** A guide that could not be read is tried again sooner. */
@@ -238,14 +244,14 @@ object LiveTvRepository {
         }
     }
 
-    fun loadM3uUrl(url: String, epgUrl: String = "") {
+    fun loadM3uUrl(url: String, epgUrl: String = "", userAgent: String = "") {
         val trimmed = url.trim()
-        launchAdd(LiveTvSource("", LiveTvSourceType.M3u, trimmed, epgUrl = epgUrl.trim()))
+        launchAdd(LiveTvSource("", LiveTvSourceType.M3u, trimmed, epgUrl = epgUrl.trim(), userAgent = userAgent.trim()))
     }
 
-    fun loadXtream(settings: LiveTvXtreamSettings, epgUrl: String = "") {
+    fun loadXtream(settings: LiveTvXtreamSettings, epgUrl: String = "", userAgent: String = "") {
         val normalized = settings.normalized()
-        launchAdd(LiveTvSource("", LiveTvSourceType.Xtream, normalized.serverUrl, xtream = normalized, epgUrl = epgUrl.trim()))
+        launchAdd(LiveTvSource("", LiveTvSourceType.Xtream, normalized.serverUrl, xtream = normalized, epgUrl = epgUrl.trim(), userAgent = userAgent.trim()))
     }
 
     fun loadStalker(settings: LiveTvStalkerSettings, epgUrl: String = "") {
@@ -265,7 +271,10 @@ object LiveTvRepository {
             LiveTvSourceType.Xtream -> edited.xtream.normalized().let { edited.copy(url = it.serverUrl, xtream = it) }
             LiveTvSourceType.Stalker -> edited.stalker.normalized().let { edited.copy(url = it.portalUrl, stalker = it) }
         }
-        val updated = source.copy(id = sourceId, epgUrl = edited.epgUrl.trim(), name = edited.name.trim())
+        val updated = source.copy(
+            id = sourceId, epgUrl = edited.epgUrl.trim(), name = edited.name.trim(),
+            userAgent = edited.userAgent.trim().takeIf { edited.type != LiveTvSourceType.Stalker }.orEmpty(),
+        )
         if (updated.copy(name = "") == existing.copy(name = "")) {
             // Only the name changed: nothing to load again.
             if (updated.name != existing.name) renameSource(updated)
@@ -625,17 +634,44 @@ object LiveTvRepository {
         val xtreamPanel = source == null || source.type == LiveTvSourceType.Xtream ||
             (source.type == LiveTvSourceType.M3u && xtreamGuideUrlFor(source.url) != null)
         val zone = if (LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup, xtreamPanel)) {
-            LiveTvCatchupLinks.xtreamLogin(channel.streamUrl)?.let { (server, user, pass) -> LiveTvXtream.zone(server, user, pass) }
+            LiveTvCatchupLinks.xtreamLogin(channel.streamUrl)?.let { (server, user, pass) -> LiveTvXtream.zone(server, user, pass, source?.userAgent.orEmpty()) }
         } else {
             null
         }
         // A programme still on air plays from its start up to now.
         val stop = minOf(programme.stopEpochMs, now)
-        val link = LiveTvCatchupLinks.link(channel.streamUrl, catchup, programme.startEpochMs, stop, now, zone, xtreamPanel) ?: return null
+        // "Prefer HLS": the panel's HLS replay has a length, so it shows a progress bar and seeks.
+        // A panel that gives none (or no playlist in time) plays the TS replay as before.
+        val hlsLink = if (LiveTvCatchupLinks.isXtreamReplay(channel.streamUrl, catchup, xtreamPanel) && preferHls()) {
+            LiveTvCatchupLinks.link(channel.streamUrl, catchup, programme.startEpochMs, stop, now, zone, xtreamPanel, hls = true)
+                ?.takeIf { isHlsPlaylist(it, channel.headers) }
+        } else {
+            null
+        }
+        val link = hlsLink
+            ?: LiveTvCatchupLinks.link(channel.streamUrl, catchup, programme.startEpochMs, stop, now, zone, xtreamPanel)
+            ?: return null
         LiveTvPlaybackRegistry.register(link, listUrl = channel.streamUrl, catchup = true)
         recordRecentChannel(channel)
         return channel.copy(streamUrl = link)
     }
+
+    private fun preferHls(): Boolean {
+        LiveTvPreferences.ensureLoaded(appContext)
+        return LiveTvPreferences.preferHls.value
+    }
+
+    /** Whether [url] answers with an HLS playlist; asked once, briefly, before a replay starts. */
+    private suspend fun isHlsPlaylist(url: String, headers: Map<String, String>): Boolean =
+        withTimeoutOrNull(HLS_CHECK_MS) {
+            runCatching {
+                LiveTvHttp.stream(url, headers) { input ->
+                    val head = ByteArray(32)
+                    val read = input.read(head)
+                    read > 0 && String(head, 0, read, Charsets.UTF_8).trimStart('\uFEFF', ' ', '\r', '\n', '\t').startsWith("#EXTM3U")
+                }
+            }.onFailure { if (it is CancellationException) throw it }.getOrDefault(false)
+        } ?: false
 
     /** The channel next to the one at [listUrl] in [channels], wrapping around. */
     fun neighbour(channels: List<LiveTvChannel>, listUrl: String?, step: Int): LiveTvChannel? {
@@ -793,7 +829,7 @@ object LiveTvRepository {
                 val playlist = when {
                     // An imported file; a source edited to a link loads the link.
                     file != null && !source.url.isHttpUrl() -> withContext(Dispatchers.IO) { file.bufferedReader().useLines { parseM3uPlaylist(it) } }
-                    source.url.isHttpUrl() -> fetchM3u(source.url)
+                    source.url.isHttpUrl() -> fetchM3u(source.url, source.userAgent)
                     else -> throw LiveTvException(if (source.url.startsWith("http", ignoreCase = true)) LiveTvError.InvalidUrl else LiveTvError.FileEmpty)
                 }
                 if (playlist.channels.isEmpty()) {
@@ -805,7 +841,7 @@ object LiveTvRepository {
             }
             LiveTvSourceType.Xtream -> {
                 val settings = source.xtream
-                val loaded = LiveTvXtream.channels(settings)
+                val loaded = LiveTvXtream.channels(settings, source.userAgent)
                 val channels = loaded.channels
                 providerOrder = loaded.groupOrder
                 if (channels.isEmpty()) throw LiveTvException(LiveTvError.XtreamNoChannels)
@@ -824,11 +860,21 @@ object LiveTvRepository {
         // Ids only need to be unique within a source; the list keys on them across all of them.
         val tagged = ArrayList<LiveTvChannel>(channels.size)
         val stalker = source.type == LiveTvSourceType.Stalker
+        // The source's own user agent replaces the default one; a channel's own (#EXTVLCOPT) stays.
+        val agent = source.userAgent.trim().takeIf { it.isNotEmpty() && !stalker }
         channels.forEach { channel ->
             val group = channel.group.trim()
             // Portal channels without a guide id get one from their portal id, which the portal's guide uses.
             val tvgId = if (stalker && channel.tvgId.isNullOrBlank()) "stalker.${source.id}.${channel.id}".lowercase() else channel.tvgId
+            val headers = if (agent != null && channel.streamUrl.isHttpUrl() &&
+                channel.headers["User-Agent"].let { it == null || it == LIVE_TV_STREAM_HEADERS["User-Agent"] }
+            ) {
+                withLiveTvUserAgent(channel.headers, agent)
+            } else {
+                channel.headers
+            }
             tagged += channel.copy(
+                headers = headers,
                 id = "${source.id}/${channel.id}",
                 sourceId = source.id,
                 group = group,
@@ -940,9 +986,9 @@ object LiveTvRepository {
         LiveTvSourceType.Stalker -> null
     }
 
-    private suspend fun fetchM3u(url: String): ParsedM3uPlaylist {
+    private suspend fun fetchM3u(url: String, userAgent: String = ""): ParsedM3uPlaylist {
         if (url.looksLikeDirectVideoUrl()) return ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList())
-        val parsed = LiveTvHttp.stream(url, LIVE_TV_PLAYLIST_HEADERS) { input ->
+        val parsed = LiveTvHttp.stream(url, withLiveTvUserAgent(LIVE_TV_PLAYLIST_HEADERS, userAgent)) { input ->
             parseM3uPlaylist(input.bufferedReader().lineSequence())
         }
         return if (parsed.isHlsStream) ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList()) else parsed
@@ -1175,7 +1221,14 @@ object LiveTvRepository {
         val request = LiveTvGuideRequest.from(channels)
         val sourceForKey = channels.associate { it.guideKey to it.sourceId }
         val aheadHours = (window.aheadMs / (60L * 60 * 1000)).toInt()
-        val downloads: List<suspend (File) -> Unit> = epgUrls.map { url ->
+        // A guide is fetched with the user agent of a source listing it that was given one.
+        val guideHeaders = epgUrls.map { url ->
+            val agent = _uiState.value.sources.firstOrNull { source ->
+                source.userAgent.isNotBlank() && url in sourceLinks[source.id].orEmpty()
+            }?.userAgent.orEmpty()
+            withLiveTvUserAgent(LIVE_TV_STREAM_HEADERS, agent)
+        }
+        val downloads: List<suspend (File) -> Unit> = epgUrls.mapIndexed { index, url ->
             val portal = url.takeIf { it.startsWith(STALKER_GUIDE_PREFIX) }
                 ?.let { sourcesById[it.removePrefix(STALKER_GUIDE_PREFIX).substringBefore(':')] }
             val fetch: suspend (File) -> Unit = if (portal != null) {
@@ -1188,7 +1241,7 @@ object LiveTvRepository {
                     LiveTvStalker.downloadGuide(portal.stalker, ids, aheadHours, file)
                 }
             } else {
-                { file -> LiveTvHttp.download(url, LIVE_TV_STREAM_HEADERS, file, LiveTvHttp.GUIDE_READ_TIMEOUT_S, expectXml = true) }
+                { file -> LiveTvHttp.download(url, guideHeaders[index], file, LiveTvHttp.GUIDE_READ_TIMEOUT_S, expectXml = true) }
             }
             fetch
         }
@@ -1252,7 +1305,7 @@ object LiveTvRepository {
                                 val epgUrl = epgUrls[index]
                                 readGuide(
                                     downloads[index], epgUrl.takeUnless { it.startsWith(STALKER_GUIDE_PREFIX) },
-                                    guideFiles[index], request, nowMs, window, force,
+                                    guideFiles[index], request, nowMs, window, force, guideHeaders[index],
                                 )
                             }, publish = publish@ { index, guide ->
                                 val epgUrl = epgUrls[index]
@@ -1364,6 +1417,7 @@ object LiveTvRepository {
         nowMs: Long,
         window: LiveTvGuideWindow,
         force: Boolean,
+        headers: Map<String, String> = LIVE_TV_STREAM_HEADERS,
     ): LiveTvGuide? {
         try {
             val saved = withContext(Dispatchers.IO) { file.lastModified() }
@@ -1372,13 +1426,15 @@ object LiveTvRepository {
             } else {
                 null
             }
-            if (cached?.canReplaceSavedGuide == true) return cached
+            // A saved guide that has run out (a provider's file covering less than the refresh
+            // interval) is downloaded again rather than leaving the guide empty until then.
+            if (cached?.canReplaceSavedGuide == true && (cached.schedule.isEmpty() || cached.hasAhead(nowMs) || nowMs - saved < EPG_MIN_READ_GAP_MS)) return cached
             // Also repair a recently saved, incomplete feed from an earlier app version.
             if (force || saved == 0L || nowMs - saved !in 0 until EPG_DOWNLOAD_MS || cached != null) {
                 if (url != null) {
                     try {
                         val read = LiveTvHttp.downloadReading(
-                            url, LIVE_TV_STREAM_HEADERS, file, LiveTvHttp.GUIDE_READ_TIMEOUT_S,
+                            url, headers, file, LiveTvHttp.GUIDE_READ_TIMEOUT_S,
                             read = { input -> readXmlTvGuide(input, request, nowMs, window) },
                             keep = { guide -> guide.canReplaceSavedGuide },
                         )

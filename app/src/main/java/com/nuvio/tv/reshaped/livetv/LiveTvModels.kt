@@ -135,6 +135,8 @@ data class LiveTvSource(
     val epgUrl: String = "",
     /** The name the viewer gave the source; blank shows [label]'s default. */
     val name: String = "",
+    /** A user agent the viewer gave (some providers require their own); blank uses the default. Not for portals. */
+    val userAgent: String = "",
 ) {
     /** A short name for lists: the viewer's name for it, else the host of a link, or the imported file's name. */
     val label: String

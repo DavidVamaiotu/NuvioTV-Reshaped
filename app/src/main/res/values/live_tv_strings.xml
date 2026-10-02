@@ -57,6 +57,7 @@
     <string name="live_tv_imported_file">Imported file: %1$s</string>
     <string name="live_tv_source_name_hint">Name (%1$s)</string>
     <string name="live_tv_epg_hint">Guide link (XMLTV, optional)</string>
+    <string name="live_tv_user_agent_hint">User agent (optional)</string>
     <string name="live_tv_source_guide_none">no guide</string>
     <string name="live_tv_source_guide_loading">loading guide</string>
     <string name="live_tv_source_guide_failed">guide didn\'t load</string>
@@ -139,6 +140,13 @@
     <string name="live_tv_menu_reload_description">Download every source and its TV guide again</string>
     <string name="live_tv_menu_preview_sound">Preview sound</string>
     <string name="live_tv_menu_on">On</string>
+    <string name="live_tv_menu_show_favorites">Show Favorites</string>
+    <string name="live_tv_menu_show_all">Show All channels</string>
+    <string name="live_tv_menu_prefer_hls">Prefer HLS for replays</string>
+    <string name="live_tv_menu_prefer_hls_on">On: replays ask the panel for HLS first, so they have a progress bar and seek. Falls back to TS.</string>
+    <string name="live_tv_menu_prefer_hls_off">Off: replays play in the channel\'s own format</string>
+    <string name="live_tv_menu_guide_refresh">Guide refresh</string>
+    <string name="live_tv_menu_guide_refresh_value">Every %1$d hours. Channel lists refresh each time Live TV opens.</string>
     <string name="live_tv_menu_off">Off</string>
     <string name="live_tv_my_playlists">My playlists</string>
     <string name="live_tv_playlists_description">Lists of your own, with channels from any source. OK opens one.</string>

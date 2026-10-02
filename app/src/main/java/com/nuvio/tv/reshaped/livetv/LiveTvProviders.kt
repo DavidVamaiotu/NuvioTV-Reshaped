@@ -36,19 +36,22 @@ internal object LiveTvXtream {
     /** Each panel's time zone (by server URL): catch-up start times are given in it. */
     private val zones = java.util.concurrent.ConcurrentHashMap<String, java.time.ZoneId>()
 
-    suspend fun channels(settings: LiveTvXtreamSettings): ProviderChannels {
-        val categories = LiveTvHttp.stream(apiUrl(settings, "get_live_categories"), LIVE_TV_PLAYLIST_HEADERS) { input ->
+    /** [userAgent]: the source's own ([LiveTvSource.userAgent]); blank for the default. */
+    suspend fun channels(settings: LiveTvXtreamSettings, userAgent: String = ""): ProviderChannels {
+        val apiHeaders = withLiveTvUserAgent(LIVE_TV_PLAYLIST_HEADERS, userAgent)
+        val streamHeaders = withLiveTvUserAgent(LIVE_TV_STREAM_HEADERS, userAgent)
+        val categories = LiveTvHttp.stream(apiUrl(settings, "get_live_categories"), apiHeaders) { input ->
             readObjects(input) { fields ->
                 val id = fields["category_id"] ?: fields["id"] ?: return@readObjects null
                 val name = fields["category_name"] ?: fields["name"] ?: return@readObjects null
                 id to name
             }
         }.toMap()
-        val extension = liveExtension(settings)
+        val extension = liveExtension(settings, apiHeaders)
         // One catch-up instance per archive length, shared by the channels that have it.
         val catchups = HashMap<Int, LiveTvCatchup>()
         val seen = HashSet<String>()
-        val channels = LiveTvHttp.stream(apiUrl(settings, "get_live_streams"), LIVE_TV_PLAYLIST_HEADERS) { input ->
+        val channels = LiveTvHttp.stream(apiUrl(settings, "get_live_streams"), apiHeaders) { input ->
             var index = 0
             readObjects(input) { fields ->
                 val position = index++
@@ -65,7 +68,7 @@ internal object LiveTvXtream {
                     tvgId = fields["epg_channel_id"] ?: fields["tvg_id"],
                     logoUrl = fields["stream_icon"] ?: fields["logo"],
                     group = fields["category_id"]?.let(categories::get).orEmpty(),
-                    headers = LIVE_TV_STREAM_HEADERS,
+                    headers = streamHeaders,
                     catchup = if (fields["tv_archive"] == "1") {
                         val days = fields["tv_archive_duration"]?.toIntOrNull()?.coerceIn(1, 30) ?: 1
                         catchups.getOrPut(days) { LiveTvCatchup(LiveTvCatchup.Kind.Xtream, days) }
@@ -82,12 +85,12 @@ internal object LiveTvXtream {
      * The panel's time zone, which catch-up links give their start time in: from the login's
      * `server_info.timezone`, read with the channel list (or now, once, when it was not), else the TV's.
      */
-    suspend fun zone(serverUrl: String, username: String, password: String): java.time.ZoneId {
+    suspend fun zone(serverUrl: String, username: String, password: String, userAgent: String = ""): java.time.ZoneId {
         zones[serverUrl]?.let { return it }
         // A login that failed (panel busy, timeout) is asked again, at most once a minute.
         zoneFailedAt[serverUrl]?.let { if (System.currentTimeMillis() - it < 60_000L) return java.time.ZoneId.systemDefault() }
         val settings = LiveTvXtreamSettings(serverUrl, username, password)
-        val login = runCatching { JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS)) }
+        val login = runCatching { JSONObject(LiveTvHttp.text(loginUrl(settings), withLiveTvUserAgent(LIVE_TV_PLAYLIST_HEADERS, userAgent))) }
             .onFailure { if (it is CancellationException) throw it }
             .getOrNull()
         if (login == null) {
@@ -108,9 +111,9 @@ internal object LiveTvXtream {
      * The live format this account may use: MPEG-TS, as IPTV players prefer, unless the account only
      * allows HLS ("allowed_output_formats" in the login reply); a TS link then fails on every channel.
      */
-    private suspend fun liveExtension(settings: LiveTvXtreamSettings): String {
+    private suspend fun liveExtension(settings: LiveTvXtreamSettings, headers: Map<String, String>): String {
         val formats = try {
-            val login = JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS))
+            val login = JSONObject(LiveTvHttp.text(loginUrl(settings), headers))
             zoneOf(login)?.let { zones[settings.serverUrl] = it }
             val allowed = login.optJSONObject("user_info")?.optJSONArray("allowed_output_formats")
             if (allowed == null) emptyList() else List(allowed.length()) { allowed.optString(it).trim().lowercase() }
