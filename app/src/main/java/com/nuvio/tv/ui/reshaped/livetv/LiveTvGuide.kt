@@ -692,6 +692,23 @@ private fun GuideRow(
                 )
             }
             val density = LocalDensity.current
+            // Time the guide has nothing for (before its first programme, between two, after the
+            // last) shows as "No guide" too, instead of an empty gap.
+            val gaps = remember(programmes, viewStart, viewEnd) { guideGaps(programmes, viewStart, viewEnd) }
+            val noGuide = stringResource(R.string.live_tv_guide_none)
+            gaps.forEach { (gapStart, gapStop) ->
+                GuideCell(
+                    title = noGuide,
+                    selected = selectedRow && active && selected == null && state.anchorMs >= gapStart && state.anchorMs < gapStop,
+                    state = GuideCellState.Future,
+                    modifier = Modifier
+                        .offset { IntOffset(timeline.x(gapStart).roundToInt(), 0) }
+                        .width(with(density) { ((gapStop - gapStart) * timeline.pxPerMs).toDp() })
+                        .fillMaxHeight()
+                        .padding(end = 4.dp),
+                    titleShift = { (-timeline.x(gapStart)).coerceAtLeast(0f).roundToInt() },
+                )
+            }
             programmes.forEach { programme ->
                 val widthDp = with(density) { ((programme.stopEpochMs - programme.startEpochMs) * timeline.pxPerMs).toDp() }
                 val cellState = when {
@@ -721,6 +738,21 @@ private fun GuideRow(
 }
 
 private enum class GuideCellState { Past, Now, Future }
+
+/** Stretches of [from]..[to] that none of [programmes] (sorted by start) covers, of a minute or more. */
+private fun guideGaps(programmes: List<LiveTvProgramme>, from: Long, to: Long): List<Pair<Long, Long>> {
+    if (programmes.isEmpty()) return emptyList()
+    val gaps = ArrayList<Pair<Long, Long>>(2)
+    var covered = from
+    programmes.forEach { programme ->
+        if (programme.startEpochMs - covered >= GAP_MIN_MS) gaps += covered to programme.startEpochMs
+        covered = maxOf(covered, programme.stopEpochMs)
+    }
+    if (to - covered >= GAP_MIN_MS) gaps += covered to to
+    return gaps
+}
+
+private const val GAP_MIN_MS = 60_000L
 
 /** How far down the guide the selected row rests. */
 private const val SELECTION_AT = 0.4f
