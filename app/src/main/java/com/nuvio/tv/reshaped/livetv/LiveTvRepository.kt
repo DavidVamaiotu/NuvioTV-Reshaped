@@ -44,6 +44,10 @@ object LiveTvRepository {
     private const val EPG_TICK_MS = 60_000L
     /** How long a replay waits for the panel's HLS playlist before playing its TS replay. */
     private const val HLS_CHECK_MS = 6_000L
+    /** Playlists: panels that build get.php on request may send nothing for a minute or more. */
+    private const val PLAYLIST_READ_TIMEOUT_S = 120L
+    private const val TS_PACKET = 188
+    private const val TS_SYNC: Byte = 0x47
     /** How long a downloaded guide is used before it is downloaded again (Live TV settings, 12 h by default). */
     private val EPG_DOWNLOAD_MS: Long
         get() {
@@ -68,7 +72,11 @@ object LiveTvRepository {
     /** Marks a Stalker portal's guide in the guide list; see [stalkerGuideLink]. */
     private const val STALKER_GUIDE_PREFIX = "stalker-guide:"
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            // Live TV's background work failing must never close the app.
+            kotlinx.coroutines.CoroutineExceptionHandler { _, error -> Log.e(TAG, "Live TV background work failed", error) },
+    )
     private val _uiState = MutableStateFlow(LiveTvUiState())
     val uiState: StateFlow<LiveTvUiState> = _uiState.asStateFlow()
 
@@ -407,7 +415,8 @@ object LiveTvRepository {
      * order (as IPTV players show them), with "Uncategorised" last.
      */
     private fun orderedGroups(names: Set<String>, renamed: Map<String, String> = _uiState.value.groupNames): List<String> {
-        val ordered = groupOrder.filterTo(ArrayList()) { it in names }
+        // A synced order may name a category twice; each is listed once (rows are keyed by it).
+        val ordered = groupOrder.distinct().filterTo(ArrayList()) { it in names }
         val placed = ordered.toHashSet()
         providerGroupOrder.forEach { if (it in names && it != LIVE_TV_UNGROUPED && placed.add(it)) ordered += it }
         names.filterNot(placed::contains)
@@ -667,7 +676,13 @@ object LiveTvRepository {
             runCatching {
                 LiveTvHttp.stream(url, headers) { input ->
                     val head = ByteArray(32)
-                    val read = input.read(head)
+                    // A slow or chunked answer may hand over the first bytes a few at a time.
+                    var read = 0
+                    while (read < head.size) {
+                        val count = input.read(head, read, head.size - read)
+                        if (count < 0) break
+                        read += count
+                    }
                     read > 0 && String(head, 0, read, Charsets.UTF_8).trimStart('\uFEFF', ' ', '\r', '\n', '\t').startsWith("#EXTM3U")
                 }
             }.onFailure { if (it is CancellationException) throw it }.getOrDefault(false)
@@ -737,6 +752,10 @@ object LiveTvRepository {
                 } catch (error: Exception) {
                     Log.w(TAG, "Live TV source ${source.type} failed", error)
                     Result.failure(error)
+                } catch (tooLarge: OutOfMemoryError) {
+                    // A list too large for this TV fails as this source's error (it can still be removed), not the app.
+                    Log.w(TAG, "Live TV source ${source.type} too large", tooLarge)
+                    Result.failure(java.io.IOException("Playlist too large"))
                 }
             }
             val self = coroutineContext[Job]
@@ -988,10 +1007,40 @@ object LiveTvRepository {
 
     private suspend fun fetchM3u(url: String, userAgent: String = ""): ParsedM3uPlaylist {
         if (url.looksLikeDirectVideoUrl()) return ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList())
-        val parsed = LiveTvHttp.stream(url, withLiveTvUserAgent(LIVE_TV_PLAYLIST_HEADERS, userAgent)) { input ->
-            parseM3uPlaylist(input.bufferedReader().lineSequence())
+        // Kodi style "list.m3u|User-Agent=…": the options are headers, not part of the link.
+        val link = url.substringBefore('|').trim()
+        val linkHeaders = url.substringAfter('|', "").split('&').mapNotNull { entry ->
+            val key = entry.substringBefore('=').trim()
+            val value = entry.substringAfter('=', "").trim()
+                .let { if ('%' in it) runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) else it }
+            if (key.isBlank() || value.isBlank() || value.any { it !in ' '..'~' }) null else key to value
+        }.toMap()
+        val headers = withLiveTvUserAgent(LIVE_TV_PLAYLIST_HEADERS + linkHeaders, userAgent)
+        // Panels that build get.php on request may wait a long time before the first byte.
+        val parsed = LiveTvHttp.stream(link, headers, PLAYLIST_READ_TIMEOUT_S) { input ->
+            val buffered = input as? java.io.BufferedInputStream ?: java.io.BufferedInputStream(input, 64 * 1024)
+            if (buffered.isMpegTs()) return@stream null
+            parseM3uPlaylist(buffered.bufferedReader().lineSequence(), baseUrl = link)
         }
-        return if (parsed.isHlsStream) ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList()) else parsed
+        // A stream link without a video extension (…/live/user/pass/123): one channel, never read as a list.
+        return if (parsed == null || parsed.isHlsStream) ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList()) else parsed
+    }
+
+    /** MPEG-TS packets (sync byte 0x47 every 188 bytes): a live stream, not a playlist. */
+    private fun java.io.BufferedInputStream.isMpegTs(): Boolean {
+        mark(TS_PACKET * 2 + 1)
+        return try {
+            val head = ByteArray(TS_PACKET * 2 + 1)
+            var read = 0
+            while (read < head.size) {
+                val count = read(head, read, head.size - read)
+                if (count < 0) break
+                read += count
+            }
+            read == head.size && head[0] == TS_SYNC && head[TS_PACKET] == TS_SYNC && head[TS_PACKET * 2] == TS_SYNC
+        } finally {
+            reset()
+        }
     }
 
     /**

@@ -142,7 +142,8 @@ internal fun filterChannels(
     val needle = query.trim()
     if (filter is LiveTvFilter.Custom) {
         // In the viewer's order; a channel its source no longer lists is left out.
-        val urls = customLists.firstOrNull { it.id == filter.id }?.urls ?: return emptyList()
+        // Once each: a synced list naming a channel twice would repeat a row key.
+        val urls = customLists.firstOrNull { it.id == filter.id }?.urls?.distinct() ?: return emptyList()
         val wanted = urls.toHashSet()
         val byUrl = HashMap<String, LiveTvChannel>(urls.size * 2)
         channels.forEach { if (it.streamUrl in wanted) byUrl.putIfAbsent(it.streamUrl, it) }
@@ -315,9 +316,14 @@ fun LiveTvScreen(
                     }
                     viewModel.restoreFocusOnReturn = true
                     onPlay(route)
-                } catch (error: Exception) {
+                } catch (cancel: kotlinx.coroutines.CancellationException) {
                     launching = false
-                    throw error
+                    throw cancel
+                } catch (error: Exception) {
+                    // Shown as a failed play, never a closed app.
+                    launching = false
+                    android.util.Log.w("LiveTv", "Could not start playback", error)
+                    android.widget.Toast.makeText(context, R.string.live_tv_catchup_failed, android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
         }

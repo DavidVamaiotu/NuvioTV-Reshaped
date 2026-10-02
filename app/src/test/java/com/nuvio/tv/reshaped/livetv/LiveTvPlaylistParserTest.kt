@@ -52,6 +52,39 @@ class LiveTvPlaylistParserTest {
     }
 
     @Test
+    fun aWebPageIsNotAChannelList() {
+        val playlist = parse(
+            """
+            <!DOCTYPE html>
+            <html><body>Login</body></html>
+            {"user_info":{"auth":0}}
+            """.trimIndent(),
+        )
+        assertTrue(playlist.channels.isEmpty())
+    }
+
+    @Test
+    fun readsExtGrpRefererSpellingAndRelativeLinks() {
+        val playlist = parseM3uPlaylist(
+            """
+            #EXTM3U
+            #EXTINF:-1,One
+            #EXTGRP:Sports
+            #EXTVLCOPT:http-referer=https://ref.example
+            one.m3u8
+            #EXTINF:-1,Two
+            #EXT-X-STRAY
+            https://stream.example/two.ts
+            """.trimIndent().lineSequence(),
+            baseUrl = "https://lists.example/live/list.m3u",
+        )
+        assertEquals(listOf("One", "Two"), playlist.channels.map { it.name })
+        assertEquals("https://lists.example/live/one.m3u8", playlist.channels[0].streamUrl)
+        assertEquals("Sports", playlist.channels[0].group)
+        assertEquals("https://ref.example", playlist.channels[0].headers["Referer"])
+    }
+
+    @Test
     fun recognisesAnHlsStreamItself() {
         val playlist = parse(
             """
