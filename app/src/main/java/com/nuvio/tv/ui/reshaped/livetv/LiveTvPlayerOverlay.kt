@@ -340,7 +340,7 @@ internal class LiveTvPlayerState(
         folderJob = scope.launch {
             val state = LiveTvRepository.uiState.value
             panelChannels = withContext(Dispatchers.Default) {
-                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelKeys, key)
+                filterChannels(state.channels, state.favoriteUrls, state.hiddenGroups, state.hiddenChannelKeys, key, customLists = state.customLists)
             }
         }
     }
@@ -778,10 +778,11 @@ private fun LiveTvFolderColumn(state: LiveTvPlayerState, liveState: LiveTvUiStat
     val allLabel = stringResource(R.string.live_tv_all_channels)
     val favoritesLabel = stringResource(R.string.live_tv_favorites)
     val uncategorisedLabel = liveTvGroupLabel(LIVE_TV_UNGROUPED)
-    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, liveState.groupNames, allLabel, favoritesLabel, uncategorisedLabel) {
+    val folders = remember(liveState.sources, liveState.groups, liveState.hiddenGroups, liveState.groupNames, liveState.customLists, allLabel, favoritesLabel, uncategorisedLabel) {
         buildList {
             add(FILTER_ALL to allLabel)
             add(FILTER_FAVORITES to favoritesLabel)
+            liveState.customLists.forEach { add(FILTER_LIST_PREFIX + it.id to it.name) }
             if (liveState.sources.size > 1) liveState.sources.forEach { add(FILTER_SOURCE_PREFIX + it.id to it.label) }
             liveState.visibleGroups.forEach {
                 add(it to (liveTvGroupName(it, liveState.groupNames) ?: if (it == LIVE_TV_UNGROUPED) uncategorisedLabel else it))
@@ -894,6 +895,7 @@ private fun LiveTvChannelColumn(
         folderKey == null -> null
         folderKey == FILTER_ALL -> stringResource(R.string.live_tv_all_channels)
         folderKey == FILTER_FAVORITES -> stringResource(R.string.live_tv_favorites)
+        folderKey.startsWith(FILTER_LIST_PREFIX) -> liveState.customLists.firstOrNull { FILTER_LIST_PREFIX + it.id == folderKey }?.name
         folderKey.startsWith(FILTER_SOURCE_PREFIX) ->
             liveState.sources.firstOrNull { FILTER_SOURCE_PREFIX + it.id == folderKey }?.label
         // One source's category: its name, as the Live TV screen shows it under the source.

@@ -161,6 +161,7 @@ object LiveTvRepository {
             _uiState.value = LiveTvUiState(
                 sources = sources,
                 favoriteUrls = store.favoriteUrls(),
+                customLists = store.customLists(),
                 hiddenGroups = store.hiddenGroups(),
                 groupNames = store.groupNames(),
                 hiddenChannelKeys = hiddenChannels,
@@ -435,6 +436,67 @@ object LiveTvRepository {
         scope.launch(writer) { store.saveFavoriteUrls(favorites) }
         ReshapedSync.onLocalChange()
     }
+
+    // region Own playlists
+
+    /** Makes a playlist named [name], with [channel] in it when given; returns its id. */
+    fun createCustomList(name: String, channel: LiveTvChannel? = null): String? {
+        val title = name.trim().ifEmpty { return null }
+        // Starts with the time it was made, so lists sort oldest first on every device.
+        val id = System.currentTimeMillis().toString(36).padStart(9, '0') + java.util.UUID.randomUUID().toString().take(4)
+        updateCustomLists { it + LiveTvCustomList(id, title, listOfNotNull(channel?.streamUrl)) }
+        return id
+    }
+
+    fun renameCustomList(id: String, name: String) {
+        val title = name.trim().ifEmpty { return }
+        updateCustomLists { lists -> lists.map { if (it.id == id) it.copy(name = title) else it } }
+    }
+
+    fun deleteCustomList(id: String) {
+        updateCustomLists { lists -> lists.filterNot { it.id == id } }
+    }
+
+    /** Adds [channel] to the end of list [id], or takes it out when it is in already. */
+    fun toggleInCustomList(id: String, channel: LiveTvChannel) {
+        updateCustomLists { lists ->
+            lists.map { list ->
+                if (list.id != id) list
+                else if (channel.streamUrl in list.urls) list.copy(urls = list.urls - channel.streamUrl)
+                else list.copy(urls = list.urls + channel.streamUrl)
+            }
+        }
+    }
+
+    fun removeFromCustomList(id: String, url: String) {
+        updateCustomLists { lists -> lists.map { if (it.id == id) it.copy(urls = it.urls - url) else it } }
+    }
+
+    /** Moves the channel [url] of list [id] by [step] places. */
+    fun moveInCustomList(id: String, url: String, step: Int) {
+        updateCustomLists { lists ->
+            lists.map { list ->
+                val from = list.urls.indexOf(url)
+                val to = from + step
+                if (list.id != id || from < 0 || to !in list.urls.indices) return@map list
+                list.copy(urls = list.urls.toMutableList().apply { add(to, removeAt(from)) })
+            }
+        }
+    }
+
+    private fun updateCustomLists(change: (List<LiveTvCustomList>) -> List<LiveTvCustomList>) {
+        val store = storage ?: return
+        var saved: List<LiveTvCustomList> = emptyList()
+        _uiState.update { state -> state.copy(customLists = change(state.customLists).also { saved = it }) }
+        scope.launch(writer) { store.saveCustomLists(saved) }
+        ReshapedSync.onLocalChange()
+    }
+
+    /** The playlists with links that moved ([moved], old link to new) changed over. */
+    private fun List<LiveTvCustomList>.movedTo(moved: Map<String, LiveTvChannel>): List<LiveTvCustomList> =
+        map { list -> if (list.urls.none(moved::containsKey)) list else list.copy(urls = list.urls.map { moved[it]?.streamUrl ?: it }.distinct()) }
+
+    // endregion
 
     /** [channel] is the list's own entry (not a resolved Stalker link), so it can be found again. */
     fun recordRecentChannel(channel: LiveTvChannel) {
@@ -744,7 +806,8 @@ object LiveTvRepository {
     private fun carryOverFavorites(source: LiveTvSource, before: LoadedSource, after: LoadedSource, store: LiveTvStorage) {
         val state = _uiState.value
         val recent = state.recentChannel
-        val wanted = before.channels.filter { it.streamUrl in state.favoriteUrls || it.streamUrl == recent?.streamUrl }
+        val listed = state.customLists.flatMapTo(HashSet()) { it.urls }
+        val wanted = before.channels.filter { it.streamUrl in state.favoriteUrls || it.streamUrl in listed || it.streamUrl == recent?.streamUrl }
         if (wanted.isEmpty()) return
         val byKey = HashMap<Long, LiveTvChannel>(after.channels.size * 2)
         after.channels.forEach { byKey.putIfAbsent(it.hideKey, it) }
@@ -757,9 +820,11 @@ object LiveTvRepository {
         if (moved.isEmpty()) return
         val favorites = state.favoriteUrls.mapTo(HashSet()) { moved[it]?.streamUrl ?: it }
         val newRecent = recent?.let { r -> moved[r.streamUrl]?.let { r.copy(streamUrl = it.streamUrl, logoUrl = it.logoUrl) } ?: r }
-        _uiState.update { it.copy(favoriteUrls = favorites, recentChannel = newRecent) }
+        val lists = state.customLists.movedTo(moved)
+        _uiState.update { it.copy(favoriteUrls = favorites, customLists = lists, recentChannel = newRecent) }
         scope.launch(writer) {
             store.saveFavoriteUrls(favorites)
+            store.saveCustomLists(lists)
             newRecent?.let(store::saveRecentChannel)
         }
     }
@@ -775,7 +840,7 @@ object LiveTvRepository {
         fun matches(url: String): Boolean = LiveTvCatchupLinks.xtreamLogin(url)?.let { (server, user, pass) ->
             server.trimEnd('/').equals(login.first.trimEnd('/'), ignoreCase = true) && user == login.second && pass == login.third
         } == true
-        val wanted = (state.favoriteUrls + listOfNotNull(recent?.streamUrl)).filter(::matches)
+        val wanted = (state.favoriteUrls + state.customLists.flatMap { it.urls } + listOfNotNull(recent?.streamUrl)).filter(::matches)
         if (wanted.isEmpty()) return
         val byFile = HashMap<String, LiveTvChannel>(after.channels.size * 2)
         after.channels.forEach { byFile.putIfAbsent(it.streamUrl.substringBefore('?').substringAfterLast('/').substringBefore('.'), it) }
@@ -787,9 +852,11 @@ object LiveTvRepository {
         if (moved.isEmpty()) return
         val favorites = state.favoriteUrls.mapTo(HashSet()) { moved[it]?.streamUrl ?: it }
         val newRecent = recent?.let { r -> moved[r.streamUrl]?.let { r.copy(streamUrl = it.streamUrl, logoUrl = it.logoUrl) } ?: r }
-        _uiState.update { it.copy(favoriteUrls = favorites, recentChannel = newRecent) }
+        val lists = state.customLists.movedTo(moved)
+        _uiState.update { it.copy(favoriteUrls = favorites, customLists = lists, recentChannel = newRecent) }
         scope.launch(writer) {
             store.saveFavoriteUrls(favorites)
+            store.saveCustomLists(lists)
             newRecent?.let(store::saveRecentChannel)
         }
     }
@@ -912,6 +979,7 @@ object LiveTvRepository {
             LiveTvSyncData(
                 sources = state.sources.filter { it.isSyncable },
                 favorites = state.favoriteUrls,
+                customLists = state.customLists.associateBy { it.id },
                 hiddenGroups = state.hiddenGroups,
                 hiddenChannels = state.hiddenChannelKeys,
                 groupNames = state.groupNames,
@@ -937,6 +1005,7 @@ object LiveTvRepository {
                 state.copy(
                     sources = state.sources.withSyncChange(before.sources, after.sources, store::newSourceId),
                     favoriteUrls = state.favoriteUrls.withSyncChange(before.favorites, after.favorites),
+                    customLists = state.customLists.withSyncChange(before.customLists, after.customLists),
                     hiddenGroups = state.hiddenGroups.withSyncChange(before.hiddenGroups, after.hiddenGroups),
                     hiddenChannelKeys = state.hiddenChannelKeys.withSyncChange(before.hiddenChannels, after.hiddenChannels),
                     groupNames = state.groupNames.withSyncChange(before.groupNames, after.groupNames),
@@ -965,6 +1034,7 @@ object LiveTvRepository {
             scope.launch(writer) {
                 store.saveSources(sources)
                 store.saveFavoriteUrls(state.favoriteUrls)
+                store.saveCustomLists(state.customLists)
                 store.saveHiddenGroups(state.hiddenGroups)
                 store.saveHiddenChannelKeys(state.hiddenChannelKeys)
                 store.saveGroupNames(state.groupNames)
@@ -979,6 +1049,7 @@ object LiveTvRepository {
             val sources = store.sources()
             store.saveSources(sources.withSyncChange(before.sources, after.sources, store::newSourceId))
             store.saveFavoriteUrls(store.favoriteUrls().withSyncChange(before.favorites, after.favorites))
+            store.saveCustomLists(store.customLists().withSyncChange(before.customLists, after.customLists))
             store.saveHiddenGroups(store.hiddenGroups().withSyncChange(before.hiddenGroups, after.hiddenGroups))
             store.saveHiddenChannelKeys(store.hiddenChannelKeys().withSyncChange(before.hiddenChannels, after.hiddenChannels))
             store.saveGroupNames(store.groupNames().withSyncChange(before.groupNames, after.groupNames))

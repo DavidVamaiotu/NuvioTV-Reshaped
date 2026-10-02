@@ -81,6 +81,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvCatchupLinks
 import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
+import com.nuvio.tv.reshaped.livetv.LiveTvCustomList
 import com.nuvio.tv.reshaped.livetv.LiveTvPreferences
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
@@ -97,6 +98,8 @@ import kotlinx.coroutines.withContext
 internal sealed interface LiveTvFilter {
     data object All : LiveTvFilter
     data object Favorites : LiveTvFilter
+    /** One of the viewer's own playlists. */
+    data class Custom(val id: String) : LiveTvFilter
     data class Source(val id: String) : LiveTvFilter
     data class Group(val name: String) : LiveTvFilter
     /** One category of one source, picked under that source's heading. */
@@ -106,6 +109,7 @@ internal sealed interface LiveTvFilter {
 internal const val FILTER_ALL = "\u0000all"
 internal const val FILTER_FAVORITES = "\u0000favorites"
 internal const val FILTER_SOURCE_PREFIX = "\u0000source:"
+internal const val FILTER_LIST_PREFIX = "\u0000list:"
 internal const val FILTER_SOURCE_GROUP_PREFIX = "\u0000sourcegroup:"
 
 internal fun sourceGroupKey(sourceId: String, group: String): String = "$FILTER_SOURCE_GROUP_PREFIX$sourceId\u0000$group"
@@ -121,13 +125,23 @@ internal fun filterChannels(
     hiddenChannels: Set<Long>,
     key: String,
     query: String = "",
+    customLists: List<LiveTvCustomList> = emptyList(),
 ): List<LiveTvChannel> {
     val filter = filterFor(key)
     val needle = query.trim()
+    if (filter is LiveTvFilter.Custom) {
+        // In the viewer's order; a channel its source no longer lists is left out.
+        val urls = customLists.firstOrNull { it.id == filter.id }?.urls ?: return emptyList()
+        val wanted = urls.toHashSet()
+        val byUrl = HashMap<String, LiveTvChannel>(urls.size * 2)
+        channels.forEach { if (it.streamUrl in wanted) byUrl.putIfAbsent(it.streamUrl, it) }
+        return urls.mapNotNull(byUrl::get).filter { needle.isEmpty() || it.name.contains(needle, ignoreCase = true) }
+    }
     return channels.filter { channel ->
         when (filter) {
             LiveTvFilter.All -> channel.group !in hidden && channel.hideKey !in hiddenChannels
             LiveTvFilter.Favorites -> channel.streamUrl in favorites
+            is LiveTvFilter.Custom -> false
             is LiveTvFilter.Source -> channel.sourceId == filter.id && channel.group !in hidden && channel.hideKey !in hiddenChannels
             is LiveTvFilter.Group -> channel.group == filter.name && channel.hideKey !in hiddenChannels
             is LiveTvFilter.SourceGroup ->
@@ -139,6 +153,7 @@ internal fun filterChannels(
 internal fun filterFor(key: String): LiveTvFilter = when {
     key == FILTER_ALL -> LiveTvFilter.All
     key == FILTER_FAVORITES -> LiveTvFilter.Favorites
+    key.startsWith(FILTER_LIST_PREFIX) -> LiveTvFilter.Custom(key.removePrefix(FILTER_LIST_PREFIX))
     key.startsWith(FILTER_SOURCE_PREFIX) -> LiveTvFilter.Source(key.removePrefix(FILTER_SOURCE_PREFIX))
     key.startsWith(FILTER_SOURCE_GROUP_PREFIX) -> key.removePrefix(FILTER_SOURCE_GROUP_PREFIX).let {
         LiveTvFilter.SourceGroup(it.substringBefore('\u0000'), it.substringAfter('\u0000'))
@@ -185,6 +200,7 @@ fun LiveTvScreen(
     var gridFocused by remember { mutableStateOf(false) }
     var settingsFocused by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
+    var showPlaylists by remember { mutableStateOf(false) }
     // The categories and search slide in over the channel names (◀ from now, or Back), as in TV guides.
     var categoriesOpen by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
@@ -198,7 +214,7 @@ fun LiveTvScreen(
     // A category that was hidden, or a source that was removed, falls back to all channels.
     // Categories show under their source's heading only with several sources: a category picked
     // the other way follows (or falls back to all channels when that is not possible).
-    LaunchedEffect(uiState.hiddenGroups, uiState.sources) {
+    LaunchedEffect(uiState.hiddenGroups, uiState.sources, uiState.customLists) {
         val multiSource = uiState.sources.size > 1
         filterKey = when (val current = filterFor(filterKey)) {
             is LiveTvFilter.Group -> when {
@@ -207,6 +223,7 @@ fun LiveTvScreen(
                 else -> filterKey
             }
             is LiveTvFilter.Source -> if (uiState.sources.none { it.id == current.id }) FILTER_ALL else filterKey
+            is LiveTvFilter.Custom -> if (uiState.customLists.none { it.id == current.id }) FILTER_ALL else filterKey
             is LiveTvFilter.SourceGroup -> when {
                 current.name in uiState.hiddenGroups || uiState.sources.none { it.id == current.id } -> FILTER_ALL
                 !multiSource -> current.name
@@ -218,16 +235,16 @@ fun LiveTvScreen(
 
     val filter = filterFor(filterKey)
     // Filtered off the main thread: lists can hold tens of thousands of channels.
-    val filterInput = LiveTvFilterInput(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelKeys, filterKey, query)
+    val filterInput = LiveTvFilterInput(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelKeys, filterKey, query, uiState.customLists)
     val visibleChannels = viewModel.visibleChannels
     val filtering = !viewModel.isFilteredFor(filterInput)
-    LaunchedEffect(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelKeys, filterKey, query) {
+    LaunchedEffect(uiState.channels, uiState.favoriteUrls, uiState.hiddenGroups, uiState.hiddenChannelKeys, filterKey, query, uiState.customLists) {
         if (viewModel.isFilteredFor(filterInput)) return@LaunchedEffect
         if (query.isNotEmpty()) delay(200) // typing
         val filtered = withContext(Dispatchers.Default) {
             filterChannels(
                 filterInput.channels, filterInput.favoriteUrls, filterInput.hiddenGroups, filterInput.hiddenChannels,
-                filterInput.filterKey, filterInput.query,
+                filterInput.filterKey, filterInput.query, filterInput.customLists,
             )
         }
         viewModel.setVisible(filterInput, filtered)
@@ -299,14 +316,21 @@ fun LiveTvScreen(
     // Unfavouriting a channel in Favorites removes its row: the guide moves to the next one, or
     // to the categories when none is left.
     var keepAfterRefilter by remember { mutableStateOf<String?>(null) }
+    val keepNeighbour: (LiveTvChannel) -> Unit = { channel ->
+        val index = visibleChannels.indexOfFirst { it.streamUrl == channel.streamUrl }
+        keepAfterRefilter = (visibleChannels.getOrNull(index + 1) ?: visibleChannels.getOrNull(index - 1))?.streamUrl
+    }
     val toggleFavorite: (LiveTvChannel) -> Unit = { channel ->
-        if (filterFor(filterKey) == LiveTvFilter.Favorites && channel.streamUrl in uiState.favoriteUrls) {
-            val index = visibleChannels.indexOfFirst { it.streamUrl == channel.streamUrl }
-            keepAfterRefilter = (visibleChannels.getOrNull(index + 1) ?: visibleChannels.getOrNull(index - 1))?.streamUrl
-        }
+        if (filterFor(filterKey) == LiveTvFilter.Favorites && channel.streamUrl in uiState.favoriteUrls) keepNeighbour(channel)
         LiveTvRepository.toggleFavorite(channel)
     }
-    val currentToggleFavorite by rememberUpdatedState(toggleFavorite)
+    val toggleInList: (String, LiveTvChannel) -> Unit = { id, channel ->
+        val shown = filterFor(filterKey) as? LiveTvFilter.Custom
+        if (shown?.id == id && uiState.customLists.any { it.id == id && channel.streamUrl in it.urls }) keepNeighbour(channel)
+        LiveTvRepository.toggleInCustomList(id, channel)
+    }
+    // A long OK on a channel: favorites and the viewer's own playlists.
+    var listsFor by remember { mutableStateOf<LiveTvChannel?>(null) }
     val guide = remember {
         LiveTvGuideState(
             channels = emptyList(),
@@ -318,7 +342,7 @@ fun LiveTvScreen(
             onClose = { currentToCategories() },
             onExitLeft = { currentToCategories() },
             onExitUp = { runCatching { settingsFocus.requestFocus() } },
-            onLongPress = { channel -> currentToggleFavorite(channel) },
+            onLongPress = { channel -> listsFor = channel },
             leadMs = 0L,
         )
     }
@@ -370,7 +394,7 @@ fun LiveTvScreen(
                     showTitle = showBuiltInHeader,
                     preview = if (previewsEnabled) preview else null,
                     playVideo = (gridFocused || settingsFocused || categoriesOpen) && started && !launching &&
-                        !showSourceDialog && !showCategoryDialog && !showMenu,
+                        !showSourceDialog && !showCategoryDialog && !showMenu && !showPlaylists && listsFor == null,
                 )
                 Spacer(Modifier.height(NuvioTheme.spacing.md))
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -477,6 +501,17 @@ fun LiveTvScreen(
     if (showCategoryDialog) {
         LiveTvCategoryDialog(onDismiss = { showCategoryDialog = false })
     }
+    if (showPlaylists) {
+        LiveTvPlaylistsDialog(onDismiss = { showPlaylists = false })
+    }
+    listsFor?.let { channel ->
+        LiveTvChannelListsDialog(
+            channel = channel,
+            onToggleFavorite = { toggleFavorite(channel) },
+            onToggleList = { id -> toggleInList(id, channel) },
+            onDismiss = { listsFor = null },
+        )
+    }
     if (showMenu) {
         LiveTvMenuDialog(
             previews = previewsEnabled,
@@ -492,6 +527,10 @@ fun LiveTvScreen(
             onSources = {
                 showMenu = false
                 showSourceDialog = true
+            },
+            onPlaylists = {
+                showMenu = false
+                showPlaylists = true
             },
             onDismiss = { showMenu = false },
         )
@@ -509,6 +548,7 @@ private fun LiveTvMenuDialog(
     onCategories: () -> Unit,
     onEditCategories: () -> Unit,
     onSources: () -> Unit,
+    onPlaylists: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -529,6 +569,7 @@ private fun LiveTvMenuDialog(
     ) {
         val wide = Modifier.fillMaxWidth()
         LiveTvPillButton(text = stringResource(R.string.live_tv_categories_and_search), onClick = onCategories, modifier = wide.focusRequester(first))
+        LiveTvPillButton(text = stringResource(R.string.live_tv_my_playlists), onClick = onPlaylists, modifier = wide)
         LiveTvPillButton(text = stringResource(R.string.live_tv_edit_categories), onClick = onEditCategories, modifier = wide)
         LiveTvPillButton(text = stringResource(R.string.live_tv_sources), onClick = onSources, modifier = wide)
         LiveTvPillButton(
@@ -785,10 +826,11 @@ private fun LiveTvCategoryColumn(
     val allLabel = stringResource(R.string.live_tv_all_channels)
     val favoritesLabel = stringResource(R.string.live_tv_favorites)
     val uncategorised = liveTvGroupLabel(LIVE_TV_UNGROUPED)
-    val entries = remember(sections, visibleGroups, uiState.groupNames, collapsed.toMap(), allLabel, favoritesLabel, uncategorised) {
+    val entries = remember(sections, visibleGroups, uiState.groupNames, uiState.customLists, collapsed.toMap(), allLabel, favoritesLabel, uncategorised) {
         fun label(group: String) = liveTvGroupName(group, uiState.groupNames) ?: if (group == LIVE_TV_UNGROUPED) uncategorised else group
         buildList {
             add(LiveTvCategoryEntry(FILTER_FAVORITES, favoritesLabel))
+            uiState.customLists.forEach { add(LiveTvCategoryEntry(FILTER_LIST_PREFIX + it.id, it.name, count = it.urls.size)) }
             add(LiveTvCategoryEntry(FILTER_ALL, allLabel, count = sections?.total))
             val bySource = sections?.sources
             if (bySource != null && bySource.size > 1) {

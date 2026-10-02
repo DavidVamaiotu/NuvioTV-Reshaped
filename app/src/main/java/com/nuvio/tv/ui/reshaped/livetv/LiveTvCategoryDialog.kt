@@ -240,7 +240,7 @@ private fun LiveTvCategoryChannels(group: String, uiState: LiveTvUiState, onBack
 }
 
 @Composable
-private fun LiveTvCategoryToggle(
+internal fun LiveTvCategoryToggle(
     label: String,
     count: String?,
     visible: Boolean,

@@ -133,11 +133,12 @@ class LiveTvFilterInput(
     val hiddenChannels: Set<Long>,
     val filterKey: String,
     val query: String,
+    val customLists: List<com.nuvio.tv.reshaped.livetv.LiveTvCustomList>,
 ) {
     fun sameAs(other: LiveTvFilterInput): Boolean =
         channels === other.channels && favoriteUrls === other.favoriteUrls && hiddenGroups === other.hiddenGroups &&
             hiddenChannels === other.hiddenChannels &&
-            filterKey == other.filterKey && query == other.query
+            filterKey == other.filterKey && query == other.query && customLists === other.customLists
 }
 
 /**

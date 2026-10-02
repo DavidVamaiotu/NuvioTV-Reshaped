@@ -130,4 +130,16 @@
     <string name="live_tv_web_connection_error">Could not reach the TV. Is it still on the Live TV setup screen?</string>
     <string name="live_tv_settings">Live TV settings</string>
     <string name="live_tv_categories_and_search">Categories and search</string>
+    <string name="live_tv_my_playlists">My playlists</string>
+    <string name="live_tv_playlists_description">Your own lists of channels from any source. OK opens one. To add a channel, hold OK on it in the guide.</string>
+    <string name="live_tv_playlists_none">No playlists yet. Name one above, or hold OK on a channel in the guide.</string>
+    <string name="live_tv_playlist_description">OK takes a channel out. Hold OK to move it, ▲▼ to place it, OK to drop it.</string>
+    <string name="live_tv_playlist_empty">No channels yet. Hold OK on a channel in the guide to add it here.</string>
+    <string name="live_tv_playlist_new_hint">New playlist name</string>
+    <string name="live_tv_playlist_name_hint">Playlist name</string>
+    <string name="live_tv_playlist_create">Create</string>
+    <string name="live_tv_playlist_delete">Delete</string>
+    <string name="live_tv_playlist_delete_confirm">Press again to delete</string>
+    <string name="live_tv_playlist_unavailable">Channel not in your sources now</string>
+    <string name="live_tv_channel_lists_description">OK adds this channel to a list or takes it out.</string>
 </resources>

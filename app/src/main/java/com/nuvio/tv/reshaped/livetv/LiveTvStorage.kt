@@ -213,6 +213,25 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         prefs.edit().putOrRemove(GROUP_ORDER, encodeGroups(groups)).apply()
     }
 
+    /** The viewer's own playlists, oldest first. */
+    fun customLists(): List<LiveTvCustomList> = runCatching {
+        val array = JSONArray(string(CUSTOM_LISTS) ?: return emptyList())
+        (0 until array.length()).mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val id = item.optString("id").takeIf(String::isNotBlank) ?: return@mapNotNull null
+            val urls = item.optJSONArray("urls")
+            LiveTvCustomList(id, item.optString("name"), (0 until (urls?.length() ?: 0)).mapNotNull { urls?.optString(it)?.takeIf(String::isNotBlank) })
+        }.sortedBy { it.id }
+    }.getOrDefault(emptyList())
+
+    fun saveCustomLists(lists: List<LiveTvCustomList>) {
+        val array = JSONArray()
+        lists.forEach { list ->
+            array.put(JSONObject().put("id", list.id).put("name", list.name).put("urls", JSONArray(list.urls)))
+        }
+        prefs.edit().putOrRemove(CUSTOM_LISTS, if (lists.isEmpty()) null else array.toString()).apply()
+    }
+
     fun favoriteUrls(): Set<String> =
         string(FAVORITES)?.lineSequence()?.map(String::trim)?.filter(String::isNotBlank)?.toHashSet().orEmpty()
 
@@ -260,6 +279,7 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         private const val XTREAM_USER = "xtream_username"
         private const val XTREAM_PASSWORD = "xtream_password"
         private const val FAVORITES = "favorite_channel_urls"
+        private const val CUSTOM_LISTS = "custom_lists"
         private const val RECENT_URL = "recent_channel_url"
         private const val RECENT_NAME = "recent_channel_name"
         private const val RECENT_LOGO = "recent_channel_logo"

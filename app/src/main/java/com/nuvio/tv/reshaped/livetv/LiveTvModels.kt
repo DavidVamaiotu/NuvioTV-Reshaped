@@ -72,6 +72,13 @@ fun liveTvHideKey(sourceId: String, group: String, name: String): Long {
     return hash
 }
 
+/**
+ * A playlist the viewer made from channels of any source: [urls] are [LiveTvChannel.streamUrl]s,
+ * in the viewer's order. Lists sort by [id], which starts with when they were made.
+ */
+@Immutable
+data class LiveTvCustomList(val id: String, val name: String, val urls: List<String>)
+
 @Immutable
 data class LiveTvRecentChannel(
     val streamUrl: String,
@@ -173,6 +180,8 @@ data class LiveTvUiState(
     val guideVersion: Int = 0,
     val recentChannel: LiveTvRecentChannel? = null,
     val favoriteUrls: Set<String> = emptySet(),
+    /** The viewer's own playlists, oldest first. */
+    val customLists: List<LiveTvCustomList> = emptyList(),
     val isEpgLoading: Boolean = false,
     val isLoading: Boolean = false,
     val isLoaded: Boolean = false,
