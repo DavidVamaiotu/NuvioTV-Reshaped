@@ -346,6 +346,7 @@ internal fun LiveTvGuideGrid(
     channelColumn: Dp = CHANNEL_COLUMN,
     rowHeight: Dp = ROW_HEIGHT,
     corner: @Composable () -> Unit = {},
+    rulerHeight: Dp = 28.dp,
 ) {
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
     BoxWithConstraints(modifier = modifier) {
@@ -362,7 +363,7 @@ internal fun LiveTvGuideGrid(
             timeline.scroll.animateTo((state.viewStartMs - timeline.origin).toFloat(), spring(dampingRatio = 0.9f, stiffness = 420f))
         }
         Column {
-            Row(modifier = Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.fillMaxWidth().height(rulerHeight), verticalAlignment = Alignment.CenterVertically) {
                 Box(modifier = Modifier.width(channelColumn).padding(start = 8.dp)) { corner() }
                 TimeRuler(state, timeline, clock, modifier = Modifier.weight(1f))
             }

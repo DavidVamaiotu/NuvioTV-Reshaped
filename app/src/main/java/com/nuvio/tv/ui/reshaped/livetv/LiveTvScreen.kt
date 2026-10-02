@@ -45,6 +45,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -180,14 +183,17 @@ fun LiveTvScreen(
     val previewsEnabled = rememberLiveTvPreviewsEnabled()
     val preview = rememberLiveTvPreviewPlayer()
     var gridFocused by remember { mutableStateOf(false) }
-    var actionsFocused by remember { mutableStateOf(false) }
+    var settingsFocused by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
+    // The categories and search slide in over the channel names (◀ from now, or Back), as in TV guides.
+    var categoriesOpen by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val started = LocalLifecycleOwner.current.lifecycle.currentStateAsState().value.isAtLeast(Lifecycle.State.STARTED)
     // Under the pill menu the screen starts below it, as Settings does, so the pill never covers the header.
     val topPadding = if (showBuiltInHeader) NuvioTheme.spacing.xl else 68.dp
     val gridFocus = remember { FocusRequester() }
     val categoryFocus = remember { FocusRequester() }
-    val actionsFocus = remember { FocusRequester() }
+    val settingsFocus = remember { FocusRequester() }
 
     // A category that was hidden, or a source that was removed, falls back to all channels.
     // Categories show under their source's heading only with several sources: a category picked
@@ -270,18 +276,24 @@ fun LiveTvScreen(
     val holdCategory = remember { mutableStateOf(false) }
     val toCategories: () -> Unit = {
         holdCategory.value = true
-        if (runCatching { categoryFocus.requestFocus() }.isFailure) {
-            // The selected category is out of view: brought into view first.
-            scope.launch {
-                val index = viewModel.categoryKeys.indexOf(filterKey)
-                if (index >= 0) categoryList.scrollToItem((index - 3).coerceAtLeast(0))
-                repeat(5) {
-                    withFrameNanos { }
-                    if (runCatching { categoryFocus.requestFocus() }.isSuccess) return@launch
-                }
-                focusManager.moveFocus(FocusDirection.Left)
+        categoriesOpen = true
+        // The panel is composed on the next frame, and the selected category may need scrolling to.
+        scope.launch {
+            repeat(3) {
+                withFrameNanos { }
+                if (runCatching { categoryFocus.requestFocus() }.isSuccess) return@launch
             }
+            val index = viewModel.categoryKeys.indexOf(filterKey)
+            if (index >= 0) categoryList.scrollToItem((index - 3).coerceAtLeast(0))
+            repeat(5) {
+                withFrameNanos { }
+                if (runCatching { categoryFocus.requestFocus() }.isSuccess) return@launch
+            }
+            focusManager.moveFocus(FocusDirection.Left)
         }
+    }
+    val toGuide: () -> Boolean = {
+        visibleChannels.isNotEmpty() && runCatching { gridFocus.requestFocus() }.isSuccess
     }
     val currentToCategories by rememberUpdatedState(toCategories)
     // Unfavouriting a channel in Favorites removes its row: the guide moves to the next one, or
@@ -305,7 +317,7 @@ fun LiveTvScreen(
             // selected, or (scrolled out of view) the nearest one.
             onClose = { currentToCategories() },
             onExitLeft = { currentToCategories() },
-            onExitUp = { runCatching { actionsFocus.requestFocus() } },
+            onExitUp = { runCatching { settingsFocus.requestFocus() } },
             onLongPress = { channel -> currentToggleFavorite(channel) },
             leadMs = 0L,
         )
@@ -348,7 +360,7 @@ fun LiveTvScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(start = NuvioTheme.spacing.xxxl, end = NuvioTheme.spacing.xl, top = topPadding),
+                    .padding(start = NuvioTheme.spacing.xxl, end = NuvioTheme.spacing.xl, top = topPadding),
             ) {
                 LiveTvHeader(
                     guide = guide,
@@ -357,35 +369,14 @@ fun LiveTvScreen(
                     clock = minuteClock,
                     showTitle = showBuiltInHeader,
                     preview = if (previewsEnabled) preview else null,
-                    // Keeps playing while the buttons above the guide have focus, so mute can be heard to work.
-                    playVideo = (gridFocused || actionsFocused) && started && !launching && !showSourceDialog && !showCategoryDialog,
-                    actionsFocus = actionsFocus,
-                    onActionsFocused = { actionsFocused = it },
-                    onDownToGuide = { visibleChannels.isNotEmpty() && runCatching { gridFocus.requestFocus() }.isSuccess },
-                    onOpenCategories = { showCategoryDialog = true },
-                    onOpenSources = { showSourceDialog = true },
+                    playVideo = (gridFocused || settingsFocused || categoriesOpen) && started && !launching &&
+                        !showSourceDialog && !showCategoryDialog && !showMenu,
                 )
                 Spacer(Modifier.height(NuvioTheme.spacing.md))
-                Row(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.lg),
-                ) {
-                    LiveTvCategoryColumn(
-                        uiState = uiState,
-                        listState = categoryList,
-                        holdSelection = holdCategory,
-                        viewModel = viewModel,
-                        query = query,
-                        onQueryChange = { query = it },
-                        selectedKey = filterKey,
-                        selectedFocus = categoryFocus,
-                        onSelect = { filterKey = it },
-                        modifier = Modifier.width(240.dp).fillMaxHeight(),
-                    )
+                Box(modifier = Modifier.fillMaxSize()) {
                     Box(
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
+                            .fillMaxSize()
                             .focusRequester(gridFocus)
                             .onFocusChanged { gridFocused = it.isFocused }
                             .onPreviewKeyEvent { guide.onKey(it.nativeKeyEvent) }
@@ -395,10 +386,17 @@ fun LiveTvScreen(
                             state = guide,
                             active = gridFocused,
                             clock = minuteClock,
-                            channelColumn = 236.dp,
-                            rowHeight = 54.dp,
+                            channelColumn = 220.dp,
+                            rowHeight = 46.dp,
+                            rulerHeight = 32.dp,
                             modifier = Modifier.fillMaxSize(),
-                            corner = { LiveTvGuideDate(guide.viewStartMs, minuteClock) },
+                            // The settings button sits in front of the date, outside the guide's own keys.
+                            corner = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Spacer(Modifier.width(SETTINGS_SLOT))
+                                    LiveTvGuideDate(guide.viewStartMs, minuteClock)
+                                }
+                            },
                         )
                         if (visibleChannels.isEmpty() && !filtering && uiState.isLoaded && !uiState.isLoading) {
                             Text(
@@ -408,6 +406,63 @@ fun LiveTvScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = NuvioTheme.colors.TextSecondary,
                                 modifier = Modifier.padding(top = 40.dp, start = 8.dp),
+                            )
+                        }
+                    }
+                    LiveTvPillButton(
+                        text = "",
+                        icon = Icons.Filled.Settings,
+                        iconDescription = stringResource(R.string.live_tv_settings),
+                        onClick = { showMenu = true },
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .focusRequester(settingsFocus)
+                            .onFocusChanged { settingsFocused = it.isFocused }
+                            .onPreviewKeyEvent { event ->
+                                // ▼ back to the guide, ◀ to the categories.
+                                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                when (event.key) {
+                                    Key.DirectionDown -> toGuide()
+                                    Key.DirectionLeft -> {
+                                        toCategories()
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            },
+                    )
+                    if (categoriesOpen) {
+                        var panelHadFocus by remember { mutableStateOf(false) }
+                        Box(
+                            modifier = Modifier
+                                .zIndex(2f)
+                                .width(280.dp)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(NuvioTheme.colors.Background.copy(alpha = 0.97f))
+                                .padding(horizontal = 8.dp)
+                                // It closes once focus leaves it.
+                                .onFocusChanged {
+                                    if (it.hasFocus) panelHadFocus = true else if (panelHadFocus) categoriesOpen = false
+                                }
+                                .onPreviewKeyEvent { event ->
+                                    val right = event.key == Key.DirectionRight && event.type == KeyEventType.KeyDown
+                                    right && toGuide()
+                                },
+                        ) {
+                            LiveTvCategoryColumn(
+                                uiState = uiState,
+                                listState = categoryList,
+                                holdSelection = holdCategory,
+                                viewModel = viewModel,
+                                query = query,
+                                onQueryChange = { query = it },
+                                selectedKey = filterKey,
+                                selectedFocus = categoryFocus,
+                                onSelect = { filterKey = it },
+                                // OK on a category shows its guide.
+                                onPicked = { toGuide() },
+                                modifier = Modifier.fillMaxSize(),
                             )
                         }
                     }
@@ -422,9 +477,81 @@ fun LiveTvScreen(
     if (showCategoryDialog) {
         LiveTvCategoryDialog(onDismiss = { showCategoryDialog = false })
     }
+    if (showMenu) {
+        LiveTvMenuDialog(
+            previews = previewsEnabled,
+            loading = uiState.isLoading,
+            onCategories = {
+                showMenu = false
+                toCategories()
+            },
+            onEditCategories = {
+                showMenu = false
+                showCategoryDialog = true
+            },
+            onSources = {
+                showMenu = false
+                showSourceDialog = true
+            },
+            onDismiss = { showMenu = false },
+        )
+    }
 }
 
-/** The header above the guide: what is selected, the buttons, and the live preview on the right. */
+/** Room for the settings button in front of the date. */
+private val SETTINGS_SLOT = 46.dp
+
+/** Everything that used to sit above the guide: one button opens it. */
+@Composable
+private fun LiveTvMenuDialog(
+    previews: Boolean,
+    loading: Boolean,
+    onCategories: () -> Unit,
+    onEditCategories: () -> Unit,
+    onSources: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val previewSound = rememberLiveTvPreviewSoundEnabled()
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            withFrameNanos { }
+            if (runCatching { first.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
+    }
+    com.nuvio.tv.ui.components.NuvioDialog(
+        onDismiss = onDismiss,
+        title = stringResource(R.string.live_tv_settings),
+        width = 420.dp,
+        usePlatformDefaultWidth = false,
+        contentSpacing = NuvioTheme.spacing.sm,
+    ) {
+        val wide = Modifier.fillMaxWidth()
+        LiveTvPillButton(text = stringResource(R.string.live_tv_categories_and_search), onClick = onCategories, modifier = wide.focusRequester(first))
+        LiveTvPillButton(text = stringResource(R.string.live_tv_edit_categories), onClick = onEditCategories, modifier = wide)
+        LiveTvPillButton(text = stringResource(R.string.live_tv_sources), onClick = onSources, modifier = wide)
+        LiveTvPillButton(
+            text = stringResource(R.string.live_tv_refresh),
+            onClick = {
+                LiveTvRepository.refresh()
+                onDismiss()
+            },
+            enabled = !loading,
+            modifier = wide,
+        )
+        if (previews) {
+            LiveTvPillButton(
+                text = stringResource(if (previewSound) R.string.live_tv_preview_mute else R.string.live_tv_preview_unmute),
+                icon = if (previewSound) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
+                onClick = { LiveTvPreferences.setPreviewSound(context, !previewSound) },
+                modifier = wide,
+            )
+        }
+    }
+}
+
+/** The header above the guide: what is selected, and the live preview on the right. */
 @Composable
 private fun LiveTvHeader(
     guide: LiveTvGuideState,
@@ -434,14 +561,8 @@ private fun LiveTvHeader(
     showTitle: Boolean,
     preview: LiveTvPreviewPlayer?,
     playVideo: Boolean,
-    actionsFocus: FocusRequester,
-    onActionsFocused: (Boolean) -> Unit,
-    onDownToGuide: () -> Boolean,
-    onOpenCategories: () -> Unit,
-    onOpenSources: () -> Unit,
 ) {
     val context = LocalContext.current
-    val previewSound = rememberLiveTvPreviewSoundEnabled()
     val shownChannel = guide.channel
     val shownProgramme = remember(shownChannel, guide.anchorMs, uiState.guideVersion, uiState.currentProgrammes, gridFocused) {
         // The programme selected in the guide, or what is on now on the selected channel.
@@ -459,12 +580,7 @@ private fun LiveTvHeader(
         uiState.isEpgLoading -> stringResource(R.string.live_tv_guide_loading)
         else -> null
     }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(180.dp)
-            .onFocusChanged { onActionsFocused(it.hasFocus) },
-    ) {
+    Row(modifier = Modifier.fillMaxWidth().height(HEADER_HEIGHT)) {
         LiveTvGuideInfo(
             channel = shownChannel,
             logo = shownChannel?.let(uiState::logoFor),
@@ -474,41 +590,7 @@ private fun LiveTvHeader(
             statusIsError = (failedSource != null || uiState.error != null) && !uiState.isLoading,
             showTitle = showTitle && shownChannel == null,
             modifier = Modifier.weight(1f).fillMaxHeight(),
-        ) {
-            // ▼ goes back to the guide, not to whatever lies below these buttons.
-            val toGuide = Modifier.onPreviewKeyEvent { event ->
-                val down = event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown
-                down && onDownToGuide()
-            }
-            LiveTvPillButton(
-                text = stringResource(R.string.live_tv_refresh),
-                onClick = { LiveTvRepository.refresh() },
-                enabled = !uiState.isLoading,
-                modifier = toGuide,
-            )
-            // ▲ from the guide lands here: always enabled, unlike Refresh while loading.
-            LiveTvPillButton(
-                text = stringResource(R.string.live_tv_edit_categories),
-                onClick = onOpenCategories,
-                modifier = toGuide.focusRequester(actionsFocus),
-            )
-            LiveTvPillButton(
-                text = stringResource(R.string.live_tv_sources),
-                onClick = onOpenSources,
-                modifier = toGuide,
-            )
-            if (preview != null) {
-                LiveTvPillButton(
-                    text = "",
-                    icon = if (previewSound) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeOff,
-                    iconDescription = stringResource(
-                        if (previewSound) R.string.live_tv_preview_mute else R.string.live_tv_preview_unmute,
-                    ),
-                    onClick = { LiveTvPreferences.setPreviewSound(context, !previewSound) },
-                    modifier = toGuide,
-                )
-            }
-        }
+        )
         if (preview != null) {
             LiveTvPreviewVideo(
                 preview = preview,
@@ -521,7 +603,10 @@ private fun LiveTvHeader(
     }
 }
 
+private val HEADER_HEIGHT = 140.dp
+
 private const val POSTER_DELAY_MS = 250L
+private val POSTER_WIDTH = HEADER_HEIGHT * 2 / 3
 
 /** "Wed, Sep 30 · 9:43 AM": the day the guide shows, and the time now. */
 @Composable
@@ -554,7 +639,6 @@ private fun LiveTvGuideInfo(
     statusIsError: Boolean,
     showTitle: Boolean,
     modifier: Modifier = Modifier,
-    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
 ) {
     Row(modifier = modifier) {
         // Loaded once the selection rests, so holding ▼ through channels starts no image loads;
@@ -569,8 +653,8 @@ private fun LiveTvGuideInfo(
         var posterSlot by remember { mutableStateOf(false) }
         LaunchedEffect(image != null) { if (image != null) posterSlot = true }
         if (posterSlot) {
-            Box(modifier = Modifier.padding(end = NuvioTheme.spacing.lg).size(104.dp, 156.dp)) {
-                LiveTvPoster(url = poster, width = 104.dp, height = 156.dp)
+            Box(modifier = Modifier.padding(end = NuvioTheme.spacing.lg).size(POSTER_WIDTH, HEADER_HEIGHT)) {
+                LiveTvPoster(url = poster, width = POSTER_WIDTH, height = HEADER_HEIGHT)
             }
         }
         Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
@@ -603,7 +687,7 @@ private fun LiveTvGuideInfo(
                     color = NuvioTheme.colors.TextPrimary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 6.dp),
+                    modifier = Modifier.padding(top = 4.dp),
                 )
                 if (programme != null) {
                     val now = clock.value
@@ -618,22 +702,21 @@ private fun LiveTvGuideInfo(
                             programme.startEpochMs < now && LiveTvCatchupLinks.isPlayable(channel.catchup, programme, now)
                         },
                     ).joinToString("  ·  ")
-                    Row(modifier = Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = timing,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = NuvioTheme.colors.TextSecondary,
-                            maxLines = 1,
+                    Text(
+                        text = timing,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = NuvioTheme.colors.TextSecondary,
+                        maxLines = 1,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                    if (programme.startEpochMs <= now && now < programme.stopEpochMs) {
+                        LiveTvProgressBar(
+                            programme = programme,
+                            clock = clock,
+                            fill = NuvioTheme.colors.TextPrimary,
+                            track = Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.padding(top = 8.dp).widthIn(max = 420.dp).fillMaxWidth(),
                         )
-                        if (programme.startEpochMs <= now && now < programme.stopEpochMs) {
-                            LiveTvProgressBar(
-                                programme = programme,
-                                clock = clock,
-                                fill = NuvioTheme.colors.TextPrimary,
-                                track = Color.White.copy(alpha = 0.12f),
-                                modifier = Modifier.padding(start = 12.dp).widthIn(max = 140.dp).fillMaxWidth(),
-                            )
-                        }
                     }
                     programme.description?.let { description ->
                         Text(
@@ -642,7 +725,7 @@ private fun LiveTvGuideInfo(
                             color = NuvioTheme.colors.TextTertiary,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 6.dp),
+                            modifier = Modifier.padding(top = 8.dp).widthIn(max = 640.dp),
                         )
                     }
                 }
@@ -655,14 +738,8 @@ private fun LiveTvGuideInfo(
                     color = if (statusIsError) NuvioTheme.colors.Error else NuvioTheme.colors.TextSecondary,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(bottom = 6.dp),
                 )
             }
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                content = actions,
-            )
         }
     }
 }
@@ -693,6 +770,7 @@ private fun LiveTvCategoryColumn(
     selectedKey: String,
     selectedFocus: FocusRequester,
     onSelect: (String) -> Unit,
+    onPicked: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val selectedModifier = Modifier.focusRequester(selectedFocus)
@@ -764,7 +842,10 @@ private fun LiveTvCategoryColumn(
                 heading = entry.heading,
                 folded = entry.folded,
                 indent = entry.indent,
-                onClick = entry.sourceId?.let { id -> { collapsed[id] = !entry.folded } },
+                onClick = entry.sourceId?.let { id -> { collapsed[id] = !entry.folded } } ?: {
+                    onSelect(entry.key)
+                    onPicked()
+                },
             ) { onSelect(entry.key) }
         }
     }

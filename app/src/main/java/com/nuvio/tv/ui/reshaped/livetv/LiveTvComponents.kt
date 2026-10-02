@@ -70,6 +70,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 internal val LiveTvPillShape = RoundedCornerShape(100.dp)
 
@@ -286,7 +287,10 @@ internal fun LiveTvPoster(url: String?, width: Dp, height: Dp, modifier: Modifie
         with(density) {
             ImageRequest.Builder(context)
                 .data(url)
-                .size(width.roundToPx(), height.roundToPx())
+                // Decoded to fill a box half again as large: a fit-inside decode was then
+                // upscaled by the crop, which made the picture soft.
+                .size((width.toPx() * POSTER_OVERSAMPLE).roundToInt(), (height.toPx() * POSTER_OVERSAMPLE).roundToInt())
+                .scale(coil3.size.Scale.FILL)
                 .httpHeaders(LOGO_HEADERS)
                 .fetcherFactory<coil3.Uri>(LOGO_FETCHER)
                 .build()
@@ -296,6 +300,7 @@ internal fun LiveTvPoster(url: String?, width: Dp, height: Dp, modifier: Modifie
         model = request,
         contentDescription = null,
         contentScale = ContentScale.Crop,
+        filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
         onError = { failed = true },
         modifier = modifier
             .size(width, height)
@@ -303,6 +308,8 @@ internal fun LiveTvPoster(url: String?, width: Dp, height: Dp, modifier: Modifie
             .background(Color.White.copy(alpha = 0.06f)),
     )
 }
+
+private const val POSTER_OVERSAMPLE = 1.5f
 
 private val LOGO_HEADERS = NetworkHeaders.Builder().set("User-Agent", "VLC/3.0.0 LibVLC/3.0.0").build()
 

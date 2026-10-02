@@ -128,4 +128,6 @@
     <string name="live_tv_web_too_large">That file is too large.</string>
     <string name="live_tv_web_failed">The TV could not take that. Check the fields.</string>
     <string name="live_tv_web_connection_error">Could not reach the TV. Is it still on the Live TV setup screen?</string>
+    <string name="live_tv_settings">Live TV settings</string>
+    <string name="live_tv_categories_and_search">Categories and search</string>
 </resources>
