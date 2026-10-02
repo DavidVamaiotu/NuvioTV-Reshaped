@@ -9,6 +9,11 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.xmlpull.v1.XmlPullParser
 
 /**
@@ -19,7 +24,6 @@ import org.xmlpull.v1.XmlPullParser
 internal typealias LiveTvSchedule = Map<String, List<LiveTvProgramme>>
 
 private const val CANCEL_CHECK_EVENTS = 4096
-private const val RELAXED_FEATURE = "http://xmlpull.org/v1/doc/features.html#relaxed"
 
 /**
  * How much of the guide is kept per channel: programmes that ended up to [pastMs] ago (at most
@@ -79,6 +83,8 @@ internal class LiveTvGuideRequest(
     val keysWithoutLogo: Set<String>,
     /** Keys of channels with catch-up: they keep more past programmes. */
     val catchupKeys: Set<String> = emptySet(),
+    /** XMLTV ids to playlist-scoped keys; two sources may use the same XMLTV id. */
+    val keysById: Map<String, List<String>> = emptyMap(),
 ) {
     companion object {
         fun from(channels: List<LiveTvChannel>): LiveTvGuideRequest {
@@ -86,9 +92,13 @@ internal class LiveTvGuideRequest(
             val byName = HashMap<String, MutableList<String>>(channels.size * 2)
             val withoutLogo = HashSet<String>()
             val catchup = HashSet<String>()
+            val byId = HashMap<String, MutableList<String>>()
             channels.forEach { channel ->
                 if (channel.catchup != null) catchup += channel.guideKey
                 if (!keys.add(channel.guideKey)) return@forEach
+                channel.tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase()?.let { id ->
+                    byId.getOrPut(id) { ArrayList(1) } += channel.guideKey
+                }
                 val name = liveTvNameKey(channel.name)
                 if (name.isNotEmpty()) byName.getOrPut(name) { ArrayList(1) } += channel.guideKey
                 // Guides often list a channel by the playlist's tvg-name rather than its shown name.
@@ -97,9 +107,22 @@ internal class LiveTvGuideRequest(
                 }
                 if (channel.logoUrl.isNullOrBlank()) withoutLogo += channel.guideKey
             }
-            return LiveTvGuideRequest(keys, byName, withoutLogo, catchup)
+            return LiveTvGuideRequest(keys, byName, withoutLogo, catchup, byId)
         }
     }
+}
+
+/** Guide matching also changes when a playlist renames channels without changing their ids. */
+internal fun liveTvGuideMatchingKey(channels: List<LiveTvChannel>): Long {
+    var matching = 0L
+    channels.forEach { channel ->
+        matching = matching * 31 + channel.guideKey.hashCode()
+        matching = matching * 31 + channel.name.hashCode()
+        matching = matching * 31 + (channel.tvgName?.hashCode() ?: 0)
+        matching = matching * 31 + if (channel.logoUrl.isNullOrBlank()) 1 else 0
+        matching = matching * 31 + if (channel.catchup != null) 1 else 0
+    }
+    return matching
 }
 
 /** A read guide: programmes, logos for channels without one, and the channels whose kept programmes were cut short. */
@@ -111,7 +134,33 @@ internal class LiveTvGuide(
     val complete: Boolean = true,
     /** How many guide channels and programmes the file had: none means it was no guide (an HTML page). */
     val elements: Int = 0,
-)
+    /** A refresh failed and this is the last good saved guide; retry sooner without hiding it. */
+    val refreshFailed: Boolean = false,
+) {
+    val canReplaceSavedGuide: Boolean get() = complete && elements > 0 && !refreshFailed
+
+    fun afterFailedRefresh(): LiveTvGuide = LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true)
+}
+
+/** Imports finish independently; neither a slow source nor completion order changes EPG priority. */
+internal suspend fun loadLiveTvGuides(
+    count: Int,
+    read: suspend (Int) -> LiveTvGuide?,
+    publish: (Int, LiveTvGuide?) -> Unit,
+) = coroutineScope {
+    val permits = Semaphore(2)
+    val results = Channel<Pair<Int, LiveTvGuide?>>(1)
+    repeat(count) { index ->
+        launch {
+            permits.withPermit { results.send(index to read(index)) }
+        }
+    }
+    repeat(count) {
+        val (index, guide) = results.receive()
+        publish(index, guide)
+    }
+    results.close()
+}
 
 /**
  * Reads a saved XMLTV guide (plain or gzip) through a pull parser, keeping only programmes of
@@ -133,11 +182,12 @@ internal fun readXmlTvGuide(
     request: LiveTvGuideRequest,
     nowEpochMs: Long,
     window: LiveTvGuideWindow,
+    parserFactory: () -> XmlPullParser = Xml::newPullParser,
 ): LiveTvGuide {
     val builder = LiveTvScheduleBuilder(request, nowEpochMs, window)
     // A malformed tail (unknown entity, cut download) keeps what was read before it.
     val complete = try {
-        readGuide(LiveTvHttp.gunzipIfNeeded(input), builder)
+        readGuide(LiveTvHttp.gunzipIfNeeded(input), builder, parserFactory)
         !Thread.currentThread().isInterrupted
     } catch (cancel: CancellationException) {
         throw cancel
@@ -147,34 +197,42 @@ internal fun readXmlTvGuide(
     return builder.build(complete)
 }
 
-private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder) {
-    val parser = Xml.newPullParser()
+private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parserFactory: () -> XmlPullParser) {
+    val parser = parserFactory()
     parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
-    runCatching { parser.setFeature(RELAXED_FEATURE, true) }
     parser.setInput(input, null)
     var events = 0
+    var opened = false
+    var closed = false
     var event = parser.eventType
     while (event != XmlPullParser.END_DOCUMENT) {
         // Blocking IO thread: a cancelled load stops at the next check.
         if (++events % CANCEL_CHECK_EVENTS == 0 && Thread.currentThread().isInterrupted) return
         if (event == XmlPullParser.START_TAG) {
+            if (parser.depth == 1) {
+                check(parser.name.equals("tv", ignoreCase = true)) { "Not an XMLTV guide" }
+                opened = true
+            }
             when {
                 parser.name.equals("programme", ignoreCase = true) -> {
                     builder.elements++
                     val channelId = parser.getAttributeValue(null, "channel")?.trim()?.lowercase()
                     val keys = channelId?.let(builder::keysFor)
-                    if (keys == null) {
+                    if (keys == null || channelId == null) {
                         parser.skipElement()
                     } else {
                         val start = parser.getAttributeValue(null, "start")?.let(LiveTvClock::parseXmlTvTimestamp)
                         val stop = parser.getAttributeValue(null, "stop")?.let(LiveTvClock::parseXmlTvTimestamp)
+                        if (start != null) builder.finishPending(channelId, start)
                         // Most of a week-long guide is outside what is kept: skipped without reading its text.
-                        if (start == null || stop == null || !builder.mayKeep(keys, start, stop)) {
+                        if (start == null || (stop != null && !builder.mayKeep(keys, start, stop))) {
                             parser.skipElement()
                         } else {
-                            val programme = parser.readProgramme(builder.wantsDetails(start, stop))
+                            val programme = parser.readProgramme(builder.wantsDetails(start, stop ?: start + 60_000L))
                             val title = programme.title
-                            if (title != null) builder.add(keys, title, start, stop, programme.description, programme.image)
+                            if (title != null) {
+                                builder.programme(channelId, start, stop, title, programme.description, programme.image)
+                            }
                         }
                     }
                 }
@@ -185,8 +243,10 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder) {
                 }
             }
         }
+        if (event == XmlPullParser.END_TAG && parser.depth == 1 && parser.name.equals("tv", ignoreCase = true)) closed = true
         event = parser.next()
     }
+    check(opened && closed) { "Incomplete XMLTV guide" }
 }
 
 /** From a START_TAG: moves to its matching END_TAG. */
@@ -317,13 +377,38 @@ internal class LiveTvScheduleBuilder(
     /** Repeated titles (news, films shown twice) are kept once. */
     private val titles = HashMap<String, String>()
     private var channelsDone = false
+    private data class Pending(val start: Long, val title: String, val description: String?, val image: String?)
+    /** XMLTV's optional stop is inferred from the next start of the same guide channel. */
+    private val pending = HashMap<String, Pending>()
+
+    fun finishPending(channelId: String, nextStart: Long) {
+        val previous = pending[channelId] ?: return
+        if (nextStart <= previous.start) return
+        pending.remove(channelId)
+        keysFor(channelId)?.let { keys ->
+            if (mayKeep(keys, previous.start, nextStart)) {
+                add(keys, previous.title, previous.start, nextStart, previous.description, previous.image)
+            }
+        }
+    }
+
+    fun programme(channelId: String, start: Long, stop: Long?, title: String, description: String? = null, image: String? = null) {
+        finishPending(channelId, start)
+        val keys = keysFor(channelId) ?: return
+        if (stop == null) {
+            pending[channelId] = Pending(start, title, description, image)
+        } else if (mayKeep(keys, start, stop)) {
+            add(keys, title, start, stop, description, image)
+        }
+    }
 
     /** A `<channel>` of the guide ([channelId] lower case). Guides list these before their programmes. */
     fun channel(channelId: String, names: List<String>, icon: String?) {
         if (channelsDone) return
-        if (channelId in request.keys) {
-            claimed += channelId
-            if (icon != null && channelId in request.keysWithoutLogo) logos[channelId] = icon
+        val direct = directKeys(channelId)
+        if (direct != null) {
+            claimed.addAll(direct)
+            if (icon != null) direct.forEach { if (it in request.keysWithoutLogo) logos[it] = icon }
             return
         }
         for (name in names) {
@@ -353,9 +438,13 @@ internal class LiveTvScheduleBuilder(
     /** The channel keys a programme of guide channel [channelId] (lower case) is kept under, or null. */
     fun keysFor(channelId: String): List<String>? {
         if (!channelsDone) finishChannels()
+        directKeys(channelId)?.let { return it }
         aliases[channelId]?.let { return it }
-        return if (channelId in request.keys) listOf(channelId) else null
+        return null
     }
+
+    private fun directKeys(channelId: String): List<String>? =
+        request.keysById[channelId] ?: if (channelId in request.keys) listOf(channelId) else null
 
     /** Whether a programme from [startEpochMs] to [stopEpochMs] has its description and picture read. */
     fun wantsDetails(startEpochMs: Long, stopEpochMs: Long): Boolean =
@@ -564,8 +653,17 @@ internal fun liveTvNameKey(name: String): String {
 }
 
 /** The key a channel's guide is kept under: its guide id in lower case, else its name. */
-internal fun liveTvGuideKey(tvgId: String?, name: String): String =
-    tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase() ?: (NAME_KEY_PREFIX + liveTvNameKey(name))
+internal fun liveTvGuideKey(tvgId: String?, name: String, sourceId: String = ""): String {
+    val key = tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase() ?: (NAME_KEY_PREFIX + liveTvNameKey(name))
+    return if (sourceId.isEmpty()) key else "$sourceId/$key"
+}
+
+/** A cell's visible span; provider timestamps never turn into unbounded layout constraints. */
+internal fun liveTvGuideSpan(start: Long, stop: Long, from: Long, to: Long): Pair<Long, Long>? {
+    val left = maxOf(start, from)
+    val right = minOf(stop, to)
+    return if (right > left) left to right else null
+}
 
 /** Never the start of a guide's channel id, so a name key can't meet one. */
 private const val NAME_KEY_PREFIX = "\u0001"

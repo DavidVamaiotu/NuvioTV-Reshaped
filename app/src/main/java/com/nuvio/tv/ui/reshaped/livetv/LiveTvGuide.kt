@@ -4,8 +4,7 @@ package com.nuvio.tv.ui.reshaped.livetv
 
 import android.view.KeyEvent
 import androidx.compose.animation.core.Animatable
-import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateColorAsState
@@ -78,6 +77,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.liveTvGuideSpan
 import kotlin.math.roundToInt
 
 private const val MINUTE = 60_000L
@@ -184,9 +184,11 @@ internal class LiveTvGuideState(
      */
     fun showChannels(list: List<LiveTvChannel>, keepUrl: String?, toNow: Boolean) {
         if (list === channels) return
-        channels = list
-        row = list.indexOfFirst { it.streamUrl == keepUrl }.coerceAtLeast(0)
-        if (toNow) backToNow()
+        Snapshot.withMutableSnapshot {
+            channels = list
+            row = list.indexOfFirst { it.streamUrl == keepUrl }.coerceAtLeast(0)
+            if (toNow) backToNow()
+        }
     }
 
     /** Selects the channel at [index] (focus coming back from the player). */
@@ -452,35 +454,25 @@ internal fun LiveTvGuideGrid(
             val listState = rememberLazyListState(
                 initialFirstVisibleItemIndex = remember { Snapshot.withoutReadObservation { (state.row - 2).coerceAtLeast(0) } },
             )
-            // The list glides so the selection rests a little above the middle, as Nuvio's rows do.
-            // One animation carries on through each step, keeping its speed, so holding ▲▼ is a
-            // smooth run rather than a series of starts. Read here, not in composition: moving the
-            // selection recomposes only the rows it leaves and enters.
+            // One scroll at a time. A changed playlist lands immediately; a selection change
+            // animates through LazyListState, which owns remeasurement and scroll cancellation.
             val rowPx = with(density) { rowHeight.toPx() }
-            val glide = remember { Animatable(0f) }
-            val glideScope = rememberCoroutineScope()
             LaunchedEffect(state, listState, rowPx) {
-                snapshotFlow { state.row to state.channels }.collect { (row, _) ->
+                var shownChannels: List<LiveTvChannel>? = null
+                snapshotFlow { state.row to state.channels }.collectLatest { (row, channels) ->
+                    val changed = shownChannels !== channels
+                    shownChannels = channels
+                    if (channels.isEmpty()) return@collectLatest
                     val info = listState.layoutInfo
                     val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
                     val anchorRows = if (viewport > 0f) ((viewport * SELECTION_AT) / rowPx).toInt() else 2
-                    val target = (row - anchorRows).coerceAtLeast(0) * rowPx
+                    val targetIndex = (row - anchorRows).coerceIn(0, channels.lastIndex)
+                    val target = targetIndex * rowPx
                     val current = listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset
-                    // A jump (a page, another category, back from the player) lands at once.
-                    if (info.visibleItemsInfo.isEmpty() || kotlin.math.abs(target - current) > viewport * 1.5f) {
-                        glideScope.launch {
-                            glide.stop()
-                            listState.scrollToItem((row - anchorRows).coerceAtLeast(0))
-                            glide.snapTo(listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset)
-                        }
-                        return@collect
-                    }
-                    if (!glide.isRunning) glide.snapTo(current)
-                    glideScope.launch {
-                        glide.animateTo(target, GUIDE_GLIDE) {
-                            val now = listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset
-                            listState.dispatchRawDelta(value - now)
-                        }
+                    if (changed || info.visibleItemsInfo.isEmpty() || kotlin.math.abs(target - current) > viewport * 1.5f) {
+                        listState.scrollToItem(targetIndex)
+                    } else {
+                        listState.animateScrollToItem(targetIndex)
                     }
                 }
             }
@@ -710,7 +702,9 @@ private fun GuideRow(
                 )
             }
             programmes.forEach { programme ->
-                val widthDp = with(density) { ((programme.stopEpochMs - programme.startEpochMs) * timeline.pxPerMs).toDp() }
+                val (cellStart, cellStop) = liveTvGuideSpan(programme.startEpochMs, programme.stopEpochMs, viewStart, viewEnd)
+                    ?: return@forEach
+                val widthDp = with(density) { ((cellStop - cellStart) * timeline.pxPerMs).toDp() }
                 val cellState = when {
                     // Past programmes the provider keeps can be played again: they stay bright.
                     programme.stopEpochMs <= clock.value ->
@@ -725,12 +719,12 @@ private fun GuideRow(
                     progress = if (cellState == GuideCellState.Now) programme else null,
                     clock = clock,
                     modifier = Modifier
-                        .offset { IntOffset(timeline.x(programme.startEpochMs).roundToInt(), 0) }
+                        .offset { IntOffset(timeline.x(cellStart).roundToInt(), 0) }
                         .width(widthDp)
                         .fillMaxHeight()
                         .padding(end = 4.dp),
                     // A programme that began before the view keeps its title in view, marked ‹ as TV guides do.
-                    titleShift = { (-timeline.x(programme.startEpochMs)).coerceAtLeast(0f).roundToInt() },
+                    titleShift = { (-timeline.x(cellStart)).coerceAtLeast(0f).roundToInt() },
                 )
             }
         }
