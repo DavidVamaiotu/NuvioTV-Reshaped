@@ -1347,11 +1347,12 @@ object LiveTvRepository {
                             keep = { guide -> guide.elements > 0 },
                         )
                         if (read.elements > 0) return read
-                        Log.w(TAG, "Guide link gave no guide")
+                        Log.w(TAG, "Guide link gave no guide: ${url.substringBefore('?')}")
                     } catch (cancel: CancellationException) {
                         throw cancel
                     } catch (error: Exception) {
-                        Log.w(TAG, "Guide download failed", error)
+                        // The link without its query (which can hold a login), so a log says which guide.
+                        Log.w(TAG, "Guide download failed: ${url.substringBefore('?')}", error)
                     }
                     // The guide saved before, if any.
                     if (saved == 0L) return null
