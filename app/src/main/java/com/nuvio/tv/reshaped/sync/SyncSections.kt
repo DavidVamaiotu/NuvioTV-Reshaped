@@ -33,6 +33,8 @@ internal object LiveTvSections {
     private fun hiddenChannels(p: Int) = prefix(p) + "hidden_channels"
     private fun groupNames(p: Int) = prefix(p) + "group_names"
     private fun groupOrder(p: Int) = prefix(p) + "group_order"
+    // TV only: each source's own category order, by source identity.
+    private fun sourceGroupOrder(p: Int) = prefix(p) + "source_group_order"
     private fun recent(p: Int) = prefix(p) + "recent"
 
     /**
@@ -109,6 +111,7 @@ internal object LiveTvSections {
             hiddenChannels(profileId) to data.hiddenChannels.associate { it.toString() to TRUE },
             groupNames(profileId) to data.groupNames.mapValues { JsonPrimitive(it.value) },
             groupOrder(profileId) to if (data.groupOrder.isEmpty()) emptyMap() else mapOf("order" to JsonArray(data.groupOrder.map(::JsonPrimitive))),
+            sourceGroupOrder(profileId) to data.sourceGroupOrders.mapValues { (_, groups) -> JsonArray(groups.map(::JsonPrimitive)) },
             recent(profileId) to (data.recent?.let { mapOf("channel" to it.toJson()) } ?: emptyMap()),
         )
     }
@@ -126,6 +129,9 @@ internal object LiveTvSections {
         }.toMap(),
         groupOrder = (SyncDoc.values(doc, groupOrder(profileId))["order"] as? JsonArray)
             ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
+        sourceGroupOrders = SyncDoc.values(doc, sourceGroupOrder(profileId)).mapNotNull { (identity, value) ->
+            (value as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.takeIf { it.isNotEmpty() }?.let { identity to it }
+        }.toMap(),
         recent = (SyncDoc.values(doc, recent(profileId))["channel"] as? JsonObject)?.toRecent(),
     )
 

@@ -180,6 +180,7 @@ object LiveTvRepository {
                 customLists = store.customLists(),
                 hiddenGroups = store.hiddenGroups(),
                 groupNames = store.groupNames(),
+                sourceGroupOrders = store.sourceGroupOrders(),
                 hiddenChannelKeys = hiddenChannels,
                 recentChannel = store.recentChannel(),
                 isLoading = sources.isNotEmpty(),
@@ -390,6 +391,31 @@ object LiveTvRepository {
     }
 
     /**
+     * Moves [group] one place up or down among [source]'s own categories only: another source
+     * with a category of the same name keeps its order.
+     */
+    fun moveSourceGroup(source: LiveTvSource, group: String, step: Int) {
+        val state = _uiState.value
+        val own = state.channels.asSequence().filter { it.sourceId == source.id }.mapTo(HashSet()) { it.group }
+        val groups = state.groupsOf(source, own)
+        val from = groups.indexOf(group)
+        val to = from + step
+        if (from < 0 || to !in groups.indices) return
+        val reordered = ArrayList(groups).apply { add(to, removeAt(from)) }
+        val orders = state.sourceGroupOrders + (source.identity to reordered)
+        _uiState.update { it.copy(sourceGroupOrders = orders) }
+        storage?.let { store -> scope.launch(writer) { store.saveSourceGroupOrders(orders) } }
+        ReshapedSync.onLocalChange()
+    }
+
+    /** Each source's own order goes: every source follows the shared order again. */
+    private fun clearSourceGroupOrders() {
+        if (_uiState.value.sourceGroupOrders.isEmpty()) return
+        _uiState.update { it.copy(sourceGroupOrders = emptyMap()) }
+        storage?.let { store -> scope.launch(writer) { store.saveSourceGroupOrders(emptyMap()) } }
+    }
+
+    /**
      * Gives a category a name of its own (blank goes back to the playlist's name). It
      * keeps its channels, hiding and place: everything still goes by the playlist's name.
      */
@@ -406,6 +432,7 @@ object LiveTvRepository {
 
     /** Back to the providers' own order. */
     fun resetGroupOrder() {
+        clearSourceGroupOrders()
         groupOrder = emptyList()
         _uiState.update { it.copy(groups = orderedGroups(it.groupCounts.keys, it.groupNames)) }
         storage?.let { store -> scope.launch(writer) { store.saveGroupOrder(emptyList()) } }
@@ -432,6 +459,7 @@ object LiveTvRepository {
 
     /** Sorts the categories A to Z (by the names shown), as the viewer's own order. */
     fun sortGroupsAlphabetically() {
+        clearSourceGroupOrders()
         val state = _uiState.value
         val sorted = state.groups.sortedWith(
             compareBy<String> { it == LIVE_TV_UNGROUPED && it !in state.groupNames }
@@ -1156,6 +1184,7 @@ object LiveTvRepository {
                 hiddenChannels = state.hiddenChannelKeys,
                 groupNames = state.groupNames,
                 groupOrder = groupOrder,
+                sourceGroupOrders = state.sourceGroupOrders,
                 recent = state.recentChannel,
             )
         }
@@ -1214,6 +1243,7 @@ object LiveTvRepository {
                     hiddenGroups = state.hiddenGroups.withSyncChange(before.hiddenGroups, after.hiddenGroups),
                     hiddenChannelKeys = state.hiddenChannelKeys.withSyncChange(before.hiddenChannels, after.hiddenChannels),
                     groupNames = state.groupNames.withSyncChange(before.groupNames, after.groupNames),
+                    sourceGroupOrders = state.sourceGroupOrders.withSyncChange(before.sourceGroupOrders, after.sourceGroupOrders),
                     recentChannel = if (before.recent != after.recent) after.recent else state.recentChannel,
                 )
             }
@@ -1246,6 +1276,7 @@ object LiveTvRepository {
                 store.saveHiddenGroups(state.hiddenGroups)
                 store.saveHiddenChannelKeys(state.hiddenChannelKeys)
                 store.saveGroupNames(state.groupNames)
+                store.saveSourceGroupOrders(state.sourceGroupOrders)
                 store.saveGroupOrder(order)
                 state.recentChannel?.let(store::saveRecentChannel)
             }
@@ -1264,6 +1295,7 @@ object LiveTvRepository {
             store.saveHiddenGroups(store.hiddenGroups().withSyncChange(before.hiddenGroups, after.hiddenGroups))
             store.saveHiddenChannelKeys(store.hiddenChannelKeys().withSyncChange(before.hiddenChannels, after.hiddenChannels))
             store.saveGroupNames(store.groupNames().withSyncChange(before.groupNames, after.groupNames))
+            store.saveSourceGroupOrders(store.sourceGroupOrders().withSyncChange(before.sourceGroupOrders, after.sourceGroupOrders))
             if (before.groupOrder != after.groupOrder) store.saveGroupOrder(after.groupOrder)
             if (before.recent != after.recent) after.recent?.let(store::saveRecentChannel)
         }

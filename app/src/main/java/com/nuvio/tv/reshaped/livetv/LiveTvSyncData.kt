@@ -13,6 +13,8 @@ internal data class LiveTvSyncData(
     val hiddenChannels: Set<Long> = emptySet(),
     val groupNames: Map<String, String> = emptyMap(),
     val groupOrder: List<String> = emptyList(),
+    /** Each source's own category order, by source identity. */
+    val sourceGroupOrders: Map<String, List<String>> = emptyMap(),
     val recent: LiveTvRecentChannel? = null,
 )
 
@@ -84,5 +86,6 @@ internal fun LiveTvStorage.syncData(): LiveTvSyncData = LiveTvSyncData(
     hiddenChannels = hiddenChannelKeys(),
     groupNames = groupNames(),
     groupOrder = groupOrder(),
+    sourceGroupOrders = sourceGroupOrders(),
     recent = recentChannel(),
 )
