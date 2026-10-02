@@ -71,6 +71,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
+import coil3.request.crossfade
 
 internal val LiveTvPillShape = RoundedCornerShape(100.dp)
 
@@ -291,6 +292,7 @@ internal fun LiveTvPoster(url: String?, width: Dp, height: Dp, modifier: Modifie
                 // upscaled by the crop, which made the picture soft.
                 .size((width.toPx() * POSTER_OVERSAMPLE).roundToInt(), (height.toPx() * POSTER_OVERSAMPLE).roundToInt())
                 .scale(coil3.size.Scale.FILL)
+                .crossfade(200)
                 .httpHeaders(LOGO_HEADERS)
                 .fetcherFactory<coil3.Uri>(LOGO_FETCHER)
                 .build()

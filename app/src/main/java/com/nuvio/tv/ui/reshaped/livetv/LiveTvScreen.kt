@@ -1,4 +1,4 @@
-@file:OptIn(androidx.tv.material3.ExperimentalTvMaterial3Api::class)
+@file:OptIn(androidx.tv.material3.ExperimentalTvMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 
 package com.nuvio.tv.ui.reshaped.livetv
 
@@ -45,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.ui.focus.FocusDirection
@@ -720,7 +721,13 @@ private fun LiveTvGuideInfo(
                 LiveTvPoster(url = poster, width = POSTER_WIDTH, height = HEADER_HEIGHT)
             }
         }
-        Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+        // A new selection fades in instead of switching hard; the fade is drawn, not recomposed.
+        val fade = remember { androidx.compose.animation.core.Animatable(1f) }
+        LaunchedEffect(channel?.streamUrl, programme?.startEpochMs) {
+            fade.snapTo(0.3f)
+            fade.animateTo(1f, androidx.compose.animation.core.tween(220, easing = androidx.compose.animation.core.LinearOutSlowInEasing))
+        }
+        Column(modifier = Modifier.weight(1f).fillMaxHeight().graphicsLayer { alpha = fade.value }) {
             if (channel == null) {
                 if (showTitle) {
                     Text(
@@ -889,6 +896,10 @@ private fun LiveTvCategoryColumn(
     LaunchedEffect(selectedKey) {
         (filterFor(selectedKey) as? LiveTvFilter.SourceGroup)?.let { collapsed.remove(it.id) }
     }
+    // Glides to the focused category, as Nuvio's own lists do.
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.foundation.gestures.LocalBringIntoViewSpec provides com.nuvio.tv.ui.components.NuvioScrollDefaults.smoothScrollSpec,
+    ) {
     LazyColumn(
         state = listState,
         modifier = modifier,
@@ -927,6 +938,7 @@ private fun LiveTvCategoryColumn(
                 onLongClick = entry.listId?.let { id -> { onEditList(id) } },
             ) { if (!entry.action) onSelect(entry.key) }
         }
+    }
     }
 }
 

@@ -4,6 +4,11 @@ package com.nuvio.tv.ui.reshaped.livetv
 
 import android.view.KeyEvent
 import androidx.compose.animation.core.Animatable
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -29,7 +34,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.snapshotFlow
@@ -360,7 +364,7 @@ internal fun LiveTvGuideGrid(
         val timeline = remember { GuideTimeline(Snapshot.withoutReadObservation { state.viewStartMs }, pxPerMs) }
         timeline.pxPerMs = pxPerMs
         LaunchedEffect(state.viewStartMs) {
-            timeline.scroll.animateTo((state.viewStartMs - timeline.origin).toFloat(), spring(dampingRatio = 0.9f, stiffness = 420f))
+            timeline.scroll.animateTo((state.viewStartMs - timeline.origin).toFloat(), GUIDE_GLIDE)
         }
         Column {
             Row(modifier = Modifier.fillMaxWidth().height(rulerHeight), verticalAlignment = Alignment.CenterVertically) {
@@ -370,20 +374,35 @@ internal fun LiveTvGuideGrid(
             val listState = rememberLazyListState(
                 initialFirstVisibleItemIndex = remember { Snapshot.withoutReadObservation { (state.row - 2).coerceAtLeast(0) } },
             )
-            // Read here, not in composition: moving the selection recomposes only the rows it leaves and enters.
-            LaunchedEffect(state, listState) {
-                snapshotFlow { state.row to state.channels }.collectLatest { (row, _) ->
-                    val visible = listState.layoutInfo.visibleItemsInfo
-                    // Whole rows in view; the selection is kept off the first and last of them.
-                    val shown = visible.count { it.offset >= 0 && it.offset + it.size <= listState.layoutInfo.viewportEndOffset }.coerceAtLeast(1)
-                    val first = listState.firstVisibleItemIndex
-                    if (visible.isNotEmpty() && row > first && row < first + shown - 1) return@collectLatest
-                    val target = (row - shown / 2).coerceAtLeast(0)
-                    // A jump (a page, back from the player) lands at once; a step glides.
-                    if (visible.isEmpty() || kotlin.math.abs(target - first) > shown) {
-                        listState.scrollToItem(target)
-                    } else {
-                        listState.animateScrollToItem(target)
+            // The list glides so the selection rests a little above the middle, as Nuvio's rows do.
+            // One animation carries on through each step, keeping its speed, so holding ▲▼ is a
+            // smooth run rather than a series of starts. Read here, not in composition: moving the
+            // selection recomposes only the rows it leaves and enters.
+            val rowPx = with(density) { rowHeight.toPx() }
+            val glide = remember { Animatable(0f) }
+            val glideScope = rememberCoroutineScope()
+            LaunchedEffect(state, listState, rowPx) {
+                snapshotFlow { state.row to state.channels }.collect { (row, _) ->
+                    val info = listState.layoutInfo
+                    val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
+                    val anchorRows = if (viewport > 0f) ((viewport * SELECTION_AT) / rowPx).toInt() else 2
+                    val target = (row - anchorRows).coerceAtLeast(0) * rowPx
+                    val current = listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset
+                    // A jump (a page, another category, back from the player) lands at once.
+                    if (info.visibleItemsInfo.isEmpty() || kotlin.math.abs(target - current) > viewport * 1.5f) {
+                        glideScope.launch {
+                            glide.stop()
+                            listState.scrollToItem((row - anchorRows).coerceAtLeast(0))
+                            glide.snapTo(listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset)
+                        }
+                        return@collect
+                    }
+                    if (!glide.isRunning) glide.snapTo(current)
+                    glideScope.launch {
+                        glide.animateTo(target, GUIDE_GLIDE) {
+                            val now = listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset
+                            listState.dispatchRawDelta(value - now)
+                        }
                     }
                 }
             }
@@ -517,13 +536,14 @@ private fun GuideRow(
     rowHeight: Dp,
 ) {
     Row(modifier = Modifier.fillMaxWidth().height(rowHeight).padding(vertical = 3.dp)) {
+        val rowHighlight by animateColorAsState(if (selectedRow) CHANNEL_SELECTED else Color.Transparent, SELECTION_FADE, label = "guideRow")
         Row(
             modifier = Modifier
                 .width(channelColumn)
                 .fillMaxHeight()
                 .padding(end = 8.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(if (selectedRow) CHANNEL_SELECTED else Color.Transparent)
+                .drawBehind { drawRect(rowHighlight) }
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -603,6 +623,12 @@ private fun GuideRow(
 
 private enum class GuideCellState { Past, Now, Future }
 
+/** How far down the guide the selected row rests. */
+private const val SELECTION_AT = 0.4f
+/** The guide's glide, for rows and the timeline: quick, and settling without a bounce. */
+private val GUIDE_GLIDE = spring<Float>(dampingRatio = 1f, stiffness = 320f)
+private val SELECTION_FADE = tween<Color>(durationMillis = 140, easing = FastOutSlowInEasing)
+
 @Composable
 private fun GuideCell(
     title: String,
@@ -615,17 +641,30 @@ private fun GuideCell(
     titleShift: () -> Int = { 0 },
 ) {
     val shape = RoundedCornerShape(8.dp)
+    // The selection fades from cell to cell; drawn at draw time, so the fade recomposes nothing.
+    val fill by animateColorAsState(
+        when {
+            selected -> Color.White
+            state == GuideCellState.Now -> CELL_NOW
+            state == GuideCellState.Past -> CELL_PAST
+            else -> CELL
+        },
+        SELECTION_FADE,
+        label = "guideCell",
+    )
+    val textColor by animateColorAsState(
+        when {
+            selected -> Color.Black
+            state == GuideCellState.Past -> Color.White.copy(alpha = 0.5f)
+            else -> Color.White.copy(alpha = 0.9f)
+        },
+        SELECTION_FADE,
+        label = "guideCellText",
+    )
     Box(
         modifier = modifier
             .clip(shape)
-            .background(
-                when {
-                    selected -> Color.White
-                    state == GuideCellState.Now -> CELL_NOW
-                    state == GuideCellState.Past -> CELL_PAST
-                    else -> CELL
-                },
-            )
+            .drawBehind { drawRect(fill) }
             .then(
                 if (progress != null && clock != null) {
                     val span = (progress.stopEpochMs - progress.startEpochMs).coerceAtLeast(1L)
@@ -656,11 +695,7 @@ private fun GuideCell(
             text = title,
             style = MaterialTheme.typography.bodySmall,
             fontWeight = if (selected || state == GuideCellState.Now) FontWeight.Medium else FontWeight.Normal,
-            color = when {
-                selected -> Color.Black
-                state == GuideCellState.Past -> Color.White.copy(alpha = 0.5f)
-                else -> Color.White.copy(alpha = 0.9f)
-            },
+            color = textColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
