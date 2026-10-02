@@ -78,6 +78,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.liveTvGuideSpan
 import kotlin.math.roundToInt
 
 private const val MINUTE = 60_000L
@@ -184,9 +185,11 @@ internal class LiveTvGuideState(
      */
     fun showChannels(list: List<LiveTvChannel>, keepUrl: String?, toNow: Boolean) {
         if (list === channels) return
-        channels = list
-        row = list.indexOfFirst { it.streamUrl == keepUrl }.coerceAtLeast(0)
-        if (toNow) backToNow()
+        Snapshot.withMutableSnapshot {
+            channels = list
+            row = list.indexOfFirst { it.streamUrl == keepUrl }.coerceAtLeast(0)
+            if (toNow) backToNow()
+        }
     }
 
     /** Selects the channel at [index] (focus coming back from the player). */
@@ -460,17 +463,22 @@ internal fun LiveTvGuideGrid(
             val glide = remember { Animatable(0f) }
             val glideScope = rememberCoroutineScope()
             LaunchedEffect(state, listState, rowPx) {
-                snapshotFlow { state.row to state.channels }.collect { (row, _) ->
+                var shownChannels: List<LiveTvChannel>? = null
+                snapshotFlow { state.row to state.channels }.collect { (row, channels) ->
+                    val changed = shownChannels !== channels
+                    shownChannels = channels
+                    if (channels.isEmpty()) return@collect
                     val info = listState.layoutInfo
                     val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
                     val anchorRows = if (viewport > 0f) ((viewport * SELECTION_AT) / rowPx).toInt() else 2
-                    val target = (row - anchorRows).coerceAtLeast(0) * rowPx
+                    val targetIndex = (row - anchorRows).coerceIn(0, channels.lastIndex)
+                    val target = targetIndex * rowPx
                     val current = listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset
-                    // A jump (a page, another category, back from the player) lands at once.
-                    if (info.visibleItemsInfo.isEmpty() || kotlin.math.abs(target - current) > viewport * 1.5f) {
+                    // A jump (another playlist, a page, back from the player) lands at once.
+                    if (changed || info.visibleItemsInfo.isEmpty() || kotlin.math.abs(target - current) > viewport * 1.5f) {
                         glideScope.launch {
                             glide.stop()
-                            listState.scrollToItem((row - anchorRows).coerceAtLeast(0))
+                            listState.scrollToItem(targetIndex)
                             glide.snapTo(listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset)
                         }
                         return@collect
@@ -710,7 +718,9 @@ private fun GuideRow(
                 )
             }
             programmes.forEach { programme ->
-                val widthDp = with(density) { ((programme.stopEpochMs - programme.startEpochMs) * timeline.pxPerMs).toDp() }
+                val (cellStart, cellStop) = liveTvGuideSpan(programme.startEpochMs, programme.stopEpochMs, viewStart, viewEnd)
+                    ?: return@forEach
+                val widthDp = with(density) { ((cellStop - cellStart) * timeline.pxPerMs).toDp() }
                 val cellState = when {
                     // Past programmes the provider keeps can be played again: they stay bright.
                     programme.stopEpochMs <= clock.value ->
@@ -723,14 +733,15 @@ private fun GuideRow(
                     selected = programme === selected && active,
                     state = cellState,
                     progress = if (cellState == GuideCellState.Now) programme else null,
+                    progressSpan = cellStart to cellStop,
                     clock = clock,
                     modifier = Modifier
-                        .offset { IntOffset(timeline.x(programme.startEpochMs).roundToInt(), 0) }
+                        .offset { IntOffset(timeline.x(cellStart).roundToInt(), 0) }
                         .width(widthDp)
                         .fillMaxHeight()
                         .padding(end = 4.dp),
                     // A programme that began before the view keeps its title in view, marked ‹ as TV guides do.
-                    titleShift = { (-timeline.x(programme.startEpochMs)).coerceAtLeast(0f).roundToInt() },
+                    titleShift = { (-timeline.x(cellStart)).coerceAtLeast(0f).roundToInt() },
                 )
             }
         }
@@ -768,6 +779,8 @@ private fun GuideCell(
     modifier: Modifier = Modifier,
     /** The programme on now, whose progress shows as a line along the bottom. */
     progress: LiveTvProgramme? = null,
+    /** The time the cell spans when it is cut to the view: the line runs along that part only. */
+    progressSpan: Pair<Long, Long>? = null,
     clock: State<Long>? = null,
     titleShift: () -> Int = { 0 },
 ) {
@@ -798,11 +811,12 @@ private fun GuideCell(
             .drawBehind { drawRect(fill) }
             .then(
                 if (progress != null && clock != null) {
-                    val span = (progress.stopEpochMs - progress.startEpochMs).coerceAtLeast(1L)
+                    val from = progressSpan?.first ?: progress.startEpochMs
+                    val span = ((progressSpan?.second ?: progress.stopEpochMs) - from).coerceAtLeast(1L)
                     val line = if (selected) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.7f)
                     // Read at draw time: the minute tick redraws it without recomposing.
                     Modifier.drawBehind {
-                        val fraction = ((clock.value - progress.startEpochMs).toFloat() / span).coerceIn(0f, 1f)
+                        val fraction = ((clock.value - from).toFloat() / span).coerceIn(0f, 1f)
                         val height = 3.dp.toPx()
                         drawRect(line, topLeft = Offset(0f, size.height - height), size = Size(size.width * fraction, height))
                     }

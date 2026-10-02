@@ -8,6 +8,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONArray
@@ -91,6 +92,75 @@ internal object DriveAppFolder {
                 .build()
         }
         return JSONObject(created).getString("id")
+    }
+
+    /** A Drive file Reshaped made (an imported playlist's copy): its id and when it last changed. */
+    class StoredFile(val id: String, val modifiedMs: Long)
+
+    /** Reshaped's files whose name starts with [prefix]. */
+    suspend fun list(context: Context, prefix: String): List<StoredFile> {
+        val listUrl = FILES_URL.toHttpUrl().newBuilder()
+            .addQueryParameter("spaces", "drive")
+            .addQueryParameter("q", "name contains '${prefix.replace("'", "\\'")}' and trashed = false")
+            .addQueryParameter("fields", "files(id,name,modifiedTime)")
+            .addQueryParameter("pageSize", "100")
+            .build()
+        val files = call(context) { token -> Request.Builder().url(listUrl).header("Authorization", "Bearer $token").build() }
+            .let { JSONObject(it).optJSONArray("files") ?: JSONArray() }
+        return (0 until files.length()).mapNotNull { index ->
+            val file = files.optJSONObject(index) ?: return@mapNotNull null
+            if (!file.optString("name").startsWith(prefix)) return@mapNotNull null
+            val modified = runCatching { java.time.Instant.parse(file.optString("modifiedTime")).toEpochMilli() }.getOrDefault(0L)
+            file.optString("id").takeIf(String::isNotBlank)?.let { StoredFile(it, modified) }
+        }
+    }
+
+    /**
+     * Uploads [file] as a new Drive file called [name] (a resumable upload, so a playlist of any
+     * size streams from storage). Returns its id.
+     */
+    suspend fun upload(context: Context, name: String, file: java.io.File): String {
+        val metadata = JSONObject().put("name", name).put("mimeType", "application/gzip").toString()
+        val session = rawCall(context, build = { token ->
+            Request.Builder()
+                .url("$UPLOAD_URL?uploadType=resumable&fields=id")
+                .header("Authorization", "Bearer $token")
+                .header("X-Upload-Content-Type", "application/gzip")
+                .header("X-Upload-Content-Length", file.length().toString())
+                .post(metadata.toRequestBody(JSON))
+                .build()
+        }, read = { response -> response.header("Location") ?: throw IOException("Drive gave no upload link") })
+        val created = rawCall(context, build = { _ ->
+            // The upload link carries its own authorisation.
+            Request.Builder().url(session).put(file.asRequestBody("application/gzip".toMediaType())).build()
+        }, read = { response -> response.body?.string().orEmpty() })
+        return JSONObject(created).getString("id")
+    }
+
+    /** Streams the Drive file [id] to [write]; a file gone meanwhile throws [IOException]. */
+    suspend fun download(context: Context, id: String, write: (java.io.InputStream) -> Unit) {
+        rawCall(context, build = { token ->
+            Request.Builder().url("$FILES_URL/$id?alt=media").header("Authorization", "Bearer $token").build()
+        }, read = { response -> response.body?.byteStream()?.use(write) ?: throw IOException("Empty Drive file") })
+    }
+
+    /** Like [call], but [read] gets the successful response itself (headers, or a body to stream). */
+    private suspend fun <T> rawCall(context: Context, build: (String) -> Request, read: (Response) -> T): T {
+        repeat(2) { attempt ->
+            val token = GoogleAccount.accessToken(context, forceRefresh = attempt > 0) ?: throw SignedOutException()
+            val result: Result<T>? = runInterruptible(Dispatchers.IO) {
+                GoogleAccount.http.newCall(build(token)).execute().use { response ->
+                    when {
+                        response.isSuccessful -> Result.success(read(response))
+                        response.code == 401 -> null
+                        // textOrError throws Drive's reason (or NotFoundException).
+                        else -> { response.textOrError(); throw IOException("Drive HTTP ${response.code}") }
+                    }
+                }
+            }
+            if (result != null) return result.getOrThrow()
+        }
+        throw SignedOutException()
     }
 
     private class NotFoundException : IOException("Not found")

@@ -109,14 +109,17 @@ internal class LiveTvSetupServer(
         override fun read(): Int {
             if (remaining <= 0) return -1
             val value = super.read()
-            if (value >= 0) remaining--
+            if (value < 0) throw java.io.EOFException("Upload cut off")
+            remaining--
             return value
         }
 
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
             if (remaining <= 0) return -1
             val read = super.read(buffer, offset, minOf(length.toLong(), remaining).toInt())
-            if (read > 0) remaining -= read
+            // The phone's connection dropped mid-upload: a cut-off playlist is not saved as complete.
+            if (read < 0) throw java.io.EOFException("Upload cut off")
+            remaining -= read
             return read
         }
 

@@ -56,6 +56,7 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
             xtream = LiveTvXtreamSettings(optString("server"), optString("xtreamUser"), optString("xtreamPassword")),
             epgUrl = optString("epg"),
             name = optString("name"),
+            userAgent = optString("ua"),
         )
     }
 
@@ -65,6 +66,7 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         put("url", url)
         if (epgUrl.isNotBlank()) put("epg", epgUrl)
         if (name.isNotBlank()) put("name", name)
+        if (userAgent.isNotBlank()) put("ua", userAgent)
         when (type) {
             LiveTvSourceType.M3u -> Unit
             LiveTvSourceType.Stalker -> {
@@ -127,7 +129,13 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         val target = playlistFileFor(sourceId)
         playlistDir.mkdirs()
         val temp = File(target.path + ".tmp")
-        write(temp)
+        try {
+            write(temp)
+        } catch (error: Throwable) {
+            // A failed or too large upload leaves no partial file behind.
+            temp.delete()
+            throw error
+        }
         if (!temp.renameTo(target)) {
             target.delete()
             temp.renameTo(target)

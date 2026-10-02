@@ -40,12 +40,13 @@ internal object LiveTvHttp {
         readTimeoutSeconds: Long = 0L,
         block: (InputStream) -> T,
     ): T =
-        runInterruptible(Dispatchers.IO) {
+        // The call is cancelled with the caller, so a timeout around it returns even while a stalled read waits.
+        interruptibleCall { calling ->
             val http = if (readTimeoutSeconds > 0) client.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build() else client
             val request = Request.Builder().url(url).apply {
                 headers.forEach { (name, value) -> header(name, value) }
             }.build()
-            http.newCall(request).execute().use { response ->
+            calling(http.newCall(request)).execute().use { response ->
                 if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
                 val body = response.body ?: throw IOException("Empty response")
                 BufferedInputStream(body.byteStream(), BUFFER_BYTES).use { buffered ->
@@ -250,7 +251,7 @@ internal object LiveTvHttp {
 
     /** A small response (provider API calls) as text. */
     suspend fun text(url: String, headers: Map<String, String>): String =
-        stream(url, headers) { it.bufferedReader().readText() }
+        stream(url, headers) { it.bufferedReader().readText().removePrefix("\uFEFF") }
 
     private fun BufferedInputStream.startsWithGzipMagic(): Boolean {
         mark(2)

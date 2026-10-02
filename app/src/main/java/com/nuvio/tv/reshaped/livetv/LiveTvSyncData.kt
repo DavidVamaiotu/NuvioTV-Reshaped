@@ -2,7 +2,7 @@ package com.nuvio.tv.reshaped.livetv
 
 /**
  * One profile's Live TV data that Reshaped sync carries between devices (see reshaped/sync).
- * Playlists imported from a file stay on the device that has the file, so they are left out.
+ * Playlists imported from a file sync too: their file goes as its own Drive copy.
  */
 internal data class LiveTvSyncData(
     val sources: List<LiveTvSource> = emptyList(),
@@ -16,8 +16,9 @@ internal data class LiveTvSyncData(
     val recent: LiveTvRecentChannel? = null,
 )
 
+/** Every source syncs; an imported playlist's file travels as its own Drive copy (reshaped/sync/SyncedPlaylists). */
 internal val LiveTvSource.isSyncable: Boolean
-    get() = type != LiveTvSourceType.M3u || url.isHttpUrl()
+    get() = type != LiveTvSourceType.M3u || url.isNotBlank()
 
 /**
  * [current] with the change from [before] to [after] made on top: what sync brought in, without

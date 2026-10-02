@@ -3,6 +3,8 @@
 package com.nuvio.tv.ui.reshaped.livetv
 
 import android.text.format.DateFormat
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -140,7 +142,8 @@ internal fun filterChannels(
     val needle = query.trim()
     if (filter is LiveTvFilter.Custom) {
         // In the viewer's order; a channel its source no longer lists is left out.
-        val urls = customLists.firstOrNull { it.id == filter.id }?.urls ?: return emptyList()
+        // Once each: a synced list naming a channel twice would repeat a row key.
+        val urls = customLists.firstOrNull { it.id == filter.id }?.urls?.distinct() ?: return emptyList()
         val wanted = urls.toHashSet()
         val byUrl = HashMap<String, LiveTvChannel>(urls.size * 2)
         channels.forEach { if (it.streamUrl in wanted) byUrl.putIfAbsent(it.streamUrl, it) }
@@ -157,6 +160,15 @@ internal fun filterChannels(
                 channel.sourceId == filter.id && channel.group == filter.name && channel.hideKey !in hiddenChannels
         } && (needle.isEmpty() || channel.name.contains(needle, ignoreCase = true))
     }
+}
+
+/** The category Live TV opens on: All channels, else (when that is hidden) the first category the list shows. */
+internal fun liveTvHomeFilter(uiState: com.nuvio.tv.reshaped.livetv.LiveTvUiState, showAll: Boolean, showFavorites: Boolean): String = when {
+    showAll -> FILTER_ALL
+    showFavorites && uiState.favoriteUrls.isNotEmpty() -> FILTER_FAVORITES
+    uiState.customLists.isNotEmpty() -> FILTER_LIST_PREFIX + uiState.customLists.first().id
+    uiState.sources.size > 1 -> FILTER_SOURCE_PREFIX + uiState.sources.first().id
+    else -> uiState.visibleGroups.firstOrNull() ?: FILTER_ALL
 }
 
 internal fun filterFor(key: String): LiveTvFilter = when {
@@ -189,7 +201,12 @@ fun LiveTvScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, viewModel) {
         // Back from the background after a long while: the list may have been let go meanwhile.
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_START) viewModel.ensureLoaded() }
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                viewModel.ensureLoaded()
+                com.nuvio.tv.reshaped.sync.ReshapedSync.onLiveTvOpened()
+            }
+        }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
@@ -228,21 +245,27 @@ fun LiveTvScreen(
     // A category that was hidden, or a source that was removed, falls back to all channels.
     // Categories show under their source's heading only with several sources: a category picked
     // the other way follows (or falls back to all channels when that is not possible).
-    LaunchedEffect(uiState.hiddenGroups, uiState.sources, uiState.customLists) {
+    // With All channels (or Favorites) hidden in the settings, the first category shown stands in for it.
+    val showAll by LiveTvPreferences.showAll.collectAsStateWithLifecycle()
+    val showFavorites by LiveTvPreferences.showFavorites.collectAsStateWithLifecycle()
+    LaunchedEffect(uiState.hiddenGroups, uiState.sources, uiState.customLists, showAll, showFavorites, uiState.favoriteUrls.isEmpty()) {
         val multiSource = uiState.sources.size > 1
+        val home = liveTvHomeFilter(uiState, showAll, showFavorites)
         filterKey = when (val current = filterFor(filterKey)) {
             is LiveTvFilter.Group -> when {
-                current.name in uiState.hiddenGroups -> FILTER_ALL
-                multiSource -> FILTER_ALL
+                current.name in uiState.hiddenGroups -> home
+                multiSource -> home
                 else -> filterKey
             }
-            is LiveTvFilter.Source -> if (uiState.sources.none { it.id == current.id }) FILTER_ALL else filterKey
-            is LiveTvFilter.Custom -> if (uiState.customLists.none { it.id == current.id }) FILTER_ALL else filterKey
+            is LiveTvFilter.Source -> if (uiState.sources.none { it.id == current.id }) home else filterKey
+            is LiveTvFilter.Custom -> if (uiState.customLists.none { it.id == current.id }) home else filterKey
             is LiveTvFilter.SourceGroup -> when {
-                current.name in uiState.hiddenGroups || uiState.sources.none { it.id == current.id } -> FILTER_ALL
+                current.name in uiState.hiddenGroups || uiState.sources.none { it.id == current.id } -> home
                 !multiSource -> current.name
                 else -> filterKey
             }
+            LiveTvFilter.All -> if (showAll) filterKey else home
+            LiveTvFilter.Favorites -> if (showFavorites) filterKey else home
             else -> filterKey
         }
     }
@@ -293,9 +316,14 @@ fun LiveTvScreen(
                     }
                     viewModel.restoreFocusOnReturn = true
                     onPlay(route)
-                } catch (error: Exception) {
+                } catch (cancel: kotlinx.coroutines.CancellationException) {
                     launching = false
-                    throw error
+                    throw cancel
+                } catch (error: Exception) {
+                    // Shown as a failed play, never a closed app.
+                    launching = false
+                    android.util.Log.w("LiveTv", "Could not start playback", error)
+                    android.widget.Toast.makeText(context, R.string.live_tv_catchup_failed, android.widget.Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -683,6 +711,10 @@ private fun LiveTvMenuDialog(
 ) {
     val context = LocalContext.current
     val previewSound = rememberLiveTvPreviewSoundEnabled()
+    val showFavorites by LiveTvPreferences.showFavorites.collectAsStateWithLifecycle()
+    val showAll by LiveTvPreferences.showAll.collectAsStateWithLifecycle()
+    val preferHls by LiveTvPreferences.preferHls.collectAsStateWithLifecycle()
+    val guideRefreshHours by LiveTvPreferences.guideRefreshHours.collectAsStateWithLifecycle()
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         repeat(5) {
@@ -697,37 +729,66 @@ private fun LiveTvMenuDialog(
         usePlatformDefaultWidth = false,
         contentSpacing = NuvioTheme.spacing.sm,
     ) {
-        LiveTvMenuRow(
-            title = stringResource(R.string.live_tv_menu_sources),
-            description = stringResource(R.string.live_tv_menu_sources_description),
-            onClick = onSources,
-            modifier = Modifier.focusRequester(first),
-        )
-        LiveTvMenuRow(
-            title = stringResource(R.string.live_tv_menu_categories),
-            description = stringResource(R.string.live_tv_menu_categories_description),
-            onClick = onEditCategories,
-        )
-        LiveTvMenuRow(
-            title = stringResource(R.string.live_tv_my_playlists),
-            description = stringResource(R.string.live_tv_menu_playlists_description),
-            onClick = onPlaylists,
-        )
-        LiveTvMenuRow(
-            title = stringResource(R.string.live_tv_menu_reload),
-            description = stringResource(if (loading) R.string.live_tv_loading else R.string.live_tv_menu_reload_description),
-            onClick = {
-                if (!loading) {
-                    LiveTvRepository.refresh()
-                    onDismiss()
-                }
-            },
-        )
-        if (previews) {
+        // Scrolls when the rows outgrow the dialog (a 720p TV).
+        Column(
+            modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
+        ) {
             LiveTvMenuRow(
-                title = stringResource(R.string.live_tv_menu_preview_sound),
-                description = stringResource(if (previewSound) R.string.live_tv_menu_on else R.string.live_tv_menu_off),
-                onClick = { LiveTvPreferences.setPreviewSound(context, !previewSound) },
+                title = stringResource(R.string.live_tv_menu_sources),
+                description = stringResource(R.string.live_tv_menu_sources_description),
+                onClick = onSources,
+                modifier = Modifier.focusRequester(first),
+            )
+            LiveTvMenuRow(
+                title = stringResource(R.string.live_tv_menu_categories),
+                description = stringResource(R.string.live_tv_menu_categories_description),
+                onClick = onEditCategories,
+            )
+            LiveTvMenuRow(
+                title = stringResource(R.string.live_tv_my_playlists),
+                description = stringResource(R.string.live_tv_menu_playlists_description),
+                onClick = onPlaylists,
+            )
+            LiveTvMenuRow(
+                title = stringResource(R.string.live_tv_menu_reload),
+                description = stringResource(if (loading) R.string.live_tv_loading else R.string.live_tv_menu_reload_description),
+                onClick = {
+                    if (!loading) {
+                        LiveTvRepository.refresh()
+                        onDismiss()
+                    }
+                },
+            )
+            if (previews) {
+                LiveTvMenuRow(
+                    title = stringResource(R.string.live_tv_menu_preview_sound),
+                    description = stringResource(if (previewSound) R.string.live_tv_menu_on else R.string.live_tv_menu_off),
+                    onClick = { LiveTvPreferences.setPreviewSound(context, !previewSound) },
+                )
+            }
+            LiveTvMenuRow(
+                title = stringResource(R.string.live_tv_menu_show_favorites),
+                description = stringResource(if (showFavorites) R.string.live_tv_menu_on else R.string.live_tv_menu_off),
+                onClick = { LiveTvPreferences.setShowFavorites(context, !showFavorites) },
+            )
+            LiveTvMenuRow(
+                title = stringResource(R.string.live_tv_menu_show_all),
+                description = stringResource(if (showAll) R.string.live_tv_menu_on else R.string.live_tv_menu_off),
+                onClick = { LiveTvPreferences.setShowAll(context, !showAll) },
+            )
+            LiveTvMenuRow(
+                title = stringResource(R.string.live_tv_menu_prefer_hls),
+                description = stringResource(if (preferHls) R.string.live_tv_menu_prefer_hls_on else R.string.live_tv_menu_prefer_hls_off),
+                onClick = { LiveTvPreferences.setPreferHls(context, !preferHls) },
+            )
+            LiveTvMenuRow(
+                title = stringResource(R.string.live_tv_menu_guide_refresh),
+                description = stringResource(R.string.live_tv_menu_guide_refresh_value, guideRefreshHours),
+                onClick = {
+                    val options = LiveTvPreferences.guideRefreshOptionsHours
+                    LiveTvPreferences.setGuideRefreshHours(context, options[(options.indexOf(guideRefreshHours) + 1) % options.size])
+                },
             )
         }
     }
@@ -1023,13 +1084,15 @@ private fun LiveTvCategoryColumn(
             add(LiveTvCategoryEntry(NEW_LIST_KEY, newListLabel, action = true))
         }
     }
-    val entries = remember(newListLabel, sections, visibleGroups, uiState.groupNames, uiState.customLists, collapsed.toMap(), allLabel, favoritesLabel, uncategorised) {
+    val showAll by LiveTvPreferences.showAll.collectAsStateWithLifecycle()
+    val showFavorites by LiveTvPreferences.showFavorites.collectAsStateWithLifecycle()
+    val entries = remember(newListLabel, sections, visibleGroups, uiState.groupNames, uiState.customLists, collapsed.toMap(), allLabel, favoritesLabel, uncategorised, showAll, showFavorites) {
         fun label(group: String) = liveTvGroupName(group, uiState.groupNames) ?: if (group == LIVE_TV_UNGROUPED) uncategorised else group
         buildList {
-            add(LiveTvCategoryEntry(FILTER_FAVORITES, favoritesLabel))
+            if (showFavorites) add(LiveTvCategoryEntry(FILTER_FAVORITES, favoritesLabel))
             uiState.customLists.forEach { add(LiveTvCategoryEntry(FILTER_LIST_PREFIX + it.id, it.name, count = it.urls.size, listId = it.id)) }
             add(LiveTvCategoryEntry(NEW_LIST_KEY, newListLabel, action = true))
-            add(LiveTvCategoryEntry(FILTER_ALL, allLabel, count = sections?.total))
+            if (showAll) add(LiveTvCategoryEntry(FILTER_ALL, allLabel, count = sections?.total))
             val bySource = sections?.sources
             if (bySource != null && bySource.size > 1) {
                 bySource.forEach { section ->

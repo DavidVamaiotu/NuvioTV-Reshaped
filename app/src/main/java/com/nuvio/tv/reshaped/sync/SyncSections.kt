@@ -37,15 +37,42 @@ internal object LiveTvSections {
      * [data] as sections. A source keeps the id the file already gives it ([base]), so devices
      * that each gave the same source their own id do not keep replacing each other's.
      */
-    fun toSections(profileId: Int, data: LiveTvSyncData, base: SyncSections): Map<String, Map<String, JsonElement>> {
+    fun toSections(
+        profileId: Int,
+        data: LiveTvSyncData,
+        base: SyncSections,
+        /** The Drive copies of imported playlists, by source id (see [SyncedPlaylists]). */
+        playlists: Map<String, SyncedPlaylists.Ref> = emptyMap(),
+    ): Map<String, Map<String, JsonElement>> {
         val knownSources = SyncDoc.values(base, sources(profileId))
-        return sectionsWith(profileId, data, knownSources)
+        return sectionsWith(profileId, data, knownSources, playlists)
     }
 
-    private fun sectionsWith(profileId: Int, data: LiveTvSyncData, knownSources: Map<String, JsonElement>): Map<String, Map<String, JsonElement>> = mapOf(
-        sources(profileId) to data.sources.associate { source ->
-            val known = (knownSources[source.identity] as? JsonObject)?.text("id")
-            source.identity to source.copy(id = known?.takeIf(String::isNotBlank) ?: source.id).toJson()
+    private fun sectionsWith(
+        profileId: Int,
+        data: LiveTvSyncData,
+        knownSources: Map<String, JsonElement>,
+        playlists: Map<String, SyncedPlaylists.Ref>,
+    ): Map<String, Map<String, JsonElement>> = mapOf(
+        sources(profileId) to buildMap {
+            data.sources.forEach { source ->
+                val knownEntry = knownSources[source.identity] as? JsonObject
+                val known = knownEntry?.text("id")
+                val json = source.copy(id = known?.takeIf(String::isNotBlank) ?: source.id).toJson()
+                if (!SyncedPlaylists.isImported(source)) {
+                    put(source.identity, json)
+                    return@forEach
+                }
+                // An imported playlist: named with its Drive copy. Without one yet (not sent, or
+                // the upload failed), the entry the file has stays as it is, never deleted.
+                val ref = playlists[source.id]
+                when {
+                    ref != null -> put(source.identity, JsonObject(json + mapOf(
+                        "type" to JsonPrimitive(FILE_TYPE), "file" to JsonPrimitive(ref.driveId), "hash" to JsonPrimitive(ref.hash),
+                    )))
+                    knownEntry != null -> put(source.identity, knownEntry)
+                }
+            }
         },
         favorites(profileId) to data.favorites.associateWith { TRUE },
         customLists(profileId) to data.customLists.mapValues { (_, list) -> list.toJson() },
@@ -79,6 +106,7 @@ internal object LiveTvSections {
         // Only when set, so a source without one reads the same as from versions before guide links.
         if (epgUrl.isNotBlank()) put("epg", epgUrl)
         if (name.isNotBlank()) put("name", name)
+        if (userAgent.isNotBlank()) put("ua", userAgent)
         when (type) {
             LiveTvSourceType.M3u -> Unit
             LiveTvSourceType.Xtream -> {
@@ -97,9 +125,28 @@ internal object LiveTvSections {
 
     private fun JsonObject.text(key: String): String = (get(key) as? JsonPrimitive)?.contentOrNull.orEmpty()
 
+    /** The Drive copy each synced imported playlist names, by source identity. */
+    fun playlistRefs(profileId: Int, doc: SyncSections): Map<String, SyncedPlaylists.Ref> =
+        SyncDoc.values(doc, sources(profileId)).mapNotNull { (identity, value) ->
+            val entry = value as? JsonObject ?: return@mapNotNull null
+            if (entry.text("type") != FILE_TYPE) return@mapNotNull null
+            val file = entry.text("file").ifBlank { return@mapNotNull null }
+            identity to SyncedPlaylists.Ref(file, entry.text("hash"))
+        }.toMap()
+
+    /**
+     * An imported playlist's type in the file. The phone app (one source, links and logins only)
+     * keeps it without reading it; TV versions before this one drop it when they sync.
+     */
+    private const val FILE_TYPE = "M3uFile"
+
     private fun JsonObject.toSource(): LiveTvSource? {
+        if (text("type") == FILE_TYPE) {
+            val name = text("url").ifBlank { return null }
+            return LiveTvSource(text("id"), LiveTvSourceType.M3u, name, epgUrl = text("epg"), name = text("name"), userAgent = text("ua"))
+        }
         val type = LiveTvSourceType.entries.firstOrNull { it.name == text("type") } ?: return null
-        return toSourceOfType(type)?.copy(epgUrl = text("epg"), name = text("name"))
+        return toSourceOfType(type)?.copy(epgUrl = text("epg"), name = text("name"), userAgent = text("ua"))
     }
 
     private fun JsonObject.toSourceOfType(type: LiveTvSourceType): LiveTvSource? {

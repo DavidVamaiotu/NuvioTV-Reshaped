@@ -14,7 +14,12 @@ internal data class ParsedM3uPlaylist(
  * without ever sitting in memory as one string. Duplicate links and "#### Category ####"
  * separator entries are dropped.
  */
-internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
+internal fun parseM3uPlaylist(lines: Sequence<String>, baseUrl: String? = null): ParsedM3uPlaylist {
+    val base = baseUrl?.takeIf { it.isHttpUrl() }?.toHttpUrlOrNull()
+    // A link that is not a playlist (a stream, a web page) is given up on early, not read forever.
+    var linesRead = 0
+    var sawPlaylistTag = false
+    var pendingGroup: String? = null
     val channels = ArrayList<LiveTvChannel>()
     val seenUrls = HashSet<String>()
     val epgUrls = LinkedHashSet<String>()
@@ -30,9 +35,11 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
 
     for (rawLine in lines) {
         val line = rawLine.trim().removePrefix("﻿")
+        if (!sawPlaylistTag && channels.isEmpty() && ++linesRead > NOT_A_PLAYLIST_LINES) break
         when {
             line.isEmpty() -> Unit
             line.startsWith("#EXTM3U", ignoreCase = true) -> {
+                sawPlaylistTag = true
                 val attributes = parseM3uAttributes(line)
                 defaultCatchup = attributes.filterKeys { it in CATCHUP_ATTRIBUTES }
                 listOfNotNull(attributes["url-tvg"], attributes["x-tvg-url"], attributes["tvg-url"])
@@ -42,30 +49,48 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
                     .forEach(epgUrls::add)
             }
             line.startsWith("#EXT-X-", ignoreCase = true) -> {
-                // HLS tags: this is a stream's own playlist, and its "entries" are video segments.
-                isHlsStream = true
-                break
+                // HLS tags before any channel: this is a stream's own playlist, and its "entries"
+                // are video segments. One stray tag inside a channel list is ignored.
+                if (channels.isEmpty() && metadata == null) {
+                    isHlsStream = true
+                    break
+                }
             }
-            line.startsWith("#EXTINF", ignoreCase = true) -> metadata = parseExtInf(line)
+            line.startsWith("#EXTINF", ignoreCase = true) -> {
+                sawPlaylistTag = true
+                metadata = parseExtInf(line)
+            }
+            line.startsWith("#EXTGRP:", ignoreCase = true) -> pendingGroup = line.substringAfter(':').trim()
             line.startsWith("#EXTVLCOPT:http-user-agent=", ignoreCase = true) ->
                 pendingHeaders = pendingHeaders + ("User-Agent" to line.substringAfter('=').trim())
-            line.startsWith("#EXTVLCOPT:http-referrer=", ignoreCase = true) ->
+            line.startsWith("#EXTVLCOPT:http-referrer=", ignoreCase = true) ||
+                line.startsWith("#EXTVLCOPT:http-referer=", ignoreCase = true) ->
                 pendingHeaders = pendingHeaders + ("Referer" to line.substringAfter('=').trim())
+            line.startsWith("#EXTVLCOPT:http-origin=", ignoreCase = true) ->
+                pendingHeaders = pendingHeaders + ("Origin" to line.substringAfter('=').trim())
             line.startsWith("#EXTHTTP:", ignoreCase = true) ->
                 pendingHeaders = pendingHeaders + parseExtHttpHeaders(line.substringAfter(':'))
             line.startsWith("#") -> Unit
             else -> {
-                val url = line.substringBefore('|').trim()
                 val current = metadata
                 metadata = null
                 val headers = pendingHeaders
                 pendingHeaders = emptyMap()
+                val extGroup = pendingGroup
+                pendingGroup = null
+                // Only links: web page or binary lines (a link that is not a playlist) are not channels.
+                val written = line.substringBefore('|').trim()
+                val url = when {
+                    "://" in written -> written
+                    current != null && base != null -> base.resolve(written)?.toString() ?: continue
+                    else -> continue
+                }
                 if (url.isEmpty() || !seenUrls.add(url)) continue
                 val name = current?.name?.takeIf(String::isNotBlank) ?: "Channel ${channels.size + 1}"
                 if (isLikelyCategoryHeading(name)) continue
                 val extraHeaders = headers + parseUrlHeaders(line)
                 val defaults = defaultStreamHeaders(url)
-                val group = current?.group.orEmpty()
+                val group = current?.group?.takeIf(String::isNotBlank) ?: extGroup.orEmpty()
                 channels += LiveTvChannel(
                     id = "m${channels.size}",
                     name = name,
@@ -88,6 +113,9 @@ internal fun parseM3uPlaylist(lines: Sequence<String>): ParsedM3uPlaylist {
     channels.trimToSize()
     return ParsedM3uPlaylist(channels = channels, epgUrls = epgUrls.toList())
 }
+
+/** Lines read without any playlist tag or channel before a link counts as "not a playlist". */
+private const val NOT_A_PLAYLIST_LINES = 2_000
 
 private class M3uMetadata(
     val name: String,
@@ -156,13 +184,20 @@ private fun parseUrlHeaders(line: String): Map<String, String> {
     if (options.isEmpty()) return emptyMap()
     return options.split('&').mapNotNull { entry ->
         val key = entry.substringBefore('=').trim()
-        val value = entry.substringAfter('=', "").trim()
+        val raw = entry.substringAfter('=', "").trim()
+        val value = if ('%' in raw) runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw) else raw
         if (key.isBlank() || value.isBlank()) null else key to value
     }.toMap()
 }
 
 private fun parseExtHttpHeaders(value: String): Map<String, String> =
-    value.trim().removePrefix("{").removeSuffix("}")
+    // Usually JSON ({"User-Agent":"Mozilla/5.0 (KHTML, like Gecko)"}), whose values may hold commas.
+    runCatching {
+        val json = org.json.JSONObject(value.trim())
+        json.keys().asSequence().mapNotNull { key ->
+            json.optString(key).trim().takeIf { key.isNotBlank() && it.isNotBlank() }?.let { key to it }
+        }.toMap()
+    }.getOrNull() ?: value.trim().removePrefix("{").removeSuffix("}")
         .split(',')
         .mapNotNull { entry ->
             val key = entry.substringBefore(':').trim().trim('"')
@@ -229,6 +264,14 @@ internal val LIVE_TV_PLAYLIST_HEADERS = mapOf(
 )
 
 internal val LIVE_TV_STREAM_HEADERS = mapOf("User-Agent" to "VLC/3.0.0 LibVLC/3.0.0")
+
+/** [headers] with the user agent a source was given ([LiveTvSource.userAgent]); as they are when it has none. */
+internal fun withLiveTvUserAgent(headers: Map<String, String>, userAgent: String): Map<String, String> {
+    // HTTP headers take printable ASCII only; a typed "é" or curly quote would fail every request.
+    val agent = userAgent.filter { it in ' '..'~' }.trim()
+    if (agent.isEmpty()) return headers
+    return headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) } + ("User-Agent" to agent)
+}
 
 private fun firstUnquotedComma(line: String): Int {
     var quoted = false

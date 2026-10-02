@@ -80,6 +80,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
     var stalkerPassword by rememberSaveable { mutableStateOf("") }
     var epgLink by rememberSaveable { mutableStateOf("") }
     var sourceName by rememberSaveable { mutableStateOf("") }
+    var userAgent by rememberSaveable { mutableStateOf("") }
     /** The saved source the form edits; null while adding. */
     var editingId by rememberSaveable { mutableStateOf<String?>(null) }
     val editing = editingId?.let { id -> uiState.sources.firstOrNull { it.id == id } }
@@ -96,7 +97,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
             adding = false
             editingId = null
             m3uUrl = ""; xtreamServer = ""; xtreamUser = ""; xtreamPassword = ""
-            stalkerPortal = ""; stalkerMac = ""; stalkerUser = ""; stalkerPassword = ""; epgLink = ""; sourceName = ""
+            stalkerPortal = ""; stalkerMac = ""; stalkerUser = ""; stalkerPassword = ""; epgLink = ""; sourceName = ""; userAgent = ""
         }
     }
 
@@ -209,6 +210,7 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                                 stalkerPassword = source.stalker.password
                                 epgLink = source.epgUrl
                                 sourceName = source.name
+                                userAgent = source.userAgent
                                 editingId = source.id
                                 adding = true
                             },
@@ -298,6 +300,10 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                         }
                     }
                     LiveTvTextField(epgLink, { epgLink = it }, stringResource(R.string.live_tv_epg_hint))
+                    // Portals need their own set-top box agent, so only lists and Xtream panels take one.
+                    if (tab != LiveTvSourceType.Stalker) {
+                        LiveTvTextField(userAgent, { userAgent = it }, stringResource(R.string.live_tv_user_agent_hint), keyboardType = KeyboardType.Ascii)
+                    }
 
                     val status = when {
                         uiState.isLoading -> stringResource(R.string.live_tv_loading)
@@ -330,12 +336,12 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                                 if (editing != null) {
                                     LiveTvRepository.updateSource(
                                         editing.id,
-                                        LiveTvSource(editing.id, editing.type, m3uUrl, stalker = stalker, xtream = xtream, epgUrl = epgLink, name = sourceName),
+                                        LiveTvSource(editing.id, editing.type, m3uUrl, stalker = stalker, xtream = xtream, epgUrl = epgLink, name = sourceName, userAgent = userAgent),
                                     )
                                 } else {
                                     when (tab) {
-                                        LiveTvSourceType.M3u -> LiveTvRepository.loadM3uUrl(m3uUrl, epgLink)
-                                        LiveTvSourceType.Xtream -> LiveTvRepository.loadXtream(xtream, epgLink)
+                                        LiveTvSourceType.M3u -> LiveTvRepository.loadM3uUrl(m3uUrl, epgLink, userAgent)
+                                        LiveTvSourceType.Xtream -> LiveTvRepository.loadXtream(xtream, epgLink, userAgent)
                                         LiveTvSourceType.Stalker -> LiveTvRepository.loadStalker(stalker, epgLink)
                                     }
                                 }
