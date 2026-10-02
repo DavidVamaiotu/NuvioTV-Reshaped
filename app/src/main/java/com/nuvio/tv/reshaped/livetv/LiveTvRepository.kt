@@ -97,6 +97,8 @@ object LiveTvRepository {
     /** The guide programmes kept for each [LiveTvChannel.guideKey], for "up next" and the guide. */
     @Volatile private var keptSchedule: LiveTvSchedule = emptyMap()
     private var epgKey: Triple<List<String>, Set<String>, Long>? = null
+    /** A guide read waiting for the sources still loading; set and started on [serial]. */
+    @Volatile private var pendingEpg: Triple<List<String>, List<LiveTvChannel>, Set<String>>? = null
     /** How much guide is kept per channel; less on low-memory TVs. */
     @Volatile internal var guideWindow: LiveTvGuideWindow = LiveTvGuideWindow.Regular
         private set
@@ -147,6 +149,7 @@ object LiveTvRepository {
         profileJob = scope.launch(serial) {
             stopEpg()
             epgKey = null
+            pendingEpg = null
             val store = withContext(Dispatchers.IO) {
                 LiveTvStorage(appContext, profileId).also {
                     it.favoriteUrls() // first read parses the file
@@ -212,6 +215,7 @@ object LiveTvRepository {
         cancelAllLoads()
         stopEpg()
         epgKey = null
+        pendingEpg = null
         loaded.clear()
         zapList = emptyList()
         zapFolderKey = null
@@ -572,7 +576,10 @@ object LiveTvRepository {
                 logoUrl = recent.logoUrl,
                 group = recent.group,
                 headers = defaultStreamHeaders(recent.streamUrl),
-                guideKey = recent.guideKey,
+                // Guide keys are scoped to a playlist: borrow the key of a listed channel with the same guide id.
+                guideKey = recent.tvgId?.takeIf(String::isNotBlank)?.let { id ->
+                    _uiState.value.channels.firstOrNull { it.tvgId.equals(id, ignoreCase = true) }?.guideKey
+                } ?: recent.guideKey,
             )
 
     /** Whether [channel] comes from a Stalker portal, whose links are created per play. */
@@ -649,6 +656,14 @@ object LiveTvRepository {
     private fun updateLoading() {
         val busy = sourceJobs.values.any { it.isActive }
         _uiState.update { if (it.isLoading == busy) it else it.copy(isLoading = busy) }
+        if (!busy && pendingEpg != null) {
+            scope.launch(serial) {
+                val pending = pendingEpg ?: return@launch
+                if (sourceJobs.values.any { it.isActive }) return@launch
+                pendingEpg = null
+                startEpg(pending.first, pending.second, pending.third)
+            }
+        }
     }
 
     /** A source being added keeps the id of a saved one that is the same source, so it replaces it. */
@@ -983,10 +998,17 @@ object LiveTvRepository {
         if (!hasGuide) {
             stopEpg()
             epgKey = null
+            pendingEpg = null
         } else if (guideChanged) {
             epgKey = guideInput
-            // A slow or failed channel source must not delay the already-loaded sources' EPG.
-            startEpg(epgUrls, channels, guideKeys)
+            // Each source that finishes changes the channels: read the guide once, after the last,
+            // so finished sources don't cancel and restart downloads already under way.
+            if (sourceJobs.values.any { it.isActive }) {
+                pendingEpg = Triple(epgUrls, channels, guideKeys)
+            } else {
+                pendingEpg = null
+                startEpg(epgUrls, channels, guideKeys)
+            }
         }
     }
 
@@ -1132,7 +1154,9 @@ object LiveTvRepository {
      */
     private fun startEpg(epgUrls: List<String>, channels: List<LiveTvChannel>, guideKeys: Set<String>) {
         val window = if (LiveTvDevice.isLowMemory(appContext)) LiveTvGuideWindow.LowMemory else LiveTvGuideWindow.Regular
-        // The last good guide stays visible while an independent refresh is running.
+        // What is shown stays until the new read replaces it; weak TVs let go of the old
+        // programmes first, so two guides are never held at once.
+        if (window === LiveTvGuideWindow.LowMemory) keptSchedule = emptyMap()
         epgGeneration++
         epgJob?.cancel()
         val generation = epgGeneration
@@ -1146,12 +1170,10 @@ object LiveTvRepository {
         // Which sources each guide belongs to, and how a portal's guide is fetched. Read here, on [serial].
         val sourceLinks = _uiState.value.sources.associate { it.id to loaded[it.id]?.epgUrls.orEmpty() }
         val sourcesById = _uiState.value.sources.associateBy { it.id }
-        // A feed belongs only to the playlists that list it. Matching every feed against every
-        // source allowed the first provider's names/ids to overwrite another provider's guide.
-        val requests = epgUrls.map { url ->
-            val owners = sourceLinks.filterValues { url in it }.keys
-            LiveTvGuideRequest.from(channels.filter { it.sourceId in owners })
-        }
+        // Every feed is matched against every channel, so a playlist without a guide of its own
+        // still finds its channels in another source's guide; the ranks below make a playlist's
+        // own guides win over another source's for its channels.
+        val request = LiveTvGuideRequest.from(channels)
         val sourceForKey = channels.associate { it.guideKey to it.sourceId }
         val aheadHours = (window.aheadMs / (60L * 60 * 1000)).toInt()
         val downloads: List<suspend (File) -> Unit> = epgUrls.map { url ->
@@ -1174,7 +1196,7 @@ object LiveTvRepository {
         epgJob = scope.launch {
             withContext(Dispatchers.IO) {
                 // Guides of an earlier source.
-                guideDir().listFiles()?.filter { it.name.endsWith(".xml.gz") && it !in guideFiles }?.forEach(File::delete)
+                guideDir().listFiles()?.filter { it !in guideFiles && it != cacheFile }?.forEach(File::delete)
             }
             var schedule: LiveTvSchedule = keptSchedule
             var nextReadAtMs = 0L
@@ -1225,13 +1247,13 @@ object LiveTvRepository {
                             var partial = false
                             val scheduleRanks = HashMap<String, Int>()
                             val logoRanks = HashMap<String, Int>()
-                            // Two independent imports at most, and a bounded result queue. A slow
-                            // first feed no longer prevents a faster provider's guide from showing.
-                            loadLiveTvGuides(epgUrls.size, read = { index ->
+                            // Two independent imports at most (one on weak TVs), and a bounded result
+                            // queue. A slow first feed no longer prevents a faster provider's guide from showing.
+                            loadLiveTvGuides(epgUrls.size, parallel = if (window === LiveTvGuideWindow.LowMemory) 1 else 2, read = { index ->
                                 val epgUrl = epgUrls[index]
                                 readGuide(
                                     downloads[index], epgUrl.takeUnless { it.startsWith(STALKER_GUIDE_PREFIX) },
-                                    guideFiles[index], requests[index], nowMs, window, force,
+                                    guideFiles[index], request, nowMs, window, force,
                                 )
                             }, publish = publish@ { index, guide ->
                                 val epgUrl = epgUrls[index]
@@ -1241,8 +1263,9 @@ object LiveTvRepository {
                                 }
                                 if (!guide.complete) partial = true
                                 if (guide.refreshFailed) failedLinks += epgUrl
+                                // A channel's own playlist's guides first, in its order; then the others'.
                                 fun rank(key: String): Int = sourceLinks[sourceForKey[key]]?.indexOf(epgUrl)
-                                    ?.takeIf { it >= 0 } ?: Int.MAX_VALUE
+                                    ?.takeIf { it >= 0 } ?: (epgUrls.size + index)
                                 guide.schedule.forEach { (key, list) ->
                                     val priority = rank(key)
                                     if (priority < (scheduleRanks[key] ?: Int.MAX_VALUE)) {

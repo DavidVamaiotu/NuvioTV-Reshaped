@@ -171,4 +171,17 @@ class LiveTvGuideLoadingTest {
             assertEquals(0, published)
         }
     }
+
+    @Test fun bareAmpersandsAndHtmlEntitiesDoNotCutTheGuideShort() {
+        val selected = channel("one")
+        val guide = read("""
+            <tv>
+              <channel id="shared"><display-name>News</display-name></channel>
+              <programme channel="shared" start="20261002080000 +0000" stop="20261002090000 +0000"><title>Tom & Jerry</title></programme>
+              <programme channel="shared" start="20261002090000 +0000" stop="20261002100000 +0000"><title>Caf&eacute;&nbsp;Live</title></programme>
+            </tv>
+        """.trimIndent(), listOf(selected))
+        assertTrue(guide.complete)
+        assertEquals(2, guide.schedule.getValue(selected.guideKey).size)
+    }
 }

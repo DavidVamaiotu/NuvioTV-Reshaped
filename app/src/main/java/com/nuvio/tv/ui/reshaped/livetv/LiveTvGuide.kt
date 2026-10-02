@@ -4,7 +4,8 @@ package com.nuvio.tv.ui.reshaped.livetv
 
 import android.view.KeyEvent
 import androidx.compose.animation.core.Animatable
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateColorAsState
@@ -454,25 +455,40 @@ internal fun LiveTvGuideGrid(
             val listState = rememberLazyListState(
                 initialFirstVisibleItemIndex = remember { Snapshot.withoutReadObservation { (state.row - 2).coerceAtLeast(0) } },
             )
-            // One scroll at a time. A changed playlist lands immediately; a selection change
-            // animates through LazyListState, which owns remeasurement and scroll cancellation.
+            // The list glides so the selection rests a little above the middle, as Nuvio's rows do.
+            // One animation carries on through each step, keeping its speed, so holding ▲▼ is a
+            // smooth run rather than a series of starts. Read here, not in composition: moving the
+            // selection recomposes only the rows it leaves and enters.
             val rowPx = with(density) { rowHeight.toPx() }
+            val glide = remember { Animatable(0f) }
+            val glideScope = rememberCoroutineScope()
             LaunchedEffect(state, listState, rowPx) {
                 var shownChannels: List<LiveTvChannel>? = null
-                snapshotFlow { state.row to state.channels }.collectLatest { (row, channels) ->
+                snapshotFlow { state.row to state.channels }.collect { (row, channels) ->
                     val changed = shownChannels !== channels
                     shownChannels = channels
-                    if (channels.isEmpty()) return@collectLatest
+                    if (channels.isEmpty()) return@collect
                     val info = listState.layoutInfo
                     val viewport = (info.viewportEndOffset - info.viewportStartOffset).toFloat()
                     val anchorRows = if (viewport > 0f) ((viewport * SELECTION_AT) / rowPx).toInt() else 2
                     val targetIndex = (row - anchorRows).coerceIn(0, channels.lastIndex)
                     val target = targetIndex * rowPx
                     val current = listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset
+                    // A jump (another playlist, a page, back from the player) lands at once.
                     if (changed || info.visibleItemsInfo.isEmpty() || kotlin.math.abs(target - current) > viewport * 1.5f) {
-                        listState.scrollToItem(targetIndex)
-                    } else {
-                        listState.animateScrollToItem(targetIndex)
+                        glideScope.launch {
+                            glide.stop()
+                            listState.scrollToItem(targetIndex)
+                            glide.snapTo(listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset)
+                        }
+                        return@collect
+                    }
+                    if (!glide.isRunning) glide.snapTo(current)
+                    glideScope.launch {
+                        glide.animateTo(target, GUIDE_GLIDE) {
+                            val now = listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset
+                            listState.dispatchRawDelta(value - now)
+                        }
                     }
                 }
             }

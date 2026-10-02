@@ -24,6 +24,7 @@ import org.xmlpull.v1.XmlPullParser
 internal typealias LiveTvSchedule = Map<String, List<LiveTvProgramme>>
 
 private const val CANCEL_CHECK_EVENTS = 4096
+private const val RELAXED_FEATURE = "http://xmlpull.org/v1/doc/features.html#relaxed"
 
 /**
  * How much of the guide is kept per channel: programmes that ended up to [pastMs] ago (at most
@@ -147,8 +148,10 @@ internal suspend fun loadLiveTvGuides(
     count: Int,
     read: suspend (Int) -> LiveTvGuide?,
     publish: (Int, LiveTvGuide?) -> Unit,
+    /** Guides read at once; 1 on low-memory TVs, so two parses never share the heap. */
+    parallel: Int = 2,
 ) = coroutineScope {
-    val permits = Semaphore(2)
+    val permits = Semaphore(parallel.coerceAtLeast(1))
     val results = Channel<Pair<Int, LiveTvGuide?>>(1)
     repeat(count) { index ->
         launch {
@@ -200,6 +203,8 @@ internal fun readXmlTvGuide(
 private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parserFactory: () -> XmlPullParser) {
     val parser = parserFactory()
     parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
+    // Provider guides often hold a bare "&" or HTML entities (&nbsp;): strict reading would stop there.
+    runCatching { parser.setFeature(RELAXED_FEATURE, true) }
     parser.setInput(input, null)
     var events = 0
     var opened = false
