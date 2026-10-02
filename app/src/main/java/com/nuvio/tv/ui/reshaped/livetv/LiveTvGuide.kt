@@ -171,6 +171,8 @@ internal class LiveTvGuideState(
     private var followsNow = true
 
     private var handledDown = -1
+    /** Repeats of a held ◀ while at the left edge, see [moveProgramme]. */
+    private var heldAtEdge = 0
     private var longPressed = false
 
     fun onKey(event: KeyEvent): Boolean {
@@ -251,10 +253,15 @@ internal class LiveTvGuideState(
         if (step < 0 && onExitLeft != null && anchorMs <= now &&
             (target == null || !LiveTvCatchupLinks.isPlayable(channel?.catchup, target, now))
         ) {
-            // Only a fresh press leaves: a held ◀ stops at the oldest programme.
-            if (!repeating) onExitLeft.invoke()
+            // A held ◀ pauses on what is on now, then goes on to the categories: it never
+            // needs letting go and pressing again, which felt stuck.
+            if (!repeating || ++heldAtEdge >= EXIT_AFTER_REPEATS) {
+                heldAtEdge = 0
+                onExitLeft.invoke()
+            }
             return true
         }
+        heldAtEdge = 0
         followsNow = false
         anchorMs = when {
             // Adjacent programme; one that started before the view is anchored where it shows.
@@ -280,6 +287,7 @@ internal class LiveTvGuideState(
 
     internal companion object {
         const val PAGE = 6
+        const val EXIT_AFTER_REPEATS = 6
         val GUIDE_KEYS = intArrayOf(
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
@@ -547,7 +555,7 @@ private fun GuideRow(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            LiveTvLogo(url = logo, name = channel.name, width = 54.dp, height = 34.dp)
+            LiveTvLogo(url = logo, name = channel.name, width = 44.dp, height = 26.dp)
             Text(
                 text = channel.name,
                 style = MaterialTheme.typography.bodyMedium,

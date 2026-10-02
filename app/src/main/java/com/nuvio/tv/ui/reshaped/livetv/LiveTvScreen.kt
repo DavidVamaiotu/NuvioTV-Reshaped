@@ -45,6 +45,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
@@ -199,6 +212,9 @@ fun LiveTvScreen(
     var showPlaylists by remember { mutableStateOf(false) }
     // Naming a new playlist (from "+ New playlist" in the categories).
     var naming by remember { mutableStateOf(false) }
+    // Categories, search and settings slide in beside the channels on ◀ (or Back), and away again
+    // once the guide has focus, so the guide has the whole width the rest of the time.
+    var categoriesOpen by remember { mutableStateOf(false) }
     // A playlist opened to rename, reorder or delete (hold OK on it in the categories).
     var editingList by remember { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
@@ -289,25 +305,33 @@ fun LiveTvScreen(
     val categoryList = rememberLazyListState()
     // Focus put on a category by the guide (Back, ◀) does not pick it: only the viewer's moves do.
     val holdCategory = remember { mutableStateOf(false) }
+    /** Opens the categories and focuses [target] there once they are composed. */
+    val openCategories: (FocusRequester) -> Unit = { target ->
+        categoriesOpen = true
+        scope.launch {
+            repeat(3) {
+                withFrameNanos { }
+                if (runCatching { target.requestFocus() }.isSuccess) return@launch
+            }
+            // The selected category is out of view: brought into view first.
+            val index = if (target === categoryFocus) viewModel.categoryKeys.indexOf(filterKey) else 0
+            if (index >= 0) categoryList.scrollToItem((index - 3).coerceAtLeast(0))
+            repeat(5) {
+                withFrameNanos { }
+                if (runCatching { target.requestFocus() }.isSuccess) return@launch
+            }
+            focusManager.moveFocus(FocusDirection.Left)
+        }
+    }
     val toCategories: () -> Unit = {
         holdCategory.value = true
-        if (runCatching { categoryFocus.requestFocus() }.isFailure) {
-            // The selected category is out of view: brought into view first.
-            scope.launch {
-                val index = viewModel.categoryKeys.indexOf(filterKey)
-                if (index >= 0) categoryList.scrollToItem((index - 3).coerceAtLeast(0))
-                repeat(5) {
-                    withFrameNanos { }
-                    if (runCatching { categoryFocus.requestFocus() }.isSuccess) return@launch
-                }
-                focusManager.moveFocus(FocusDirection.Left)
-            }
-        }
+        openCategories(categoryFocus)
     }
     val toGuide: () -> Boolean = {
         visibleChannels.isNotEmpty() && runCatching { gridFocus.requestFocus() }.isSuccess
     }
     val currentToCategories by rememberUpdatedState(toCategories)
+    val currentOpenCategories by rememberUpdatedState(openCategories)
     // Unfavouriting a channel in Favorites removes its row: the guide moves to the next one, or
     // to the categories when none is left.
     var keepAfterRefilter by remember { mutableStateOf<String?>(null) }
@@ -337,15 +361,7 @@ fun LiveTvScreen(
             onClose = { currentToCategories() },
             onExitLeft = { currentToCategories() },
             // ▲ from the first channel: the settings button, at the top of the categories.
-            onExitUp = {
-                if (runCatching { settingsFocus.requestFocus() }.isFailure) {
-                    scope.launch {
-                        categoryList.scrollToItem(0)
-                        withFrameNanos { }
-                        runCatching { settingsFocus.requestFocus() }
-                    }
-                }
-            },
+            onExitUp = { currentOpenCategories(settingsFocus) },
             onLongPress = { channel -> listsFor = channel },
             leadMs = 0L,
         )
@@ -397,42 +413,23 @@ fun LiveTvScreen(
                     clock = minuteClock,
                     showTitle = showBuiltInHeader,
                     preview = if (previewsEnabled) preview else null,
-                    playVideo = (gridFocused || settingsFocused) && started && !launching &&
+                    playVideo = (gridFocused || settingsFocused || categoriesOpen) && started && !launching &&
                         !showSourceDialog && !showCategoryDialog && !showMenu && !showPlaylists && listsFor == null &&
                         !naming && editingList == null,
                 )
-                Spacer(Modifier.height(NuvioTheme.spacing.md))
-                Row(modifier = Modifier.fillMaxSize()) {
-                    LiveTvCategoryColumn(
-                        uiState = uiState,
-                        listState = categoryList,
-                        holdSelection = holdCategory,
-                        viewModel = viewModel,
-                        query = query,
-                        onQueryChange = { query = it },
-                        selectedKey = filterKey,
-                        selectedFocus = categoryFocus,
-                        onSelect = { filterKey = it },
-                        onNewList = { naming = true },
-                        onEditList = { editingList = it },
-                        settingsButton = {
-                            LiveTvPillButton(
-                                text = "",
-                                icon = Icons.Filled.Settings,
-                                iconDescription = stringResource(R.string.live_tv_settings),
-                                onClick = { showMenu = true },
-                                modifier = Modifier
-                                    .focusRequester(settingsFocus)
-                                    .onFocusChanged { settingsFocused = it.isFocused },
-                            )
-                        },
-                        modifier = Modifier.width(CATEGORY_COLUMN).fillMaxHeight(),
+                Spacer(Modifier.height(NuvioTheme.spacing.sm))
+                LaunchedEffect(gridFocused) { if (gridFocused) categoriesOpen = false }
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // The guide moves aside for the categories: drawn moved, not laid out again.
+                    val shift by animateDpAsState(
+                        if (categoriesOpen) CATEGORY_COLUMN + NuvioTheme.spacing.md else 0.dp,
+                        tween(PANEL_MS, easing = FastOutSlowInEasing),
+                        label = "liveTvCategories",
                     )
                     Box(
                         modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .padding(start = NuvioTheme.spacing.md)
+                            .fillMaxSize()
+                            .graphicsLayer { translationX = shift.toPx() }
                             .focusRequester(gridFocus)
                             .onFocusChanged { gridFocused = it.isFocused }
                             .onPreviewKeyEvent { guide.onKey(it.nativeKeyEvent) }
@@ -443,7 +440,7 @@ fun LiveTvScreen(
                             active = gridFocused,
                             clock = minuteClock,
                             channelColumn = 210.dp,
-                            rowHeight = 40.dp,
+                            rowHeight = 36.dp,
                             modifier = Modifier.fillMaxSize(),
                             corner = { LiveTvGuideDate(guide.viewStartMs, minuteClock) },
                         )
@@ -459,6 +456,45 @@ fun LiveTvScreen(
                                 modifier = Modifier.padding(top = 40.dp, start = 8.dp).widthIn(max = 520.dp),
                             )
                         }
+                    }
+                    AnimatedVisibility(
+                        visible = categoriesOpen,
+                        enter = slideInHorizontally(tween(PANEL_MS, easing = FastOutSlowInEasing)) { -it } + fadeIn(tween(PANEL_MS)),
+                        exit = slideOutHorizontally(tween(PANEL_MS, easing = FastOutSlowInEasing)) { -it } + fadeOut(tween(PANEL_MS)),
+                    ) {
+                        LiveTvCategoryColumn(
+                            uiState = uiState,
+                            listState = categoryList,
+                            holdSelection = holdCategory,
+                            viewModel = viewModel,
+                            query = query,
+                            onQueryChange = { query = it },
+                            selectedKey = filterKey,
+                            selectedFocus = categoryFocus,
+                            onSelect = { filterKey = it },
+                            // OK on a category shows its channels.
+                            onPicked = { toGuide() },
+                            onNewList = { naming = true },
+                            onEditList = { editingList = it },
+                            settingsButton = {
+                                LiveTvPillButton(
+                                    text = "",
+                                    icon = Icons.Filled.Settings,
+                                    iconDescription = stringResource(R.string.live_tv_settings),
+                                    onClick = { showMenu = true },
+                                    modifier = Modifier
+                                        .focusRequester(settingsFocus)
+                                        .onFocusChanged { settingsFocused = it.isFocused },
+                                )
+                            },
+                            modifier = Modifier
+                                .width(CATEGORY_COLUMN)
+                                .fillMaxHeight()
+                                // ▶ that nothing in the column used goes back to the guide.
+                                .onKeyEvent { event ->
+                                    event.type == KeyEventType.KeyDown && event.key == Key.DirectionRight && toGuide()
+                                },
+                        )
                     }
                 }
             }
@@ -515,6 +551,9 @@ fun LiveTvScreen(
         )
     }
 }
+
+/** How long the categories take to slide in or out. */
+private const val PANEL_MS = 220
 
 private const val NEW_LIST_KEY = "\u0000newlist"
 
@@ -667,7 +706,7 @@ private fun LiveTvHeader(
     }
 }
 
-private val HEADER_HEIGHT = 124.dp
+private val HEADER_HEIGHT = 116.dp
 
 private const val POSTER_DELAY_MS = 250L
 private val POSTER_WIDTH = HEADER_HEIGHT * 2 / 3
@@ -844,6 +883,7 @@ private fun LiveTvCategoryColumn(
     selectedKey: String,
     selectedFocus: FocusRequester,
     onSelect: (String) -> Unit,
+    onPicked: () -> Unit,
     onNewList: () -> Unit,
     onEditList: (String) -> Unit,
     settingsButton: @Composable () -> Unit,
@@ -934,7 +974,12 @@ private fun LiveTvCategoryColumn(
                 folded = entry.folded,
                 indent = entry.indent,
                 icon = if (entry.action) Icons.Filled.Add else null,
-                onClick = entry.sourceId?.let { id -> { collapsed[id] = !entry.folded } } ?: onNewList.takeIf { entry.action },
+                onClick = entry.sourceId?.let { id -> { collapsed[id] = !entry.folded } } ?: if (entry.action) onNewList else {
+                    {
+                        onSelect(entry.key)
+                        onPicked()
+                    }
+                },
                 onLongClick = entry.listId?.let { id -> { onEditList(id) } },
             ) { if (!entry.action) onSelect(entry.key) }
         }

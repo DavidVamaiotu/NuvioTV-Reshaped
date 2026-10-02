@@ -1175,7 +1175,10 @@ object LiveTvRepository {
                             val failedLinks = HashSet<String>()
                             var partial = false
                             epgUrls.forEachIndexed { index, epgUrl ->
-                                val guide = readGuide(downloads[index], guideFiles[index], request, nowMs, window, force)
+                                val guide = readGuide(
+                                    downloads[index], epgUrl.takeUnless { it.startsWith(STALKER_GUIDE_PREFIX) },
+                                    guideFiles[index], request, nowMs, window, force,
+                                )
                                 if (guide == null) {
                                     failedLinks += epgUrl
                                     return@forEachIndexed
@@ -1261,6 +1264,8 @@ object LiveTvRepository {
      */
     private suspend fun readGuide(
         download: suspend (File) -> Unit,
+        /** The guide's link when it is one to fetch (not a portal's): it is read while it downloads. */
+        url: String?,
         file: File,
         request: LiveTvGuideRequest,
         nowMs: Long,
@@ -1270,6 +1275,24 @@ object LiveTvRepository {
         try {
             val saved = withContext(Dispatchers.IO) { file.lastModified() }
             if (force || saved == 0L || nowMs - saved !in 0 until EPG_DOWNLOAD_MS) {
+                if (url != null) {
+                    try {
+                        val read = LiveTvHttp.downloadReading(
+                            url, LIVE_TV_STREAM_HEADERS, file, LiveTvHttp.GUIDE_READ_TIMEOUT_S,
+                            read = { input -> readXmlTvGuide(input, request, nowMs, window) },
+                            keep = { guide -> guide.elements > 0 },
+                        )
+                        if (read.elements > 0) return read
+                        Log.w(TAG, "Guide link gave no guide")
+                    } catch (cancel: CancellationException) {
+                        throw cancel
+                    } catch (error: Exception) {
+                        Log.w(TAG, "Guide download failed", error)
+                    }
+                    // The guide saved before, if any.
+                    if (saved == 0L) return null
+                    return readXmlTvGuide(file, request, nowMs, window)
+                }
                 try {
                     download(file)
                 } catch (cancel: CancellationException) {

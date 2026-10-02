@@ -90,12 +90,81 @@ internal object LiveTvHttp {
         }
     }
 
+    /**
+     * Downloads [url] into [target] (gzip, as [download] saves it) while [read] parses the same
+     * bytes as they arrive, so a guide is fetched and read in one pass instead of saved first and
+     * then read again: on a weak TV that roughly halves the wait. [target] is replaced only when
+     * [keep] accepts what was read (an HTML error page keeps the guide saved before).
+     */
+    suspend fun <T> downloadReading(
+        url: String,
+        headers: Map<String, String>,
+        target: File,
+        readTimeoutSeconds: Long,
+        read: (InputStream) -> T,
+        keep: (T) -> Boolean,
+    ): T =
+        runInterruptible(Dispatchers.IO) {
+            val http = if (readTimeoutSeconds > 0) client.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build() else client
+            val request = Request.Builder().url(url).apply {
+                headers.forEach { (name, value) -> header(name, value) }
+            }.build()
+            target.parentFile?.mkdirs()
+            val temp = File(target.path + ".part")
+            try {
+                val result = http.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                    val body = response.body ?: throw IOException("Empty response")
+                    BufferedInputStream(body.byteStream(), BUFFER_BYTES).use { buffered ->
+                        val gzipped = buffered.startsWithGzipMagic()
+                        val file = java.io.BufferedOutputStream(temp.outputStream(), BUFFER_BYTES)
+                        (if (gzipped) file else FastGzipOutputStream(file)).use { sink ->
+                            val tee = TeeInputStream(buffered, sink)
+                            val parsed = read(if (gzipped) GZIPInputStream(tee, BUFFER_BYTES) else tee)
+                            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException()
+                            // What the reader left (after </tv>) completes the saved copy.
+                            tee.drain()
+                            parsed
+                        }
+                    }
+                }
+                if (keep(result) && !temp.renameTo(target)) throw IOException("Could not save ${target.name}")
+                result
+            } finally {
+                temp.delete()
+            }
+        }
+
+    /** Passes every byte read on to [copy]. */
+    private class TeeInputStream(private val source: InputStream, private val copy: java.io.OutputStream) : InputStream() {
+        override fun read(): Int = source.read().also { if (it >= 0) copy.write(it) }
+        override fun read(b: ByteArray, off: Int, len: Int): Int = source.read(b, off, len).also { if (it > 0) copy.write(b, off, it) }
+        fun drain() {
+            val buffer = ByteArray(BUFFER_BYTES)
+            while (read(buffer, 0, buffer.size) >= 0) Unit
+        }
+    }
+
+    /** [input], un-gzipped once more when it is itself a gzip file (a .gz guide sent gzipped again). */
+    fun gunzipIfNeeded(input: InputStream): InputStream {
+        val buffered = input as? BufferedInputStream ?: BufferedInputStream(input, BUFFER_BYTES)
+        return if (buffered.startsWithGzipMagic()) GZIPInputStream(buffered, BUFFER_BYTES) else buffered
+    }
+
     /** Whether this gzip file's text starts with `<` (after a byte order mark and spaces). */
     private fun File.startsLikeXml(): Boolean = runCatching {
         GZIPInputStream(inputStream(), 512).use { input ->
             val head = ByteArray(512)
-            val read = input.read(head)
+            // One read can return only a few bytes: fill the head first.
+            var read = 0
+            while (read < head.size) {
+                val n = input.read(head, read, head.size - read)
+                if (n < 0) break
+                read += n
+            }
             if (read <= 0) return false
+            // A .gz guide sent gzipped again holds a second gzip file: the reader opens it too.
+            if (read >= 2 && head[0] == 0x1f.toByte() && head[1] == 0x8b.toByte()) return true
             var index = 0
             if (read >= 3 && head[0] == 0xEF.toByte() && head[1] == 0xBB.toByte() && head[2] == 0xBF.toByte()) index = 3
             while (index < read && head[index].toInt().toChar().isWhitespace()) index++

@@ -109,6 +109,8 @@ internal class LiveTvGuide(
     val truncated: Set<String>,
     /** False when the file broke off (malformed or cut): what was read before it is kept. */
     val complete: Boolean = true,
+    /** How many guide channels and programmes the file had: none means it was no guide (an HTML page). */
+    val elements: Int = 0,
 )
 
 /**
@@ -123,19 +125,27 @@ internal suspend fun readXmlTvGuide(
     nowEpochMs: Long,
     window: LiveTvGuideWindow,
 ): LiveTvGuide =
-    LiveTvHttp.readFile(file) { input ->
-        val builder = LiveTvScheduleBuilder(request, nowEpochMs, window)
-        // A malformed tail (unknown entity, cut download) keeps what was read before it.
-        val complete = try {
-            readGuide(input, builder)
-            true
-        } catch (cancel: CancellationException) {
-            throw cancel
-        } catch (_: Exception) {
-            false
-        }
-        builder.build(complete)
+    LiveTvHttp.readFile(file) { input -> readXmlTvGuide(input, request, nowEpochMs, window) }
+
+/** [readXmlTvGuide] from a stream (blocking): a saved file, or a download as it arrives. */
+internal fun readXmlTvGuide(
+    input: InputStream,
+    request: LiveTvGuideRequest,
+    nowEpochMs: Long,
+    window: LiveTvGuideWindow,
+): LiveTvGuide {
+    val builder = LiveTvScheduleBuilder(request, nowEpochMs, window)
+    // A malformed tail (unknown entity, cut download) keeps what was read before it.
+    val complete = try {
+        readGuide(LiveTvHttp.gunzipIfNeeded(input), builder)
+        !Thread.currentThread().isInterrupted
+    } catch (cancel: CancellationException) {
+        throw cancel
+    } catch (_: Exception) {
+        false
     }
+    return builder.build(complete)
+}
 
 private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder) {
     val parser = Xml.newPullParser()
@@ -150,6 +160,7 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder) {
         if (event == XmlPullParser.START_TAG) {
             when {
                 parser.name.equals("programme", ignoreCase = true) -> {
+                    builder.elements++
                     val channelId = parser.getAttributeValue(null, "channel")?.trim()?.lowercase()
                     val keys = channelId?.let(builder::keysFor)
                     if (keys == null) {
@@ -168,6 +179,7 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder) {
                     }
                 }
                 parser.name.equals("channel", ignoreCase = true) -> {
+                    builder.elements++
                     val channelId = parser.getAttributeValue(null, "id")?.trim()?.lowercase()
                     if (channelId == null) parser.skipElement() else parser.readChannel(channelId, builder)
                 }
@@ -294,6 +306,8 @@ internal class LiveTvScheduleBuilder(
 ) {
     private val entries = HashMap<String, MutableList<LiveTvProgramme>>()
     private val truncated = HashSet<String>()
+    /** Guide channels and programmes met, kept or not. */
+    var elements = 0
     /** Guide channel ids that feed channels matched by name, not by id. */
     private val aliases = HashMap<String, List<String>>()
     /** Keys some guide channel already feeds: one guide channel per list channel. */
@@ -437,7 +451,7 @@ internal class LiveTvScheduleBuilder(
         entries.forEach { (key, list) -> schedule[key] = list.sortedBy { it.startEpochMs } }
         if (window.detailsPerChannel > 0) keepDetails(schedule)
         titles.clear()
-        return LiveTvGuide(schedule = schedule, logos = logos, truncated = truncated, complete = complete)
+        return LiveTvGuide(schedule = schedule, logos = logos, truncated = truncated, complete = complete, elements = elements)
     }
 
     /**
