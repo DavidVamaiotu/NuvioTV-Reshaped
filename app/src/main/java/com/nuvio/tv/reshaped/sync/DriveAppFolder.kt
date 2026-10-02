@@ -121,7 +121,7 @@ internal object DriveAppFolder {
      */
     suspend fun upload(context: Context, name: String, file: java.io.File): String {
         val metadata = JSONObject().put("name", name).put("mimeType", "application/gzip").toString()
-        val session = rawCall(context) { token ->
+        val session = rawCall(context, build = { token ->
             Request.Builder()
                 .url("$UPLOAD_URL?uploadType=resumable&fields=id")
                 .header("Authorization", "Bearer $token")
@@ -129,31 +129,32 @@ internal object DriveAppFolder {
                 .header("X-Upload-Content-Length", file.length().toString())
                 .post(metadata.toRequestBody(JSON))
                 .build()
-        } { response -> response.header("Location") ?: throw IOException("Drive gave no upload link") }
-        val created = rawCall(context) { _ ->
+        }, read = { response -> response.header("Location") ?: throw IOException("Drive gave no upload link") })
+        val created = rawCall(context, build = { _ ->
             // The upload link carries its own authorisation.
             Request.Builder().url(session).put(file.asRequestBody("application/gzip".toMediaType())).build()
-        } { response -> response.body?.string().orEmpty() }
+        }, read = { response -> response.body?.string().orEmpty() })
         return JSONObject(created).getString("id")
     }
 
     /** Streams the Drive file [id] to [write]; a file gone meanwhile throws [IOException]. */
     suspend fun download(context: Context, id: String, write: (java.io.InputStream) -> Unit) {
-        rawCall(context) { token ->
+        rawCall(context, build = { token ->
             Request.Builder().url("$FILES_URL/$id?alt=media").header("Authorization", "Bearer $token").build()
-        } { response -> response.body?.byteStream()?.use(write) ?: throw IOException("Empty Drive file") }
+        }, read = { response -> response.body?.byteStream()?.use(write) ?: throw IOException("Empty Drive file") })
     }
 
     /** Like [call], but [read] gets the successful response itself (headers, or a body to stream). */
     private suspend fun <T> rawCall(context: Context, build: (String) -> Request, read: (Response) -> T): T {
         repeat(2) { attempt ->
             val token = GoogleAccount.accessToken(context, forceRefresh = attempt > 0) ?: throw SignedOutException()
-            val result = runInterruptible(Dispatchers.IO) {
+            val result: Result<T>? = runInterruptible(Dispatchers.IO) {
                 GoogleAccount.http.newCall(build(token)).execute().use { response ->
                     when {
                         response.isSuccessful -> Result.success(read(response))
                         response.code == 401 -> null
-                        else -> response.textOrError().let { Result.failure<T>(IOException("Drive HTTP ${response.code}")) }
+                        // textOrError throws Drive's reason (or NotFoundException).
+                        else -> { response.textOrError(); throw IOException("Drive HTTP ${response.code}") }
                     }
                 }
             }
