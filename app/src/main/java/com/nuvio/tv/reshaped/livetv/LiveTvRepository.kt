@@ -335,12 +335,14 @@ object LiveTvRepository {
         val store = storage ?: return
         sourceJobs.remove(sourceId)?.cancel()
         scope.launch(serial) {
+            val gone = _uiState.value.sources.firstOrNull { it.id == sourceId } ?: return@launch
             val sources = _uiState.value.sources.filterNot { it.id == sourceId }
-            if (sources.size == _uiState.value.sources.size) return@launch
             LiveTvStalker.clearSession()
             loaded.remove(sourceId)
             _uiState.update { it.copy(sources = sources, sourceErrors = it.sourceErrors - sourceId, error = null) }
             scope.launch(writer) {
+                // Removed by the viewer: the other devices remove it too on the next sync.
+                store.markSyncRemoved(gone.identity)
                 store.saveSources(sources)
                 store.deletePlaylistFile(sourceId)
             }
@@ -776,11 +778,16 @@ object LiveTvRepository {
                         }
                     }
                     if (adding) {
+                        // An edit that changed what the source is (another link or login) removes the old one.
+                        val replaced = _uiState.value.sources.firstOrNull { it.id == source.id }?.identity?.takeIf { it != source.identity }
                         val sources = _uiState.value.sources.let { current ->
                             if (known) current.map { if (it.id == source.id) source else it } else current + source
                         }
                         _uiState.update { it.copy(sources = sources, addedCount = it.addedCount + 1, error = notice) }
                         scope.launch(writer) {
+                            replaced?.let(store::markSyncRemoved)
+                            // Added again after a removal: no longer removed.
+                            store.clearSyncRemoved(listOf(source.identity))
                             store.saveSources(sources)
                             if (source.type != LiveTvSourceType.M3u || source.url.isHttpUrl()) store.deletePlaylistFile(source.id)
                         }
@@ -1137,6 +1144,7 @@ object LiveTvRepository {
 
     /** What [profileId] has now: the shown state when it is loaded, else the saved files. */
     internal suspend fun syncSnapshot(context: Context, profileId: Int): LiveTvSyncData {
+        awaitProfileLoad()
         val shown = withContext(serial) {
             if (loadedProfileId != profileId || storage == null) return@withContext null
             val state = _uiState.value
@@ -1152,6 +1160,20 @@ object LiveTvRepository {
             )
         }
         return shown ?: withContext(writer) { LiveTvStorage(context.applicationContext, profileId).syncData() }
+    }
+
+    /** Lets a profile load that is reading the saved files finish first (it runs on [serial]). */
+    private suspend fun awaitProfileLoad() {
+        withContext(serial) { profileJob }?.join()
+    }
+
+    /** Sources the viewer removed on [profileId] that sync has yet to send (see [LiveTvStorage.syncRemovedSources]). */
+    internal suspend fun syncRemovedSources(context: Context, profileId: Int): Set<String> =
+        withContext(writer) { LiveTvStorage(context.applicationContext, profileId).syncRemovedSources() }
+
+    internal suspend fun clearSyncRemoved(context: Context, profileId: Int, identities: Collection<String>) {
+        if (identities.isEmpty()) return
+        withContext(writer) { LiveTvStorage(context.applicationContext, profileId).clearSyncRemoved(identities) }
     }
 
     /** The id [profileId] gives the source with [identity] (after a sync), or null. */
@@ -1177,6 +1199,8 @@ object LiveTvRepository {
      */
     internal suspend fun applySync(context: Context, profileId: Int, before: LiveTvSyncData, after: LiveTvSyncData) {
         if (before == after) return
+        // Saved files changed while a profile load is reading them would be undone by that load.
+        awaitProfileLoad()
         val appContext = context.applicationContext
         val applied = withContext(serial) {
             val store = storage

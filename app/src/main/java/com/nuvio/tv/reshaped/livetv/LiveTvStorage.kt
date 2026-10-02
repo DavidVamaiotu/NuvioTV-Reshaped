@@ -247,6 +247,23 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
         prefs.edit().putOrRemove(FAVORITES, urls.joinToString("\n")).apply()
     }
 
+    /**
+     * Sources the viewer removed here (by [LiveTvSource.identity]) that sync has not sent yet:
+     * only these are deleted on the other devices (see reshaped/sync LiveTvSections).
+     */
+    fun syncRemovedSources(): Set<String> =
+        string(SYNC_REMOVED)?.lineSequence()?.filter(String::isNotBlank)?.toHashSet().orEmpty()
+
+    fun markSyncRemoved(identity: String) {
+        prefs.edit().putOrRemove(SYNC_REMOVED, (syncRemovedSources() + identity).joinToString("\n")).apply()
+    }
+
+    /** Sync sent [identities]' removal; a source added back later is no longer removed. */
+    fun clearSyncRemoved(identities: Collection<String>) {
+        val left = syncRemovedSources() - identities.toSet()
+        prefs.edit().putOrRemove(SYNC_REMOVED, left.joinToString("\n")).apply()
+    }
+
     fun recentChannel(): LiveTvRecentChannel? {
         val url = string(RECENT_URL) ?: return null
         val name = string(RECENT_NAME) ?: return null
@@ -272,6 +289,7 @@ internal class LiveTvStorage(context: Context, private val profileId: Int) {
     companion object {
         const val PREFS = "nuvio_live_tv"
         private const val SOURCES = "sources"
+        private const val SYNC_REMOVED = "sync_removed_sources"
         private const val HIDDEN_GROUPS = "hidden_groups"
         private const val GROUP_ORDER = "group_order"
         private const val GROUP_NAMES = "group_names"
