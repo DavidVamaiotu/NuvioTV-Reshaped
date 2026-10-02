@@ -185,8 +185,11 @@ private fun parseUrlHeaders(line: String): Map<String, String> {
     return options.split('&').mapNotNull { entry ->
         val key = entry.substringBefore('=').trim()
         val raw = entry.substringAfter('=', "").trim()
-        val value = if ('%' in raw) runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw) else raw
-        if (key.isBlank() || value.isBlank()) null else key to value
+        // Decoded, then printable ASCII only: a header value with anything else fails the request.
+        val value = (if ('%' in raw) runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw) else raw)
+            .filter { it in ' '..'~' }.trim()
+        val validKey = key.isNotEmpty() && key.all { it.isLetterOrDigit() || it == '-' || it == '_' }
+        if (!validKey || value.isBlank()) null else key to value
     }.toMap()
 }
 

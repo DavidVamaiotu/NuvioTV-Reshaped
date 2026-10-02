@@ -74,9 +74,26 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     var openGroup by remember { mutableStateOf<String?>(null) }
+    // With several sources, ▶ opens that source's channels of the category only.
+    var openSource by remember { mutableStateOf<String?>(null) }
     // Coming back from a category's channels focuses that category again.
     var returnTo by remember { mutableStateOf<String?>(null) }
     val group = openGroup
+    // One pass over every channel: off the main thread (big lists have tens of thousands).
+    val counts by produceState<Map<String, Map<String, Int>>>(emptyMap(), uiState.channels, uiState.sources.size) {
+        if (uiState.sources.size <= 1) {
+            value = emptyMap()
+            return@produceState
+        }
+        value = withContext(Dispatchers.Default) {
+            val bySource = HashMap<String, HashMap<String, Int>>()
+            uiState.channels.forEach { channel ->
+                val groups = bySource.getOrPut(channel.sourceId) { HashMap() }
+                groups[channel.group] = (groups[channel.group] ?: 0) + 1
+            }
+            bySource
+        }
+    }
 
     NuvioDialog(
         onDismiss = onDismiss,
@@ -89,6 +106,7 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
         if (group != null) {
             LiveTvCategoryChannels(
                 group = group,
+                sourceId = openSource,
                 uiState = uiState,
                 onBack = { openGroup = null },
             )
@@ -120,22 +138,8 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
             )
         } else {
             val returnFocus = remember { FocusRequester() }
-            LaunchedEffect(Unit) {
-                if (returnTo == null) return@LaunchedEffect
-                withFrameNanos { }
-                runCatching { returnFocus.requestFocus() }
-            }
             // With several sources, each lists its own categories under its name, in its own order:
             // two sources with a category of the same name each show and move theirs.
-            val counts = remember(uiState.channels, uiState.sources) {
-                if (uiState.sources.size <= 1) return@remember emptyMap()
-                val bySource = HashMap<String, HashMap<String, Int>>()
-                uiState.channels.forEach { channel ->
-                    val groups = bySource.getOrPut(channel.sourceId) { HashMap() }
-                    groups[channel.group] = (groups[channel.group] ?: 0) + 1
-                }
-                bySource
-            }
             val rows = remember(uiState.groups, uiState.sources, uiState.sourceGroupOrders, counts) {
                 if (uiState.sources.size <= 1) {
                     uiState.groups.map { CategoryRow(null, it) }
@@ -148,6 +152,19 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
                 }
             }
             val firstKey = rows.firstOrNull { it.group != null }?.key
+            LaunchedEffect(rows.isNotEmpty()) {
+                if (returnTo == null || rows.isEmpty()) return@LaunchedEffect
+                withFrameNanos { }
+                runCatching { returnFocus.requestFocus() }
+            }
+            // With several sources the rows come once the channels are counted: focus the first then, once.
+            var firstFocused by remember { mutableStateOf(false) }
+            LaunchedEffect(firstKey != null) {
+                if (firstKey == null || firstFocused || returnTo != null) return@LaunchedEffect
+                firstFocused = true
+                withFrameNanos { }
+                runCatching { firstFocus.requestFocus() }
+            }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp),
@@ -180,7 +197,11 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
                             // Never past the source's own heading or into the next source.
                             if (rows.getOrNull(target)?.let { it.group == null || it.source?.id != row.source?.id } != false) return@move
                             val source = row.source
-                            if (source != null) LiveTvRepository.moveSourceGroup(source, name, step) else LiveTvRepository.moveGroup(name, step)
+                            if (source != null) {
+                                LiveTvRepository.moveSourceGroup(source, counts[source.id]?.keys.orEmpty(), name, step)
+                            } else {
+                                LiveTvRepository.moveGroup(name, step)
+                            }
                             // Keep the moving row in view, a little away from the edge.
                             val shownRows = listState.layoutInfo.visibleItemsInfo
                             val first = shownRows.firstOrNull()?.index ?: 0
@@ -192,6 +213,7 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
                         onDrop = { moving = null },
                         onOpen = {
                             returnTo = row.key
+                            openSource = row.source?.id
                             openGroup = name
                         },
                         modifier = when (row.key) {
@@ -208,9 +230,11 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
 
 /** One category's channels, each shown or hidden on its own. Back returns to the categories. */
 @Composable
-private fun LiveTvCategoryChannels(group: String, uiState: LiveTvUiState, onBack: () -> Unit) {
-    val channels by produceState(emptyList<LiveTvChannel>(), uiState.channels, group) {
-        value = withContext(Dispatchers.Default) { uiState.channels.filter { it.group == group } }
+private fun LiveTvCategoryChannels(group: String, sourceId: String?, uiState: LiveTvUiState, onBack: () -> Unit) {
+    val channels by produceState(emptyList<LiveTvChannel>(), uiState.channels, group, sourceId) {
+        value = withContext(Dispatchers.Default) {
+            uiState.channels.filter { it.group == group && (sourceId == null || it.sourceId == sourceId) }
+        }
     }
     val hidden = uiState.hiddenChannelKeys
     val firstFocus = remember { FocusRequester() }

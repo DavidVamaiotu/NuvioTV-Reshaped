@@ -30,8 +30,14 @@ internal object SyncedPlaylists {
     /** A playlist's Drive copy and the SHA-1 of the playlist it holds. */
     data class Ref(val driveId: String, val hash: String)
 
-    /** What this device last sent or fetched for a source, and the playlist file it was. */
-    private class Record(val ref: Ref, val length: Long, val modified: Long)
+    /** What this device last sent ([sent]) or fetched for a source, and the playlist file it was. */
+    class Record internal constructor(internal val ref: Ref, internal val length: Long, internal val modified: Long, internal val sent: Boolean)
+
+    /** A copy sent this round: kept as sent only once the sync file names it ([commit]). */
+    class Sent internal constructor(internal val profileId: Int, internal val sourceId: String, internal val record: Record, internal val replaces: String?)
+
+    /** The Drive copy of each imported playlist (by source id), and the copies sent this round. */
+    class Uploads(val refs: Map<String, Ref>, val sent: List<Sent>)
 
     fun isImported(source: LiveTvSource): Boolean = source.type == LiveTvSourceType.M3u && !source.url.isHttpUrl()
 
@@ -40,11 +46,12 @@ internal object SyncedPlaylists {
      * sent before while the file is unchanged, else a new upload. A source whose upload failed is
      * left out (its entry in the sync file stays as it was).
      */
-    suspend fun uploaded(context: Context, profileId: Int, sources: List<LiveTvSource>): Map<String, Ref> {
+    suspend fun uploaded(context: Context, profileId: Int, sources: List<LiveTvSource>): Uploads {
         val imported = sources.filter(::isImported)
-        if (imported.isEmpty()) return emptyMap()
+        if (imported.isEmpty()) return Uploads(emptyMap(), emptyList())
         val store = LiveTvStorage(context.applicationContext, profileId)
         val result = HashMap<String, Ref>()
+        val sent = ArrayList<Sent>()
         imported.forEach { source ->
             try {
                 val file = store.playlistFile(source.id) ?: return@forEach
@@ -55,7 +62,7 @@ internal object SyncedPlaylists {
                 }
                 val hash = runInterruptible(Dispatchers.IO) { sha1(file) }
                 if (saved != null && saved.ref.hash == hash) {
-                    saveRecord(context, profileId, source.id, Record(saved.ref, file.length(), file.lastModified()))
+                    saveRecord(context, profileId, source.id, Record(saved.ref, file.length(), file.lastModified(), saved.sent))
                     result[source.id] = saved.ref
                     return@forEach
                 }
@@ -64,10 +71,10 @@ internal object SyncedPlaylists {
                     runInterruptible(Dispatchers.IO) { gzip(file, packed) }
                     val id = DriveAppFolder.upload(context, NAME_PREFIX + hash.take(12) + ".m3u.gz", packed)
                     val ref = Ref(id, hash)
-                    saveRecord(context, profileId, source.id, Record(ref, file.length(), file.lastModified()))
                     result[source.id] = ref
-                    // The copy of the file it replaced, if this device sent it.
-                    saved?.ref?.driveId?.let { old -> runCatching { DriveAppFolder.delete(context, old) } }
+                    // Saved (and the copy it replaces deleted) once the sync file names it: until
+                    // then the other devices still fetch the old one.
+                    sent += Sent(profileId, source.id, Record(ref, file.length(), file.lastModified(), sent = true), saved?.takeIf { it.sent }?.ref?.driveId)
                 } finally {
                     packed.delete()
                 }
@@ -77,7 +84,15 @@ internal object SyncedPlaylists {
                 Log.w(TAG, "Could not send an imported playlist", error)
             }
         }
-        return result
+        return Uploads(result, sent)
+    }
+
+    /** The sync file now names the copies in [sent]: keep them as sent, and delete those they replace (this device's own). */
+    suspend fun commit(context: Context, sent: List<Sent>) {
+        sent.forEach { upload ->
+            saveRecord(context, upload.profileId, upload.sourceId, upload.record)
+            upload.replaces?.let { old -> runCatching { DriveAppFolder.delete(context, old) } }
+        }
     }
 
     /**
@@ -104,7 +119,7 @@ internal object SyncedPlaylists {
                 val written = runInterruptible(Dispatchers.IO) {
                     store.savePlaylistFile(sourceId) { out -> if (!temp.renameTo(out)) temp.copyTo(out, overwrite = true) }
                 }
-                saveRecord(context, profileId, sourceId, Record(ref, written.length(), written.lastModified()))
+                saveRecord(context, profileId, sourceId, Record(ref, written.length(), written.lastModified(), sent = false))
                 true
             } finally {
                 temp.delete()
@@ -127,9 +142,17 @@ internal object SyncedPlaylists {
         if (now - lastTidyMs < TIDY_GAP_MS) return
         lastTidyMs = now
         try {
-            DriveAppFolder.list(context, NAME_PREFIX)
-                .filter { it.id !in named && now - it.modifiedMs > UNUSED_GRACE_MS }
+            val stored = DriveAppFolder.list(context, NAME_PREFIX)
+            stored.filter { it.id !in named && now - it.modifiedMs > UNUSED_GRACE_MS }
                 .forEach { runCatching { DriveAppFolder.delete(context, it.id) } }
+            // A copy this device sent that is gone (deleted elsewhere) is sent again next time.
+            val present = stored.mapTo(HashSet()) { it.id }
+            val prefs = prefs(context)
+            val gone = prefs.all.keys.filter { key ->
+                val json = runCatching { JSONObject(prefs.getString(key, null) ?: return@filter false) }.getOrNull() ?: return@filter false
+                json.optBoolean("sent") && json.optString("id") !in present
+            }
+            if (gone.isNotEmpty()) prefs.edit().apply { gone.forEach(::remove) }.apply()
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (error: Exception) {
@@ -160,13 +183,13 @@ internal object SyncedPlaylists {
 
     private fun record(context: Context, profileId: Int, sourceId: String): Record? = runCatching {
         val json = JSONObject(prefs(context).getString("$profileId/$sourceId", null) ?: return null)
-        Record(Ref(json.getString("id"), json.getString("hash")), json.getLong("length"), json.getLong("modified"))
+        Record(Ref(json.getString("id"), json.getString("hash")), json.getLong("length"), json.getLong("modified"), json.optBoolean("sent"))
     }.getOrNull()
 
     private fun saveRecord(context: Context, profileId: Int, sourceId: String, record: Record) {
         val json = JSONObject()
             .put("id", record.ref.driveId).put("hash", record.ref.hash)
-            .put("length", record.length).put("modified", record.modified)
+            .put("length", record.length).put("modified", record.modified).put("sent", record.sent)
         prefs(context).edit().putString("$profileId/$sourceId", json.toString()).apply()
     }
 }

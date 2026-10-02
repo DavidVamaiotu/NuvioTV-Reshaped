@@ -1000,7 +1000,8 @@ private fun LiveTvGuideInfo(
                             modifier = Modifier.padding(top = 6.dp).widthIn(max = 420.dp).fillMaxWidth(),
                         )
                     }
-                    programme.description?.let { description ->
+                    // One line only: a status (guide loading, a source failing) takes its place, so it fits.
+                    programme.description?.takeIf { status == null }?.let { description ->
                         Text(
                             text = description,
                             style = MaterialTheme.typography.bodySmall,

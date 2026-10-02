@@ -57,7 +57,23 @@ internal object LiveTvSections {
     ): Map<String, Map<String, JsonElement>> {
         val knownSources = knownSources(profileId, base)
         if (data.sources.isEmpty() && knownSources.isNotEmpty() && knownSources.keys.none(removed::contains)) return emptyMap()
-        return sectionsWith(profileId, data, knownSources, playlists, removed)
+        // Imported playlists the file still lists with the links (as versions before their own
+        // section wrote them) stay there too, so a TV on such a version keeps them.
+        val linksHave = SyncDoc.values(base, sources(profileId)).filterValues(::isFileEntry).keys
+        return sectionsWith(profileId, data, knownSources, playlists, removed, linksHave)
+    }
+
+    /** Every Drive copy of an imported playlist the file names, for every profile. */
+    fun playlistDriveIds(doc: SyncSections): Set<String> {
+        val ids = HashSet<String>()
+        doc.forEach { (name, entries) ->
+            if (!name.startsWith("live_tv/") || !(name.endsWith("/sources") || name.endsWith("/imported"))) return@forEach
+            entries.values.forEach { entry ->
+                val value = entry.value as? JsonObject ?: return@forEach
+                if (value.text("type") == FILE_TYPE) value.text("file").takeIf(String::isNotBlank)?.let(ids::add)
+            }
+        }
+        return ids
     }
 
     /** The sections of [profileId]'s sources, by identity: links and logins, and imported playlists. */
@@ -75,11 +91,17 @@ internal object LiveTvSections {
         knownSources: Map<String, JsonElement>,
         playlists: Map<String, SyncedPlaylists.Ref>,
         removed: Set<String>,
+        linksHave: Set<String>,
     ): Map<String, Map<String, JsonElement>> {
         val links = HashMap<String, JsonElement>()
         val files = HashMap<String, JsonElement>()
         fun put(identity: String, entry: JsonElement) {
-            if (isFileEntry(entry)) files[identity] = entry else links[identity] = entry
+            if (!isFileEntry(entry)) {
+                links[identity] = entry
+                return
+            }
+            files[identity] = entry
+            if (identity in linksHave) links[identity] = entry
         }
         // Sources the file has that this device lacks but never removed stay as they are.
         knownSources.forEach { (identity, entry) -> if (identity !in removed) put(identity, entry) }

@@ -213,7 +213,8 @@ internal object ReshapedSync {
             val liveTv = profileId?.let { LiveTvRepository.syncSnapshot(context, it) }
             val removed = profileId?.let { LiveTvRepository.syncRemovedSources(context, it) }.orEmpty()
             // Imported playlists changed here go up first, so the file can name their copies.
-            val playlists = if (profileId != null && liveTv != null) SyncedPlaylists.uploaded(context, profileId, liveTv.sources) else emptyMap()
+            val uploads = if (profileId != null && liveTv != null) SyncedPlaylists.uploaded(context, profileId, liveTv.sources) else null
+            val playlists = uploads?.refs.orEmpty()
             val current = settings + (
                 if (sectionId != null && liveTv != null) LiveTvSections.toSections(sectionId, liveTv, base, playlists, removed) else emptyMap()
             )
@@ -223,7 +224,7 @@ internal object ReshapedSync {
                 val remoteFile = DriveAppFolder.read(context)
                 val remote = remoteFile.others.fold(SyncDoc.decode(remoteFile.text)) { doc, (_, text) -> SyncDoc.merge(SyncDoc.decode(text), doc) }
                 val now = SyncDoc.stampTime(System.currentTimeMillis(), base, remote)
-                val local = SyncDoc.stamp(base, current, now)
+                val local = withRemovals(SyncDoc.stamp(base, current, now), sectionId, removed, now)
                 val merged = SyncDoc.prune(
                     keepLocalSources(SyncDoc.merge(local, remote), sectionId, liveTv, base, local, removed),
                     now,
@@ -262,7 +263,8 @@ internal object ReshapedSync {
                             LiveTvRepository.reloadSource(profileId, id)
                         }
                     }
-                    SyncedPlaylists.deleteUnused(context, refs.values.mapTo(HashSet()) { it.driveId } + playlists.values.map { it.driveId })
+                    // Every profile's copies stay, not only this one's.
+                    SyncedPlaylists.deleteUnused(context, LiveTvSections.playlistDriveIds(merged) + playlists.values.map { it.driveId })
                 }
                 if (merged != remote || remoteFile.id == null || remoteFile.others.isNotEmpty()) {
                     driveFileId = DriveAppFolder.write(context, remoteFile.id ?: driveFileId, SyncDoc.encode(merged))
@@ -270,13 +272,31 @@ internal object ReshapedSync {
                     driveFileId = remoteFile.id
                 }
                 remoteFile.others.forEach { (id, _) -> runCatching { DriveAppFolder.delete(context, id) } }
-                withContext(Dispatchers.IO) { writeBase(context, merged) }
+                uploads?.let { SyncedPlaylists.commit(context, it.sent) }
+                // Only what this device took in moves its base on: another profile's Live TV (or
+                // settings, or Live TV, while their sync is off) stays as this device last had it,
+                // so changes it never applied are never taken for deletions here later.
+                val nextBase = HashMap<String, Map<String, SyncEntry>>()
+                (merged.keys + savedBase.keys).forEach { name ->
+                    val applied = if (name.startsWith("live_tv/")) {
+                        sectionId != null && liveTv != null && name.startsWith(LiveTvSections.prefix(sectionId))
+                    } else {
+                        settingsOn
+                    }
+                    (if (applied) merged[name] else savedBase[name])?.let { nextBase[name] = it }
+                }
+                withContext(Dispatchers.IO) { writeBase(context, nextBase) }
                 val syncedAt = System.currentTimeMillis()
                 val edit = prefs(context).edit().putLong(KEY_LAST_SYNC, syncedAt)
                 if (profileId != null && sectionId != null) edit.putInt(KEY_SECTION + profileId, sectionId)
                 edit.apply()
-                // Their removal is in the file now.
-                if (profileId != null) LiveTvRepository.clearSyncRemoved(context, profileId, removed)
+                // Removals the file now has (no source section lists them any more) are done.
+                if (profileId != null && sectionId != null) {
+                    val sent = removed.filter { identity ->
+                        LiveTvSections.sourceSections(sectionId).none { merged[it]?.get(identity)?.value != null }
+                    }
+                    LiveTvRepository.clearSyncRemoved(context, profileId, sent)
+                }
                 _status.value = ReshapedSyncStatus(lastSyncedAtMs = syncedAt)
             } catch (cancel: CancellationException) {
                 _status.update { it.copy(running = false) }
@@ -311,17 +331,36 @@ internal object ReshapedSync {
         var result = merged
         LiveTvSections.sourceSections(sectionId).forEach { name ->
             val entries = result[name] ?: return@forEach
-            val known = base[name].orEmpty()
             val mine = local[name].orEmpty()
             var kept: MutableMap<String, SyncEntry>? = null
             liveTv.sources.forEach { source ->
                 val key = source.identity
-                if (key in removed || entries[key]?.value != null || known[key]?.value != null) return@forEach
+                if (key in removed || entries[key]?.value != null) return@forEach
+                // Known when the base has it in either section (imported playlists moved section).
+                if (LiveTvSections.sourceSections(sectionId).any { base[it]?.get(key)?.value != null }) return@forEach
                 val own = mine[key]?.value ?: return@forEach
                 val time = maxOf(entries[key]?.time ?: 0L, mine[key]?.time ?: 0L) + 1
                 (kept ?: entries.toMutableMap().also { kept = it })[key] = SyncEntry(own, time)
             }
             kept?.let { result = result + (name to it) }
+        }
+        return result
+    }
+
+    /**
+     * [local] with a deletion of each source removed here in both source sections, also when the
+     * base never had it (the stamp only marks what the base had), unless it is back here.
+     */
+    private fun withRemovals(local: SyncSections, sectionId: Int?, removed: Set<String>, now: Long): SyncSections {
+        if (sectionId == null || removed.isEmpty()) return local
+        val result = local.toMutableMap()
+        LiveTvSections.sourceSections(sectionId).forEach { name ->
+            val entries = result[name].orEmpty().toMutableMap()
+            removed.forEach { identity ->
+                val entry = entries[identity]
+                if (entry == null || (entry.value != null && entry.time < now)) entries[identity] = SyncEntry(null, now)
+            }
+            result[name] = entries
         }
         return result
     }
