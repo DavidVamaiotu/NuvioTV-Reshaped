@@ -15,12 +15,16 @@ object LiveEdgeRecovery {
 
     private var windowStartMs = 0L
     private var rejoins = 0
+    /** The stream the count is for: another channel starts with a fresh allowance. */
+    private var stream: String? = null
 
     /** True when [error] was handled by rejoining the live edge of [player]. */
     fun tryRejoin(error: PlaybackException, player: Player?): Boolean {
         if (error.errorCode != PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW || player == null) return false
         val now = SystemClock.elapsedRealtime()
-        if (now - windowStartMs > WINDOW_MS) {
+        val playing = player.currentMediaItem?.localConfiguration?.uri?.toString()
+        if (playing != stream || now - windowStartMs > WINDOW_MS) {
+            stream = playing
             windowStartMs = now
             rejoins = 0
         }

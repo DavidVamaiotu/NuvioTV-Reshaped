@@ -265,6 +265,8 @@ internal object LiveTvHttp {
 
     /** How long a guide download may wait for data (see [download]). */
     const val GUIDE_READ_TIMEOUT_S = 120L
+    /** Channel lists a panel builds on request may send nothing for a minute or more. */
+    const val LIST_READ_TIMEOUT_S = 120L
 
     /** Lowest compression: XML still shrinks about tenfold, at little CPU on a weak TV. */
     private class FastGzipOutputStream(out: java.io.OutputStream) : GZIPOutputStream(out, BUFFER_BYTES) {

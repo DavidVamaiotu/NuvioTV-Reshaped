@@ -59,7 +59,8 @@ internal object LiveTvXtream {
         // One catch-up instance per archive length, shared by the channels that have it.
         val catchups = HashMap<Int, LiveTvCatchup>()
         val seen = HashSet<String>()
-        val channels = LiveTvHttp.stream(apiUrl(settings, "get_live_streams"), apiHeaders) { input ->
+        // Big panels build the whole list before the first byte, as get.php does: the same long wait.
+        val channels = LiveTvHttp.stream(apiUrl(settings, "get_live_streams"), apiHeaders, LiveTvHttp.LIST_READ_TIMEOUT_S) { input ->
             var index = 0
             readObjects(input) { fields ->
                 val position = index++
@@ -169,7 +170,8 @@ private class StalkerSession(val settings: LiveTvStalkerSettings, val token: Str
 }
 
 internal object LiveTvStalker {
-    private const val MAX_PAGES = 500
+    /** 14 channels a page on most portals: about 28,000 channels. */
+    private const val MAX_PAGES = 2_000
     private const val PARALLEL_PAGES = 4
 
     /** One session per portal login, so several Stalker sources do not keep renewing each other's. */
@@ -317,11 +319,15 @@ internal object LiveTvStalker {
         val first = page(1)
         if (first.entries.isEmpty()) return StalkerChannels(emptyList(), incomplete = false)
         var failedPages = 0
+        // More pages than are read: the list is shown, but said to be incomplete.
+        var capped = false
         val entries = ArrayList(first.entries)
         val perPage = first.maxPageItems?.takeIf { it > 0 } ?: first.entries.size
         val total = first.totalItems
         if (total != null && perPage > 0) {
-            val lastPage = ((total + perPage - 1) / perPage).coerceAtMost(MAX_PAGES)
+            val pages = (total + perPage - 1) / perPage
+            capped = pages > MAX_PAGES
+            val lastPage = pages.coerceAtMost(MAX_PAGES)
             (2..lastPage).chunked(PARALLEL_PAGES).forEach { numbers ->
                 coroutineScope {
                     numbers.map { number ->
@@ -339,14 +345,22 @@ internal object LiveTvStalker {
                 }.forEach(entries::addAll)
             }
         } else {
-            for (number in 2..MAX_PAGES) {
+            var number = 2
+            while (true) {
                 val data = page(number).entries
                 if (data.isEmpty()) break
                 entries += data
+                if (number == MAX_PAGES) {
+                    capped = runCatching { page(number + 1).entries.isNotEmpty() }
+                        .onFailure { if (it is CancellationException) throw it }.getOrDefault(false)
+                    break
+                }
+                number++
             }
         }
         if (failedPages > 0) Log.w("LiveTv", "Stalker: $failedPages pages could not be loaded")
-        return StalkerChannels(entries, incomplete = failedPages > 0)
+        if (capped) Log.w("LiveTv", "Stalker: only the first $MAX_PAGES pages were read")
+        return StalkerChannels(entries, incomplete = failedPages > 0 || capped)
     }
 
     private fun Map<String, String>.toChannel(

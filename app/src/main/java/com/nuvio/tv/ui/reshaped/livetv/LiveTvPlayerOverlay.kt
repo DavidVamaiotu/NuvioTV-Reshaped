@@ -44,6 +44,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -207,8 +209,10 @@ internal class LiveTvPlayerState(
             uiState.showSpeedDialog || uiState.showSubtitleDelayOverlay || uiState.showSubtitleTimingDialog ||
             uiState.showMoreDialog || uiState.showStreamInfoOverlay
         val down = event.action == KeyEvent.ACTION_DOWN
-        // The guide takes every key while it is open; the player behind it sees none.
+        // The guide takes every key while it is open; the player behind it sees none. Volume and
+        // mute still reach the system, for boxes that set the volume themselves.
         guide?.let { open ->
+            if (event.keyCode in SYSTEM_KEYS) return false
             open.onKey(event)
             return true
         }
@@ -251,6 +255,17 @@ internal class LiveTvPlayerState(
         if (event.keyCode in OK_KEYS && !down && swallowOkRelease) {
             swallowOkRelease = false
             return true
+        }
+        // A channel that failed: ▲▼ still zap away from it (most remotes have no CH+/CH-). ◀▶ stay
+        // the error screen's, which moves between its buttons.
+        if (uiState.error != null && !nuvioOverlayOpen && !isCatchup()) {
+            return when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (down) zap(if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
+                    true
+                }
+                else -> false
+            }
         }
         if (isCatchup()) {
             // A past programme seeks and pauses like a film: only ▲▼ (back to live channels) and
@@ -315,10 +330,32 @@ internal class LiveTvPlayerState(
         }
     }
 
+    /** Where the playing channel was in the list last zapped, so a zap skips searching for it. */
+    private var zapIndexHint = -1
+
     private fun zap(step: Int) {
         hideInfo()
-        val next = LiveTvRepository.neighbour(zapList(), currentListUrl, step) ?: return
-        switchTo(next)
+        val url = currentListUrl
+        val picked = LiveTvRepository.zapList
+        val pickedHint = zapIndexHint.takeIf { it in picked.indices && picked[it].streamUrl == url }
+        val list = if (pickedHint != null || picked.any { it.streamUrl == url }) picked else LiveTvRepository.uiState.value.shownChannels
+        if (list.isEmpty()) return
+        val index = zapIndexHint.takeIf { it in list.indices && list[it].streamUrl == url } ?: list.indexOfFirst { it.streamUrl == url }
+        val next = if (index < 0) 0 else Math.floorMod(index + step, list.size)
+        zapIndexHint = next
+        switchTo(list[next])
+    }
+
+    /**
+     * Gives the key focus back to the player once a failed channel's error screen is gone (its
+     * focused button left with it), so the next ▲▼ or OK is not lost and Back stays Live TV's.
+     */
+    internal suspend fun refocusPlayer() {
+        repeat(5) {
+            withFrameNanos { }
+            if (panelOpen || guide != null || controller._uiState.value.showControls) return
+            if (runCatching { containerFocusRequester.requestFocus() }.isSuccess) return
+        }
     }
 
     private fun openPanel() {
@@ -440,6 +477,7 @@ internal class LiveTvPlayerState(
         const val ZAP_SETTLE_MS = 350L
         const val INFO_MS = 6_000L
         val OK_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
+        val SYSTEM_KEYS = intArrayOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
     }
 }
 
@@ -464,13 +502,26 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
     // Live TV lets go of its channels while unseen (the app in the background for a while):
     // back on a channel, they load again so zapping and the channel list work.
     val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
     DisposableEffect(lifecycleOwner) {
+        LiveTvClock.followDeviceHourFormat(context)
         LiveTvRepository.reloadIfReleased()
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_START) LiveTvRepository.reloadIfReleased() }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     LiveTvFrameRateMatch(state, uiState)
+    // Only after an error screen: elsewhere the player's own focus handling stands.
+    val hasError = uiState.error != null
+    var hadError by remember { mutableStateOf(false) }
+    LaunchedEffect(hasError) {
+        if (hasError) {
+            hadError = true
+        } else if (hadError) {
+            hadError = false
+            state.refocusPlayer()
+        }
+    }
     val liveState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(liveState.isLoaded, liveState.isLoading, liveState.hasSource) {
         if (!liveState.isLoaded && !liveState.isLoading && !liveState.hasSource) LiveTvRepository.reloadIfReleased()

@@ -203,6 +203,7 @@ fun LiveTvScreen(
         // Back from the background after a long while: the list may have been let go meanwhile.
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_START) {
+                LiveTvClock.followDeviceHourFormat(context)
                 viewModel.ensureLoaded()
                 com.nuvio.tv.reshaped.sync.ReshapedSync.onLiveTvOpened()
             }
@@ -248,7 +249,10 @@ fun LiveTvScreen(
     // With All channels (or Favorites) hidden in the settings, the first category shown stands in for it.
     val showAll by LiveTvPreferences.showAll.collectAsStateWithLifecycle()
     val showFavorites by LiveTvPreferences.showFavorites.collectAsStateWithLifecycle()
-    LaunchedEffect(uiState.hiddenGroups, uiState.sources, uiState.customLists, showAll, showFavorites, uiState.favoriteUrls.isEmpty()) {
+    LaunchedEffect(uiState.isLoaded, uiState.hiddenGroups, uiState.sources, uiState.customLists, showAll, showFavorites, uiState.favoriteUrls.isEmpty()) {
+        // Reloading (Live TV let go while unused): sources and playlists are not read back yet,
+        // and the category picked before must not fall back to all channels meanwhile.
+        if (!uiState.isLoaded) return@LaunchedEffect
         val multiSource = uiState.sources.size > 1
         val home = liveTvHomeFilter(uiState, showAll, showFavorites)
         filterKey = when (val current = filterFor(filterKey)) {
@@ -315,6 +319,7 @@ fun LiveTvScreen(
                         return@launch
                     }
                     viewModel.restoreFocusOnReturn = true
+                    viewModel.launchedUrl = channel.streamUrl
                     onPlay(route)
                 } catch (cancel: kotlinx.coroutines.CancellationException) {
                     launching = false
@@ -366,10 +371,6 @@ fun LiveTvScreen(
     // Unfavouriting a channel in Favorites removes its row: the guide moves to the next one, or
     // to the categories when none is left.
     var keepAfterRefilter by remember { mutableStateOf<String?>(null) }
-    val keepNeighbour: (LiveTvChannel) -> Unit = { channel ->
-        val index = visibleChannels.indexOfFirst { it.streamUrl == channel.streamUrl }
-        keepAfterRefilter = (visibleChannels.getOrNull(index + 1) ?: visibleChannels.getOrNull(index - 1))?.streamUrl
-    }
     // Set once the guide exists (it is made below).
     var onGuideLongPress: (LiveTvChannel) -> Unit = {}
     val guide = remember {
@@ -407,6 +408,15 @@ fun LiveTvScreen(
         }
     }
     LaunchedEffect(filterKey, query) { guide.stopMoving() }
+    val keepNeighbour: (LiveTvChannel) -> Unit = { channel ->
+        val index = visibleChannels.indexOfFirst { it.streamUrl == channel.streamUrl }
+        // Several picked channels going at once: the nearest one staying, after it first.
+        val staying = { candidate: LiveTvChannel -> candidate.streamUrl !in guide.picked }
+        keepAfterRefilter = (
+            (index + 1 until visibleChannels.size).asSequence().map(visibleChannels::get).firstOrNull(staying)
+                ?: (index - 1 downTo 0).asSequence().map(visibleChannels::get).firstOrNull(staying)
+            )?.streamUrl
+    }
     /**
      * A list chosen while picking: the picked channels go in (or, when all of them are in it
      * already, come out), and the guide is as before.
@@ -454,7 +464,9 @@ fun LiveTvScreen(
     LaunchedEffect(visibleChannels, filtering) {
         if (!viewModel.restoreFocusOnReturn || filtering || visibleChannels.isEmpty()) return@LaunchedEffect
         viewModel.restoreFocusOnReturn = false
-        guide.selectRow(visibleChannels.indexOfFirst { it.streamUrl == uiState.recentChannel?.streamUrl }.coerceAtLeast(0))
+        // Zapped into another category meanwhile: the channel it was started from.
+        val recent = visibleChannels.indexOfFirst { it.streamUrl == uiState.recentChannel?.streamUrl }
+        guide.selectRow(if (recent >= 0) recent else visibleChannels.indexOfFirst { it.streamUrl == viewModel.launchedUrl }.coerceAtLeast(0))
         guide.backToNow()
         repeat(10) {
             withFrameNanos { }
@@ -462,10 +474,13 @@ fun LiveTvScreen(
         }
     }
 
+    // Focus gone from Live TV altogether (▲ from the categories to the menu bar): the preview stops.
+    var screenFocused by remember { mutableStateOf(false) }
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(NuvioTheme.colors.Background),
+            .background(NuvioTheme.colors.Background)
+            .onFocusChanged { screenFocused = it.hasFocus },
     ) {
         if (!uiState.isLoaded && !uiState.isLoading && !uiState.hasSource) {
             LiveTvEmptyState(onAddSource = { showSourceDialog = true })
@@ -482,7 +497,7 @@ fun LiveTvScreen(
                     clock = minuteClock,
                     showTitle = showBuiltInHeader,
                     preview = if (previewsEnabled) preview else null,
-                    playVideo = (gridFocused || settingsFocused || categoriesOpen) && started && !launching &&
+                    playVideo = (gridFocused || settingsFocused || (categoriesOpen && screenFocused)) && started && !launching &&
                         !showSourceDialog && !showCategoryDialog && !showMenu && !showPlaylists &&
                         !naming && editingList == null,
                 )

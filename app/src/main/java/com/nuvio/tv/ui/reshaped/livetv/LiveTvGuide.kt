@@ -44,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -186,8 +187,10 @@ internal class LiveTvGuideState(
     fun showChannels(list: List<LiveTvChannel>, keepUrl: String?, toNow: Boolean) {
         if (list === channels) return
         Snapshot.withMutableSnapshot {
+            // The kept channel gone from a list filtered again (hidden, removed): the same place in it.
+            val kept = list.indexOfFirst { it.streamUrl == keepUrl }
+            row = if (kept >= 0 || toNow) kept.coerceAtLeast(0) else row.coerceIn(0, (list.size - 1).coerceAtLeast(0))
             channels = list
-            row = list.indexOfFirst { it.streamUrl == keepUrl }.coerceAtLeast(0)
             if (toNow) backToNow()
         }
     }
@@ -704,45 +707,52 @@ private fun GuideRow(
             // last) shows as "No guide" too, instead of an empty gap.
             val gaps = remember(programmes, viewStart, viewEnd) { guideGaps(programmes, viewStart, viewEnd) }
             val noGuide = stringResource(R.string.live_tv_guide_none)
+            // Cells are keyed by their time, so a row moved into the next hours keeps the cells it
+            // still shows (no colour fading over from the cell that used to be in that place).
             gaps.forEach { (gapStart, gapStop) ->
-                GuideCell(
-                    title = noGuide,
-                    selected = selectedRow && active && selected == null && state.anchorMs >= gapStart && state.anchorMs < gapStop,
-                    state = GuideCellState.Future,
-                    modifier = Modifier
-                        .offset { IntOffset(timeline.x(gapStart).roundToInt(), 0) }
-                        .width(with(density) { ((gapStop - gapStart) * timeline.pxPerMs).toDp() })
-                        .fillMaxHeight()
-                        .padding(end = 4.dp),
-                    titleShift = { (-timeline.x(gapStart)).coerceAtLeast(0f).roundToInt() },
-                )
+                key("gap", gapStart) {
+                    GuideCell(
+                        title = noGuide,
+                        selected = selectedRow && active && selected == null && state.anchorMs >= gapStart && state.anchorMs < gapStop,
+                        state = GuideCellState.Future,
+                        modifier = Modifier
+                            .offset { IntOffset(timeline.x(gapStart).roundToInt(), 0) }
+                            .width(with(density) { ((gapStop - gapStart) * timeline.pxPerMs).toDp() })
+                            .fillMaxHeight()
+                            .padding(end = 4.dp),
+                        titleShift = { (-timeline.x(gapStart)).coerceAtLeast(0f).roundToInt() },
+                    )
+                }
             }
             programmes.forEach { programme ->
-                val (cellStart, cellStop) = liveTvGuideSpan(programme.startEpochMs, programme.stopEpochMs, viewStart, viewEnd)
+                val span = liveTvGuideSpan(programme.startEpochMs, programme.stopEpochMs, viewStart, viewEnd)
                     ?: return@forEach
-                val widthDp = with(density) { ((cellStop - cellStart) * timeline.pxPerMs).toDp() }
-                val cellState = when {
-                    // Past programmes the provider keeps can be played again: they stay bright.
-                    programme.stopEpochMs <= clock.value ->
-                        if (LiveTvCatchupLinks.isPlayable(channel.catchup, programme, clock.value)) GuideCellState.Future else GuideCellState.Past
-                    programme.startEpochMs <= clock.value -> GuideCellState.Now
-                    else -> GuideCellState.Future
+                key(programme.startEpochMs) {
+                    val (cellStart, cellStop) = span
+                    val widthDp = with(density) { ((cellStop - cellStart) * timeline.pxPerMs).toDp() }
+                    val cellState = when {
+                        // Past programmes the provider keeps can be played again: they stay bright.
+                        programme.stopEpochMs <= clock.value ->
+                            if (LiveTvCatchupLinks.isPlayable(channel.catchup, programme, clock.value)) GuideCellState.Future else GuideCellState.Past
+                        programme.startEpochMs <= clock.value -> GuideCellState.Now
+                        else -> GuideCellState.Future
+                    }
+                    GuideCell(
+                        title = programme.title,
+                        selected = programme === selected && active,
+                        state = cellState,
+                        progress = if (cellState == GuideCellState.Now) programme else null,
+                        progressSpan = cellStart to cellStop,
+                        clock = clock,
+                        modifier = Modifier
+                            .offset { IntOffset(timeline.x(cellStart).roundToInt(), 0) }
+                            .width(widthDp)
+                            .fillMaxHeight()
+                            .padding(end = 4.dp),
+                        // A programme that began before the view keeps its title in view, marked ‹ as TV guides do.
+                        titleShift = { (-timeline.x(cellStart)).coerceAtLeast(0f).roundToInt() },
+                    )
                 }
-                GuideCell(
-                    title = programme.title,
-                    selected = programme === selected && active,
-                    state = cellState,
-                    progress = if (cellState == GuideCellState.Now) programme else null,
-                    progressSpan = cellStart to cellStop,
-                    clock = clock,
-                    modifier = Modifier
-                        .offset { IntOffset(timeline.x(cellStart).roundToInt(), 0) }
-                        .width(widthDp)
-                        .fillMaxHeight()
-                        .padding(end = 4.dp),
-                    // A programme that began before the view keeps its title in view, marked ‹ as TV guides do.
-                    titleShift = { (-timeline.x(cellStart)).coerceAtLeast(0f).roundToInt() },
-                )
             }
         }
     }

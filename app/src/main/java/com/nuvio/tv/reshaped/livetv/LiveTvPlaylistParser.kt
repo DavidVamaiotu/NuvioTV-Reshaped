@@ -154,7 +154,6 @@ internal fun m3uCatchup(entry: Map<String, String>, playlist: Map<String, String
     return LiveTvCatchup(kind, (days ?: 1).coerceIn(1, 30), template)
 }
 
-private val m3uAttributeRegex = Regex("""([\w-]+)="([^"]*)"""")
 
 private fun parseExtInf(line: String): M3uMetadata {
     // The display name follows the first comma outside quoted attributes; it may hold commas itself.
@@ -172,11 +171,36 @@ private fun parseExtInf(line: String): M3uMetadata {
     )
 }
 
-private fun parseM3uAttributes(line: String): Map<String, String> {
+/**
+ * `key="value"` pairs (keys of letters, digits, `_` and `-`), read by hand: a playlist has one
+ * #EXTINF line per channel, tens of thousands of them. Reads them as the pattern
+ * `([\w-]+)="([^"]*)"` found them before, a later key replacing an earlier one.
+ */
+internal fun parseM3uAttributes(line: String): Map<String, String> {
     if ('"' !in line) return emptyMap()
-    return m3uAttributeRegex.findAll(line)
-        .associate { match -> match.groupValues[1].lowercase() to match.groupValues[2].trim() }
+    val attributes = LinkedHashMap<String, String>()
+    var i = 0
+    while (i < line.length) {
+        if (!line[i].isM3uKeyChar()) {
+            i++
+            continue
+        }
+        var end = i
+        while (end < line.length && line[end].isM3uKeyChar()) end++
+        if (end + 1 < line.length && line[end] == '=' && line[end + 1] == '"') {
+            val close = line.indexOf('"', end + 2)
+            if (close < 0) break
+            attributes[line.substring(i, end).lowercase()] = line.substring(end + 2, close).trim()
+            i = close + 1
+        } else {
+            i = end
+        }
+    }
+    return attributes
 }
+
+private fun Char.isM3uKeyChar(): Boolean =
+    this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9' || this == '_' || this == '-'
 
 /** Kodi style `url|User-Agent=...&Referer=...`. */
 private fun parseUrlHeaders(line: String): Map<String, String> {

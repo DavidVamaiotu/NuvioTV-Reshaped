@@ -219,6 +219,9 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
         if (++events % CANCEL_CHECK_EVENTS == 0 && Thread.currentThread().isInterrupted) return
         if (event == XmlPullParser.START_TAG) {
             if (parser.depth == 1) {
+                // Whatever a panel prints after the guide (a PHP warning) ends it; a further <tv>
+                // (guides joined end to end) is read on.
+                if (closed && !parser.name.equals("tv", ignoreCase = true)) break
                 check(parser.name.equals("tv", ignoreCase = true)) { "Not an XMLTV guide" }
                 opened = true
             }
@@ -593,7 +596,8 @@ internal class LiveTvScheduleBuilder(
 /**
  * When the guide must be read again: when the first channel whose kept programmes were cut short
  * reaches the end of them, so "now playing" never runs dry. Channels whose guide simply ends there
- * gain nothing from reading it sooner.
+ * gain nothing from reading it sooner, unless the whole guide ends before the next refresh (a
+ * portal's guide covers only the hours asked for): then it is read, and fetched, again as it runs out.
  */
 internal fun nextScheduleReadAt(
     schedule: LiveTvSchedule,
@@ -602,11 +606,35 @@ internal fun nextScheduleReadAt(
     minGapMs: Long,
     maxGapMs: Long,
 ): Long {
-    val runsOut = truncated
+    val cutRunsOut = truncated
         .mapNotNull { schedule[it]?.lastOrNull()?.stopEpochMs }
         .minOrNull()
-        ?: (nowEpochMs + maxGapMs)
+    var guideEnds: Long? = null
+    for (programmes in schedule.values) {
+        val stop = programmes.lastOrNull()?.stopEpochMs ?: continue
+        if (guideEnds == null || stop > guideEnds) guideEnds = stop
+    }
+    val runsOut = listOfNotNull(cutRunsOut, guideEnds).minOrNull() ?: (nowEpochMs + maxGapMs)
     return runsOut.coerceIn(nowEpochMs + minGapMs, nowEpochMs + maxGapMs)
+}
+
+/**
+ * When the programme on air next changes for any of [keys] (one ends, or one starts where nothing
+ * was on): until then [currentProgrammes] gives the same answer. Long.MAX_VALUE when it never does.
+ */
+internal fun nextProgrammeChange(
+    schedule: LiveTvSchedule,
+    keys: Collection<String>,
+    nowEpochMs: Long,
+): Long {
+    var next = Long.MAX_VALUE
+    if (schedule.isEmpty()) return next
+    for (key in keys) {
+        val programme = schedule[key]?.firstOrNull { it.stopEpochMs > nowEpochMs } ?: continue
+        val change = if (programme.startEpochMs <= nowEpochMs) programme.stopEpochMs else programme.startEpochMs
+        if (change < next) next = change
+    }
+    return next
 }
 
 /** The programme on air at [nowEpochMs] for each of [keys]. */
@@ -633,13 +661,15 @@ private val NAME_NOISE = hashSetOf(
 
 /** A leading country tag: "UK:", "UK |", "|UK|", "[UK]", "(UK)". */
 private val NAME_TAG = Regex("""^\s*(?:[\[(|]\s*[A-Za-z]{2,3}\s*[\])|]|[A-Za-z]{2,3}\s*[:|])\s*""")
+private val NAME_TAG_ENDS = charArrayOf(':', '|', ']', ')')
 
 /**
  * A channel name reduced for matching a playlist's name with a guide's: lower case, no country
  * tag, no quality words, letters and digits only ("UK: BBC One HD" and "BBC One" are both "bbcone").
  */
 internal fun liveTvNameKey(name: String): String {
-    val untagged = NAME_TAG.replaceFirst(name, "")
+    // Every tag ends in one of these: most names have none and skip the pattern (it runs per channel and per guide name).
+    val untagged = if (name.indexOfAny(NAME_TAG_ENDS) < 0) name else NAME_TAG.replaceFirst(name, "")
     val out = StringBuilder(untagged.length)
     var word = StringBuilder()
     fun flush() {
@@ -678,11 +708,18 @@ internal fun liveTvGuideSpan(start: Long, stop: Long, from: Long, to: Long): Pai
 private const val NAME_KEY_PREFIX = "\u0001"
 
 internal object LiveTvClock {
-    private val clockFormatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+    /** The locale's short time until [followDeviceHourFormat] has read the TV's 12/24-hour setting. */
+    @Volatile private var clockFormatter: DateTimeFormatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
+
+    /** Follows the TV's own 24-hour setting, which the locale's format ignores (en-US set to 24 h). */
+    fun followDeviceHourFormat(context: android.content.Context) {
+        val pattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm" else "h:mm a"
+        clockFormatter = DateTimeFormatter.ofPattern(pattern, java.util.Locale.getDefault())
+    }
 
     fun nowEpochMs(): Long = System.currentTimeMillis()
 
-    /** The device's own short time format (13:00 or 1:00 PM) in its time zone. */
+    /** The TV's own time format (13:00 or 1:00 PM) in its time zone. */
     fun formatClock(epochMs: Long): String =
         clockFormatter.format(Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault()))
 

@@ -119,6 +119,8 @@ class LiveTvPlaylistParserTest {
         assertEquals(2 * hour, nextScheduleReadAt(schedule, setOf("short"), 0L, hour, 10 * hour))
         assertEquals(hour, nextScheduleReadAt(mapOf("tiny" to slots(4, hour / 10)), setOf("tiny"), 0L, hour, 10 * hour))
         assertEquals(10 * hour, nextScheduleReadAt(emptyMap(), emptySet(), 0L, hour, 10 * hour))
+        // A portal's guide asked for 8 h, refreshed every 12 h: read (and fetched) again when it ends.
+        assertEquals(8 * hour, nextScheduleReadAt(mapOf("portal" to slots(8, hour)), emptySet(), 0L, hour, 12 * hour))
     }
 
     @Test

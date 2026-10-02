@@ -77,6 +77,8 @@ class LiveTvScreenModel @Inject constructor(
 
     /** Set when a channel starts playing: on return, focus goes back to the channel last watched. */
     var restoreFocusOnReturn = false
+    /** The channel played from the guide, for the return when the one last watched is not in the list shown. */
+    var launchedUrl: String? = null
 
     /** Sources whose categories are folded away in the category column. */
     val collapsedSources = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
