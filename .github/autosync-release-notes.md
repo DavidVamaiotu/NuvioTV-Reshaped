@@ -1,7 +1,4 @@
-- **Live TV no longer crashes on opening.** A catch-up link pattern that Android rejected crashed Live TV as soon as a playlist was added; it now opens normally again.
-- **Sturdier playlists and portals.** Single stream links play as one channel, web pages are no longer read as channel lists, very large lists fail on their own instead of closing the app, Ministra Stalker portals connect, Stalker categories show, and expired portal sessions renew themselves.
-- **More reliable guides.** Guides with stray characters are no longer cut short, guide cells no longer crash the screen, a failed refresh keeps the last good guide, and guides match channels across all your sources. Older TVs keep showing every guide while it refreshes.
-- **Custom user agent per playlist.** M3U and Xtream sources can set their own user agent for channels, guides and replays.
-- **Replays in HLS.** An optional "Prefer HLS for replays" setting plays Xtream catch-up as .m3u8 when the provider supports it.
-- **Tidier Live TV.** The Favorites and All channels entries can be hidden, and guides refresh every 12, 24 or 48 hours.
-- **Better Google sync.** Playlists imported from a file now sync between devices, TV profiles that share addons match the phone's, and Live TV pulls the latest changes when you open it.
+- **Google sync no longer loses playlists.** A device that is missing playlists no longer deletes them from your other devices. Only playlists you remove yourself are removed everywhere, and each TV profile keeps its own Live TV. Imported playlist files, removals and changes made while Live TV opens now sync reliably.
+- **Bigger, easier guide.** Guide rows are taller, so about seven channels show at once. Channel names get more room, and the preview and description at the top are smaller.
+- **Reorder categories in every playlist.** When you have more than one playlist, Edit categories lists each playlist's categories separately. This means categories with the same name in a second or third playlist can now be moved, and the player's channel panel follows the same order.
+- **Portal and link fixes.** Stalker portals load channels when the MAC is typed without colons. Links with a "|" in the password are no longer cut off, and a channel's own user agent is kept.
