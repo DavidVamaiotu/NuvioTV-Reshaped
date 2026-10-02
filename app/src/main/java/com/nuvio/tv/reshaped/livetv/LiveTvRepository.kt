@@ -440,11 +440,15 @@ object LiveTvRepository {
     // region Own playlists
 
     /** Makes a playlist named [name], with [channel] in it when given; returns its id. */
-    fun createCustomList(name: String, channel: LiveTvChannel? = null): String? {
+    fun createCustomList(name: String, channel: LiveTvChannel? = null): String? =
+        createCustomList(name, listOfNotNull(channel))
+
+    /** Makes a playlist named [name] holding [channels]; returns its id. */
+    fun createCustomList(name: String, channels: List<LiveTvChannel>): String? {
         val title = name.trim().ifEmpty { return null }
         // Starts with the time it was made, so lists sort oldest first on every device.
         val id = System.currentTimeMillis().toString(36).padStart(9, '0') + java.util.UUID.randomUUID().toString().take(4)
-        updateCustomLists { it + LiveTvCustomList(id, title, listOfNotNull(channel?.streamUrl)) }
+        updateCustomLists { it + LiveTvCustomList(id, title, channels.map { c -> c.streamUrl }.distinct()) }
         return id
     }
 
@@ -466,6 +470,29 @@ object LiveTvRepository {
                 else list.copy(urls = list.urls + channel.streamUrl)
             }
         }
+    }
+
+    /** Adds [channels] to the end of list [id], skipping ones already in it. */
+    fun addToCustomList(id: String, channels: Collection<LiveTvChannel>) {
+        if (channels.isEmpty()) return
+        updateCustomLists { lists ->
+            lists.map { list ->
+                if (list.id != id) return@map list
+                val have = list.urls.toHashSet()
+                list.copy(urls = list.urls + channels.map { it.streamUrl }.filter(have::add))
+            }
+        }
+    }
+
+    /** Makes [channels] favourites (ones already are stay). */
+    fun addFavorites(channels: Collection<LiveTvChannel>) {
+        val store = storage ?: return
+        if (channels.isEmpty()) return
+        val favorites = _uiState.value.favoriteUrls.toHashSet()
+        if (!favorites.addAll(channels.map { it.streamUrl })) return
+        _uiState.update { it.copy(favoriteUrls = favorites) }
+        scope.launch(writer) { store.saveFavoriteUrls(favorites) }
+        ReshapedSync.onLocalChange()
     }
 
     fun removeFromCustomList(id: String, url: String) {

@@ -60,7 +60,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -69,6 +68,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -319,7 +319,10 @@ fun LiveTvScreen(
                 withFrameNanos { }
                 if (runCatching { target.requestFocus() }.isSuccess) return@launch
             }
-            focusManager.moveFocus(FocusDirection.Left)
+            // Still nowhere to land (the category is gone): the settings button, at the top.
+            if (target !== settingsFocus && runCatching { settingsFocus.requestFocus() }.isSuccess) return@launch
+            // Never leave the panel open with the focus still in the guide.
+            categoriesOpen = false
         }
     }
     val toCategories: () -> Unit = {
@@ -349,6 +352,10 @@ fun LiveTvScreen(
     }
     // A long OK on a channel: favorites and the viewer's own playlists.
     var listsFor by remember { mutableStateOf<LiveTvChannel?>(null) }
+    // Picked channels going to favorites or a playlist at once.
+    var bulkAdd by remember { mutableStateOf(false) }
+    // Set once the guide exists (it is made below).
+    var guideSelecting: () -> Boolean = { false }
     val guide = remember {
         LiveTvGuideState(
             channels = emptyList(),
@@ -361,10 +368,12 @@ fun LiveTvScreen(
             onExitLeft = { currentToCategories() },
             // ▲ from the first channel: the settings button, at the top of the categories.
             onExitUp = { currentOpenCategories(settingsFocus) },
-            onLongPress = { channel -> listsFor = channel },
+            // Held OK: favorites and playlists for the channel; while picking several, for all of them.
+            onLongPress = { channel -> if (guideSelecting()) bulkAdd = true else listsFor = channel },
             leadMs = 0L,
         )
     }
+    guideSelecting = { guide.selecting }
     // Another category or search brings the guide back to now; the same one filtered again
     // (a favourite, a hidden channel) stays where it was.
     var shownFor by remember { mutableStateOf<String?>(null) }
@@ -414,7 +423,7 @@ fun LiveTvScreen(
                     preview = if (previewsEnabled) preview else null,
                     playVideo = (gridFocused || settingsFocused || categoriesOpen) && started && !launching &&
                         !showSourceDialog && !showCategoryDialog && !showMenu && !showPlaylists && listsFor == null &&
-                        !naming && editingList == null,
+                        !naming && editingList == null && !bulkAdd,
                 )
                 Spacer(Modifier.height(NuvioTheme.spacing.sm))
                 LaunchedEffect(gridFocused) { if (gridFocused) categoriesOpen = false }
@@ -454,6 +463,9 @@ fun LiveTvScreen(
                                 color = NuvioTheme.colors.TextSecondary,
                                 modifier = Modifier.padding(top = 40.dp, start = 8.dp).widthIn(max = 520.dp),
                             )
+                        }
+                        if (guide.selecting) {
+                            LiveTvPickingBar(count = guide.picked.size, modifier = Modifier.align(Alignment.BottomCenter))
                         }
                     }
                     // Called by its full name: inside the Column the ColumnScope variant would be picked.
@@ -528,8 +540,41 @@ fun LiveTvScreen(
             channel = channel,
             onToggleFavorite = { toggleFavorite(channel) },
             onToggleList = { id -> toggleInList(id, channel) },
+            onSelectMany = {
+                guide.startSelecting(channel)
+                listsFor = null
+            },
             onDismiss = { listsFor = null },
         )
+    }
+    if (bulkAdd) {
+        LiveTvBulkAddDialog(
+            picked = guide.picked.values.toList(),
+            shown = visibleChannels,
+            onPickAll = { all -> all.forEach { guide.picked[it.streamUrl] = it } },
+            onAdded = {
+                bulkAdd = false
+                guide.stopSelecting()
+            },
+            onDismiss = { bulkAdd = false },
+        )
+    }
+    // A closed dialog gives the focus back where the viewer was, so ◀▶ never find nothing focused.
+    val anyDialog = showSourceDialog || showCategoryDialog || showPlaylists || editingList != null || naming ||
+        listsFor != null || showMenu || bulkAdd
+    var hadDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(anyDialog) {
+        if (anyDialog) {
+            hadDialog = true
+            return@LaunchedEffect
+        }
+        if (!hadDialog) return@LaunchedEffect
+        hadDialog = false
+        repeat(5) {
+            withFrameNanos { }
+            val target = if (categoriesOpen) settingsFocus else gridFocus
+            if (runCatching { target.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
     }
     if (showMenu) {
         LiveTvMenuDialog(
@@ -548,6 +593,31 @@ fun LiveTvScreen(
                 showPlaylists = true
             },
             onDismiss = { showMenu = false },
+        )
+    }
+}
+
+/** While picking channels: how many, and the keys. */
+@Composable
+private fun LiveTvPickingBar(count: Int, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .padding(bottom = NuvioTheme.spacing.md)
+            .background(Color(0xF0121214), RoundedCornerShape(50))
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = pluralStringResource(R.plurals.live_tv_picked, count, count),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = NuvioTheme.colors.TextPrimary,
+        )
+        Text(
+            text = stringResource(R.string.live_tv_picking_keys),
+            style = MaterialTheme.typography.bodySmall,
+            color = NuvioTheme.colors.TextSecondary,
+            modifier = Modifier.padding(start = 16.dp),
         )
     }
 }

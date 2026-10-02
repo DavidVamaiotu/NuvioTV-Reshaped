@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Check
 import androidx.tv.material3.Icon
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -131,6 +132,29 @@ internal class LiveTvGuideState(
 
     val channel: LiveTvChannel? get() = channels.getOrNull(row)
 
+    /**
+     * Picking several channels at once: OK ticks the selected channel instead of playing it,
+     * Back stops picking. [picked] is by stream link, in the order they were ticked.
+     */
+    var selecting by mutableStateOf(false)
+        private set
+    val picked = androidx.compose.runtime.mutableStateMapOf<String, LiveTvChannel>()
+
+    fun startSelecting(first: LiveTvChannel?) {
+        picked.clear()
+        first?.let { picked[it.streamUrl] = it }
+        selecting = true
+    }
+
+    fun stopSelecting() {
+        selecting = false
+        picked.clear()
+    }
+
+    fun togglePicked(channel: LiveTvChannel) {
+        if (picked.remove(channel.streamUrl) == null) picked[channel.streamUrl] = channel
+    }
+
     /** The selected programme: the one at [anchorMs] in the selected channel. */
     fun selected(): LiveTvProgramme? =
         channel?.let { LiveTvRepository.schedule(it.guideKey) }?.let { programmes ->
@@ -188,6 +212,10 @@ internal class LiveTvGuideState(
                             longPressed = false
                             return true
                         }
+                        if (selecting) {
+                            togglePicked(picked)
+                            return true
+                        }
                         // A programme that has ended plays again where the provider keeps it; anything else plays live.
                         val programme = selected()
                         if (programme != null && programme.stopEpochMs <= LiveTvClock.nowEpochMs() &&
@@ -198,7 +226,7 @@ internal class LiveTvGuideState(
                             onPlay(picked)
                         }
                     }
-                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> onClose()
+                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> if (selecting) stopSelecting() else onClose()
                 }
             }
             return handled || event.keyCode in GUIDE_KEYS
@@ -421,6 +449,7 @@ internal fun LiveTvGuideGrid(
                             channel = channel,
                             logo = liveState.logoFor(channel),
                             isFavorite = channel.streamUrl in liveState.favoriteUrls,
+                            picked = if (state.selecting) channel.streamUrl in state.picked else null,
                             selectedRow = index == state.row,
                             active = active,
                             guideVersion = liveState.guideVersion,
@@ -534,6 +563,8 @@ private fun GuideRow(
     channel: LiveTvChannel,
     logo: String?,
     isFavorite: Boolean,
+    /** While picking channels: whether this one is ticked; null otherwise. */
+    picked: Boolean?,
     selectedRow: Boolean,
     active: Boolean,
     guideVersion: Int,
@@ -555,6 +586,18 @@ private fun GuideRow(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (picked != null) {
+                Box(
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .size(18.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(if (picked) Color.White else Color.White.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (picked) Icon(Icons.Filled.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
+                }
+            }
             LiveTvLogo(url = logo, name = channel.name, width = 44.dp, height = 26.dp)
             Text(
                 text = channel.name,

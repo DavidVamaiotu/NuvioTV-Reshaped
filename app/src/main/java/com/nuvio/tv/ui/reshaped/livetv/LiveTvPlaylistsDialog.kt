@@ -32,6 +32,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.res.stringResource
+import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -56,6 +58,7 @@ internal fun LiveTvChannelListsDialog(
     channel: LiveTvChannel,
     onToggleFavorite: () -> Unit,
     onToggleList: (String) -> Unit,
+    onSelectMany: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val uiState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
@@ -120,6 +123,11 @@ internal fun LiveTvChannelListsDialog(
                     icon = Icons.Filled.Add,
                     onClick = { naming = true },
                 )
+                LiveTvPillButton(
+                    text = stringResource(R.string.live_tv_pick_several),
+                    icon = Icons.Filled.Checklist,
+                    onClick = onSelectMany,
+                )
                 Spacer(Modifier.weight(1f))
                 LiveTvPillButton(text = stringResource(R.string.live_tv_done), onClick = onDismiss)
             }
@@ -127,13 +135,110 @@ internal fun LiveTvChannelListsDialog(
     }
     if (naming) {
         // Made with this channel in it.
-        LiveTvNewListDialog(channel = channel, onCreated = { naming = false }, onDismiss = { naming = false })
+        LiveTvNewListDialog(channels = listOf(channel), onCreated = { naming = false }, onDismiss = { naming = false })
+    }
+}
+
+/**
+ * Held OK while picking channels: OK on Favorites or a playlist puts every picked channel in it
+ * (ones already there stay once), or a new playlist is made with them. All the channels shown can
+ * be picked at once.
+ */
+@Composable
+internal fun LiveTvBulkAddDialog(
+    picked: List<LiveTvChannel>,
+    shown: List<LiveTvChannel>,
+    onPickAll: (List<LiveTvChannel>) -> Unit,
+    onAdded: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val uiState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
+    val firstFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            withFrameNanos { }
+            if (runCatching { firstFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
+    }
+    var naming by remember { mutableStateOf(false) }
+    var armed by remember { mutableStateOf(false) }
+    NuvioDialog(
+        onDismiss = onDismiss,
+        title = pluralStringResource(R.plurals.live_tv_add_picked_title, picked.size, picked.size),
+        subtitle = stringResource(R.string.live_tv_add_picked_description),
+        width = 520.dp,
+        usePlatformDefaultWidth = false,
+        contentSpacing = NuvioTheme.spacing.md,
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.md),
+            modifier = Modifier.onPreviewKeyEvent { event ->
+                val native = event.nativeKeyEvent
+                val ok = native.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || native.keyCode == KeyEvent.KEYCODE_ENTER ||
+                    native.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+                if (ok && native.action == KeyEvent.ACTION_DOWN && native.repeatCount == 0) armed = true
+                ok && !armed
+            },
+        ) {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                contentPadding = PaddingValues(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                item(key = "\u0000favorites") {
+                    LiveTvCategoryToggle(
+                        label = stringResource(R.string.live_tv_favorites),
+                        count = null,
+                        visible = false,
+                        onToggle = {
+                            LiveTvRepository.addFavorites(picked)
+                            onAdded()
+                        },
+                        modifier = Modifier.focusRequester(firstFocus),
+                    )
+                }
+                items(uiState.customLists, key = { it.id }) { list ->
+                    LiveTvCategoryToggle(
+                        label = list.name,
+                        count = list.urls.size.toString(),
+                        visible = false,
+                        onToggle = {
+                            LiveTvRepository.addToCustomList(list.id, picked)
+                            onAdded()
+                        },
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
+            ) {
+                LiveTvPillButton(
+                    text = stringResource(R.string.live_tv_playlist_new),
+                    icon = Icons.Filled.Add,
+                    onClick = { naming = true },
+                    enabled = picked.isNotEmpty(),
+                )
+                if (shown.isNotEmpty()) {
+                    LiveTvPillButton(
+                        text = pluralStringResource(R.plurals.live_tv_pick_all_shown, shown.size, shown.size),
+                        onClick = { onPickAll(shown) },
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                LiveTvPillButton(text = stringResource(R.string.live_tv_done), onClick = onDismiss)
+            }
+        }
+    }
+    if (naming) {
+        LiveTvNewListDialog(channels = picked, onCreated = { onAdded() }, onDismiss = { naming = false })
     }
 }
 
 /** Names a new playlist; with [channel], that channel is put in it. */
 @Composable
-internal fun LiveTvNewListDialog(onCreated: (String) -> Unit, onDismiss: () -> Unit, channel: LiveTvChannel? = null) {
+internal fun LiveTvNewListDialog(onCreated: (String) -> Unit, onDismiss: () -> Unit, channels: List<LiveTvChannel> = emptyList()) {
     var name by remember { mutableStateOf("") }
     val field = remember { FocusRequester() }
     LaunchedEffect(Unit) {
@@ -142,14 +247,14 @@ internal fun LiveTvNewListDialog(onCreated: (String) -> Unit, onDismiss: () -> U
             if (runCatching { field.requestFocus() }.isSuccess) return@LaunchedEffect
         }
     }
-    val create: () -> Unit = { LiveTvRepository.createCustomList(name, channel)?.let(onCreated) }
+    val create: () -> Unit = { LiveTvRepository.createCustomList(name, channels)?.let(onCreated) }
     NuvioDialog(
         onDismiss = onDismiss,
         title = stringResource(R.string.live_tv_playlist_new),
-        subtitle = if (channel != null) {
-            stringResource(R.string.live_tv_playlist_new_with_channel, channel.name)
-        } else {
-            stringResource(R.string.live_tv_playlist_new_description)
+        subtitle = when (channels.size) {
+            0 -> stringResource(R.string.live_tv_playlist_new_description)
+            1 -> stringResource(R.string.live_tv_playlist_new_with_channel, channels[0].name)
+            else -> pluralStringResource(R.plurals.live_tv_playlist_new_with_channels, channels.size, channels.size)
         },
         width = 520.dp,
         usePlatformDefaultWidth = false,
