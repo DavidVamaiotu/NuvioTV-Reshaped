@@ -1105,6 +1105,23 @@ object LiveTvRepository {
         return shown ?: withContext(writer) { LiveTvStorage(context.applicationContext, profileId).syncData() }
     }
 
+    /** The id [profileId] gives the source with [identity] (after a sync), or null. */
+    internal suspend fun sourceIdFor(context: Context, profileId: Int, identity: String): String? {
+        val shown = withContext(serial) {
+            if (loadedProfileId != profileId || storage == null) null
+            else _uiState.value.sources.firstOrNull { it.identity == identity }?.id
+        }
+        return shown ?: withContext(writer) { LiveTvStorage(context.applicationContext, profileId).sources().firstOrNull { it.identity == identity }?.id }
+    }
+
+    /** Loads [sourceId] of [profileId] again when it is shown (its playlist file was replaced by sync). */
+    internal suspend fun reloadSource(profileId: Int, sourceId: String) {
+        withContext(serial) {
+            if (loadedProfileId != profileId || storage == null) return@withContext
+            _uiState.value.sources.firstOrNull { it.id == sourceId }?.let { launchSourceLoad(it, adding = false) }
+        }
+    }
+
     /**
      * Makes the change sync brought in ([before] to [after]) on top of what [profileId] has now,
      * saves it, and shows it when the profile is loaded. Only changed sources load again.
@@ -1133,10 +1150,13 @@ object LiveTvRepository {
             val sources = state.sources
             if (sources != oldSources) {
                 val kept = sources.associateBy { it.id }
-                oldSources.filter { it.id !in kept }.forEach { gone ->
+                val removed = oldSources.filter { it.id !in kept }
+                removed.forEach { gone ->
                     sourceJobs.remove(gone.id)?.cancel()
                     loaded.remove(gone.id)
                 }
+                // A removed imported playlist's file goes with it, as when it is removed here.
+                scope.launch(writer) { removed.forEach { store.deletePlaylistFile(it.id) } }
                 LiveTvStalker.clearSession()
                 val oldById = oldSources.associateBy { it.id }
                 sources.filter { oldById[it.id] != it }.forEach { launchSourceLoad(it, adding = false) }
@@ -1162,7 +1182,10 @@ object LiveTvRepository {
         withContext(writer) {
             val store = LiveTvStorage(appContext, profileId)
             val sources = store.sources()
-            store.saveSources(sources.withSyncChange(before.sources, after.sources, store::newSourceId))
+            val synced = sources.withSyncChange(before.sources, after.sources, store::newSourceId)
+            store.saveSources(synced)
+            val kept = synced.mapTo(HashSet()) { it.id }
+            sources.filter { it.id !in kept }.forEach { store.deletePlaylistFile(it.id) }
             store.saveFavoriteUrls(store.favoriteUrls().withSyncChange(before.favorites, after.favorites))
             store.saveCustomLists(store.customLists().withSyncChange(before.customLists, after.customLists))
             store.saveHiddenGroups(store.hiddenGroups().withSyncChange(before.hiddenGroups, after.hiddenGroups))
