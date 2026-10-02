@@ -15,7 +15,11 @@ internal object LiveTvCatchupLinks {
 
     /** Whether [programme] of a channel with [catchup] can be played again now. */
     fun isPlayable(catchup: LiveTvCatchup?, programme: LiveTvProgramme, nowMs: Long): Boolean =
-        catchup != null && programme.startEpochMs < nowMs && nowMs - programme.startEpochMs <= catchup.days * DAY_MS
+        isPlayableFrom(catchup, programme.startEpochMs, nowMs)
+
+    /** Whether a channel with [catchup] can be played again from [startMs]. */
+    fun isPlayableFrom(catchup: LiveTvCatchup?, startMs: Long, nowMs: Long): Boolean =
+        catchup != null && startMs < nowMs && nowMs - startMs <= catchup.days * DAY_MS
 
     /** An Xtream live link `http://host/live/user/pass/id.ext` (or without `/live`), split up. */
     private val XTREAM_LIVE = Regex("""^(https?://[^/]+)/(?:live/)?([^/]+)/([^/]+)/(\d+)(\.[A-Za-z0-9]+)?$""", RegexOption.IGNORE_CASE)

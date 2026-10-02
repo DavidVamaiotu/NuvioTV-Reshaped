@@ -73,9 +73,12 @@ import com.nuvio.tv.domain.model.Stream
 import com.nuvio.tv.domain.model.StreamBehaviorHints
 import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
+import com.nuvio.tv.reshaped.livetv.LiveTvCatchupLinks
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
+import com.nuvio.tv.reshaped.livetv.LiveTvReplay
+import com.nuvio.tv.reshaped.livetv.LiveTvReplayWindow
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.LiveTvPreferences
 import com.nuvio.tv.reshaped.livetv.LiveTvUiState
@@ -148,6 +151,13 @@ internal class LiveTvPlayerState(
                 guide = null
                 playCatchup(channel, programme)
             },
+            // Held OK: what is on now on that channel, from its start.
+            onLongPress = { channel ->
+                startOverProgramme(channel)?.let { programme ->
+                    guide = null
+                    playCatchup(channel, programme)
+                }
+            },
         )
     }
 
@@ -157,6 +167,8 @@ internal class LiveTvPlayerState(
     private var infoJob: Job? = null
     /** The release of an OK press Live TV acted on, which must not reach the controls it opened. */
     private var swallowOkRelease = false
+    /** OK is down on the bare picture: a short press acts on release, a held one starts the programme over. */
+    private var okHeld = false
 
     private fun showInfo() {
         infoOpen = true
@@ -256,6 +268,7 @@ internal class LiveTvPlayerState(
             swallowOkRelease = false
             return true
         }
+        if (event.keyCode !in OK_KEYS) okHeld = false
         // A channel that failed: ▲▼ still zap away from it (most remotes have no CH+/CH-). ◀▶ stay
         // the error screen's, which moves between its buttons.
         if (uiState.error != null && !nuvioOverlayOpen && !isCatchup()) {
@@ -293,14 +306,28 @@ internal class LiveTvPlayerState(
         }
         return when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                // Acts on the press; the release is swallowed too, so the player never sees OK (which pauses).
-                if (down && event.repeatCount == 0) {
-                    swallowOkRelease = true
-                    if (infoOpen) {
-                        hideInfo()
-                        controller.onEvent(PlayerEvent.OnToggleControls)
-                    } else {
-                        showInfo()
+                // A short press acts on release (info, then the controls); held, the programme on
+                // now plays from its start where the provider keeps it. The player never sees OK
+                // (which pauses).
+                when {
+                    down && event.repeatCount == 0 -> okHeld = true
+                    down -> if (okHeld) {
+                        val channel = currentChannel()
+                        val programme = channel?.let(::startOverProgramme)
+                        if (channel != null && programme != null) {
+                            okHeld = false
+                            swallowOkRelease = true
+                            playCatchup(channel, programme)
+                        }
+                    }
+                    okHeld -> {
+                        okHeld = false
+                        if (infoOpen) {
+                            hideInfo()
+                            controller.onEvent(PlayerEvent.OnToggleControls)
+                        } else {
+                            showInfo()
+                        }
                     }
                 }
                 true
@@ -396,27 +423,89 @@ internal class LiveTvPlayerState(
     private fun currentChannel(): LiveTvChannel? =
         currentListUrl?.let { url -> LiveTvRepository.uiState.value.channels.firstOrNull { it.streamUrl == url } }
 
-    /** Plays [channel]'s past [programme] in this player; it stays the channel ▲▼ zap from. */
+    /** What is on now on [channel], when its provider can play it from the start; null otherwise. */
+    internal fun startOverProgramme(channel: LiveTvChannel): LiveTvProgramme? {
+        val now = LiveTvClock.nowEpochMs()
+        val programme = LiveTvRepository.uiState.value.currentProgrammes[channel.guideKey] ?: return null
+        return programme.takeIf { it.startEpochMs < now && now < it.stopEpochMs && LiveTvCatchupLinks.isPlayable(channel.catchup, it, now) }
+    }
+
+    /**
+     * Plays [channel]'s [programme] again from its start (past, or on now: start over); it stays
+     * the channel ▲▼ zap from, and plays on past the programme's end (see [followReplay]).
+     */
     internal fun playCatchup(channel: LiveTvChannel, programme: LiveTvProgramme) {
         closePanel()
         hideInfo()
         switchJob?.cancel()
         switchJob = scope.launch {
-            val playback = LiveTvRepository.catchupChannel(channel, programme)
-            if (playback == null) {
+            val replay = LiveTvRepository.catchupChannel(channel, programme)
+            if (replay == null) {
                 // What plays stays as it was.
                 android.widget.Toast.makeText(controller.context, R.string.live_tv_catchup_failed, android.widget.Toast.LENGTH_SHORT).show()
                 return@launch
             }
             currentListUrl = channel.streamUrl
             bannerKey++
+            replayTitleProgramme = programme
             controller._uiState.update { it.copy(title = programme.title, logo = LiveTvRepository.uiState.value.logoFor(channel)) }
-            LiveTvPlaybackRegistry.register(
-                PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers).url,
-                listUrl = channel.streamUrl,
-                catchup = true,
-            )
-            controller.switchToSourceStream(channel.toStream(playback))
+            playReplay(channel, replay)
+        }
+    }
+
+    private fun playReplay(channel: LiveTvChannel, replay: LiveTvReplay) {
+        LiveTvPlaybackRegistry.register(
+            PlayerMediaSourceFactory.normalizePlaybackRequest(replay.playback.streamUrl, replay.playback.headers).url,
+            listUrl = channel.streamUrl,
+            catchup = true,
+            window = replay.window,
+        )
+        controller.switchToSourceStream(channel.toStream(replay.playback))
+    }
+
+    /** The programme the title shows while a replay plays. */
+    private var replayTitleProgramme: LiveTvProgramme? = null
+    /** The replay whose end has been acted on, so it is acted on once. */
+    private var continuedWindow: LiveTvReplayWindow? = null
+
+    /**
+     * Follows a replay as it plays ([positionMs] into it, [durationMs] long when known): the title
+     * becomes the programme it has got to, and near its end the next part plays, or the channel
+     * live once the replay has caught up. One map lookup when nothing is replayed.
+     */
+    internal fun followReplay(positionMs: Long, durationMs: Long) {
+        val window = LiveTvPlaybackRegistry.replayWindow(controller.currentStreamUrl) ?: return
+        val channel = currentChannel() ?: return
+        val at = window.startMs + positionMs
+        val shown = replayTitleProgramme
+        if (shown == null || at < shown.startEpochMs || at >= shown.stopEpochMs) {
+            LiveTvRepository.schedule(channel.guideKey).firstOrNull { at >= it.startEpochMs && at < it.stopEpochMs }?.let { programme ->
+                replayTitleProgramme = programme
+                if (controller._uiState.value.title != programme.title) controller._uiState.update { it.copy(title = programme.title) }
+            }
+        }
+        // A replay's length is known for HLS; a TS replay is as long as was asked for. One that
+        // names no end runs on to live by itself, and is only followed should it stop.
+        if (!window.bounded) return
+        val length = if (durationMs > 0L) durationMs else window.endMs - window.startMs
+        if (positionMs > 0L && positionMs >= length - REPLAY_END_MARGIN_MS) continueReplay(window)
+    }
+
+    /** At the end of [window]: the next part of the channel, or the channel live once caught up. */
+    internal fun continueReplay(window: LiveTvReplayWindow) {
+        if (continuedWindow === window) return
+        continuedWindow = window
+        val channel = currentChannel() ?: return
+        if (LiveTvClock.nowEpochMs() - window.endMs < REPLAY_CAUGHT_UP_MS) {
+            replayTitleProgramme = null
+            switchTo(channel)
+            return
+        }
+        switchJob?.cancel()
+        switchJob = scope.launch {
+            // Gone from the provider since (or no longer kept): the channel live.
+            val replay = LiveTvRepository.replayChannel(channel, window.endMs) ?: return@launch switchTo(channel)
+            playReplay(channel, replay)
         }
     }
 
@@ -427,6 +516,7 @@ internal class LiveTvPlayerState(
         }
         currentListUrl = channel.streamUrl
         bannerKey++
+        replayTitleProgramme = null
         closePanel()
         // The loading screen and pause screen show the player's logo: the new channel's, from the first press.
         controller._uiState.update { it.copy(title = channel.name, logo = LiveTvRepository.uiState.value.logoFor(channel)) }
@@ -475,6 +565,10 @@ internal class LiveTvPlayerState(
 
     private companion object {
         const val ZAP_SETTLE_MS = 350L
+        /** How near its end a replay hands over to what follows, before the player stops at its end. */
+        const val REPLAY_END_MARGIN_MS = 1_500L
+        /** A replay this near to now goes live rather than asking for a few seconds more. */
+        const val REPLAY_CAUGHT_UP_MS = 90_000L
         const val INFO_MS = 6_000L
         val OK_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
         val SYSTEM_KEYS = intArrayOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
@@ -511,6 +605,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     LiveTvFrameRateMatch(state, uiState)
+    LiveTvReplayFollow(state)
     // Only after an error screen: elsewhere the player's own focus handling stands.
     val hasError = uiState.error != null
     var hadError by remember { mutableStateOf(false) }
@@ -571,6 +666,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
                 now = liveState.currentProgrammes[channel.guideKey],
                 number = currentIndex + 1,
                 clock = clock,
+                startOver = remember(channel, liveState.currentProgrammes, clock.value / 60_000L) { state.startOverProgramme(channel) != null },
             )
         }
     }
@@ -678,6 +774,7 @@ private fun LiveTvInfoCard(
     now: LiveTvProgramme?,
     number: Int,
     clock: State<Long>,
+    startOver: Boolean,
 ) {
     // Read once per minute tick: the kept guide is a map lookup.
     val next = remember(channel.guideKey, now, clock.value / 60_000L) { LiveTvRepository.nextProgramme(channel.guideKey) }
@@ -775,7 +872,7 @@ private fun LiveTvInfoCard(
                 }
             }
             Text(
-                text = stringResource(R.string.live_tv_info_hint),
+                text = stringResource(if (startOver) R.string.live_tv_info_hint_start_over else R.string.live_tv_info_hint),
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.62f),
                 modifier = Modifier.padding(top = 10.dp),

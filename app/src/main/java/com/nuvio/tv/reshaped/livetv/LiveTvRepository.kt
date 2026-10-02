@@ -39,11 +39,16 @@ import com.nuvio.tv.reshaped.sync.ReshapedSync
  * Several sources can be saved; their channels show as one list, in the order the sources were
  * added. A source that fails to load keeps the channels it had.
  */
+/** A replay link of a channel and the time it plays. */
+class LiveTvReplay(val playback: LiveTvChannel, val window: LiveTvReplayWindow)
+
 object LiveTvRepository {
     private const val TAG = "LiveTv"
     private const val EPG_TICK_MS = 60_000L
     /** How long a replay waits for the panel's HLS playlist before playing its TS replay. */
     private const val HLS_CHECK_MS = 6_000L
+    /** How long a replay runs on past its programme's end before the next part is asked for. */
+    private const val REPLAY_RUN_ON_MS = 60L * 60 * 1000
     /** Playlists: panels that build get.php on request may send nothing for a minute or more. */
     private const val PLAYLIST_READ_TIMEOUT_S = 120L
     private const val TS_PACKET = 188
@@ -683,13 +688,22 @@ object LiveTvRepository {
     }
 
     /**
-     * The channel with the link to its past [programme] (catch-up), registered so the player
-     * treats it as Live TV that can be sought; null when the provider keeps no such programme.
+     * The replay of [channel]'s [programme] (catch-up; also one still on air, to watch it from the
+     * start), registered so the player treats it as Live TV that can be sought; null when the
+     * provider does not keep it. It runs on past the programme's end (see [replayChannel]).
      */
-    suspend fun catchupChannel(channel: LiveTvChannel, programme: LiveTvProgramme): LiveTvChannel? {
+    suspend fun catchupChannel(channel: LiveTvChannel, programme: LiveTvProgramme): LiveTvReplay? =
+        replayChannel(channel, programme.startEpochMs, programme.stopEpochMs)
+
+    /**
+     * A replay of [channel] from [startMs]: through [programmeEndMs] and on for
+     * [REPLAY_RUN_ON_MS] more (a programme that overran, the ones after it), never past now. The
+     * player asks for the next part, or goes live, as it gets to the end.
+     */
+    suspend fun replayChannel(channel: LiveTvChannel, startMs: Long, programmeEndMs: Long = startMs): LiveTvReplay? {
         val catchup = channel.catchup ?: return null
         val now = LiveTvClock.nowEpochMs()
-        if (!LiveTvCatchupLinks.isPlayable(catchup, programme, now)) return null
+        if (!LiveTvCatchupLinks.isPlayableFrom(catchup, startMs, now)) return null
         // Only an Xtream panel answers its /timeshift/ form; other "shift" servers take ?utc=.
         val source = _uiState.value.sources.firstOrNull { it.id == channel.sourceId }
         val xtreamPanel = source == null || source.type == LiveTvSourceType.Xtream ||
@@ -699,22 +713,27 @@ object LiveTvRepository {
         } else {
             null
         }
-        // A programme still on air plays from its start up to now.
-        val stop = minOf(programme.stopEpochMs, now)
+        // Past the guide's end time, so a programme that overran plays to its real end and the
+        // next ones follow; up to now at most.
+        val stop = minOf(now, maxOf(programmeEndMs, startMs) + REPLAY_RUN_ON_MS)
         // "Prefer HLS": the panel's HLS replay has a length, so it shows a progress bar and seeks.
         // A panel that gives none (or no playlist in time) plays the TS replay as before.
         val hlsLink = if (LiveTvCatchupLinks.isXtreamReplay(channel.streamUrl, catchup, xtreamPanel) && preferHls()) {
-            LiveTvCatchupLinks.link(channel.streamUrl, catchup, programme.startEpochMs, stop, now, zone, xtreamPanel, hls = true)
+            LiveTvCatchupLinks.link(channel.streamUrl, catchup, startMs, stop, now, zone, xtreamPanel, hls = true)
                 ?.takeIf { isHlsPlaylist(it, channel.headers) }
         } else {
             null
         }
         val link = hlsLink
-            ?: LiveTvCatchupLinks.link(channel.streamUrl, catchup, programme.startEpochMs, stop, now, zone, xtreamPanel)
+            ?: LiveTvCatchupLinks.link(channel.streamUrl, catchup, startMs, stop, now, zone, xtreamPanel)
             ?: return null
-        LiveTvPlaybackRegistry.register(link, listUrl = channel.streamUrl, catchup = true)
+        // A link that stays the same for a later end names none, and plays on to live by itself.
+        val bounded = hlsLink != null ||
+            link != LiveTvCatchupLinks.link(channel.streamUrl, catchup, startMs, stop + 120_000L, now, zone, xtreamPanel)
+        val window = LiveTvReplayWindow(startMs, stop, bounded)
+        LiveTvPlaybackRegistry.register(link, listUrl = channel.streamUrl, catchup = true, window = window)
         recordRecentChannel(channel)
-        return channel.copy(streamUrl = link)
+        return LiveTvReplay(channel.copy(streamUrl = link), window)
     }
 
     private fun preferHls(): Boolean {
