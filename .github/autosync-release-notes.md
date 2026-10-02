@@ -1,6 +1,7 @@
-- **Live TV guide overhaul.** Guides now work better with Stalker portals and Xtream M3U sources, support editable guide links, read while downloading, show more rows, and move more smoothly.
-- **Catch-up TV.** Supported providers can open past programmes directly from the guide.
-- **Custom channel playlists.** Build your own playlists from channels across different Live TV sources and sync them with Google.
-- **Faster channel management.** Select several channels at once to add them to favourites or playlists, and hold OK inside a playlist to move a channel.
-- **More efficient AutoSync.** It gets more useful information from each sampled spot, skips recognition work that cannot help, re-evaluates listening when the stream changes, and counts each place in the film only once when voting on words.
-- **Updated to official NuvioTV 1.1.0-beta.3.** Reshaped AutoSync, AudioSync, Live TV, seek previews, sync, fonts and navigation remain preserved.
+- **Live TV no longer crashes on opening.** A catch-up link pattern that Android rejected crashed Live TV as soon as a playlist was added; it now opens normally again.
+- **Sturdier playlists and portals.** Single stream links play as one channel, web pages are no longer read as channel lists, very large lists fail on their own instead of closing the app, Ministra Stalker portals connect, Stalker categories show, and expired portal sessions renew themselves.
+- **More reliable guides.** Guides with stray characters are no longer cut short, guide cells no longer crash the screen, a failed refresh keeps the last good guide, and guides match channels across all your sources. Older TVs keep showing every guide while it refreshes.
+- **Custom user agent per playlist.** M3U and Xtream sources can set their own user agent for channels, guides and replays.
+- **Replays in HLS.** An optional "Prefer HLS for replays" setting plays Xtream catch-up as .m3u8 when the provider supports it.
+- **Tidier Live TV.** The Favorites and All channels entries can be hidden, and guides refresh every 12, 24 or 48 hours.
+- **Better Google sync.** Playlists imported from a file now sync between devices, TV profiles that share addons match the phone's, and Live TV pulls the latest changes when you open it.
