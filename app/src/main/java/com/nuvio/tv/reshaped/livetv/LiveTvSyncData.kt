@@ -7,6 +7,8 @@ package com.nuvio.tv.reshaped.livetv
 internal data class LiveTvSyncData(
     val sources: List<LiveTvSource> = emptyList(),
     val favorites: Set<String> = emptySet(),
+    /** The viewer's own playlists by id: each merges as a whole, the later edit winning. */
+    val customLists: Map<String, LiveTvCustomList> = emptyMap(),
     val hiddenGroups: Set<String> = emptySet(),
     val hiddenChannels: Set<Long> = emptySet(),
     val groupNames: Map<String, String> = emptyMap(),
@@ -67,9 +69,16 @@ internal fun List<LiveTvSource>.withSyncChange(before: List<LiveTvSource>, after
     return result
 }
 
+/** [lists] with sync's change from [before] to [after] made on top, oldest first. */
+internal fun List<LiveTvCustomList>.withSyncChange(before: Map<String, LiveTvCustomList>, after: Map<String, LiveTvCustomList>): List<LiveTvCustomList> {
+    if (before == after) return this
+    return associateBy { it.id }.withSyncChange(before, after).values.sortedBy { it.id }
+}
+
 internal fun LiveTvStorage.syncData(): LiveTvSyncData = LiveTvSyncData(
     sources = sources().filter { it.isSyncable },
     favorites = favoriteUrls(),
+    customLists = customLists().associateBy { it.id },
     hiddenGroups = hiddenGroups(),
     hiddenChannels = hiddenChannelKeys(),
     groupNames = groupNames(),

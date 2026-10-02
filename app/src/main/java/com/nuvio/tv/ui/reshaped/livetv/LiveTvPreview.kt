@@ -6,19 +6,13 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.view.TextureView
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,7 +20,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -40,7 +33,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -65,10 +57,8 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
-import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvDevice
 import com.nuvio.tv.reshaped.livetv.LiveTvHttp
-import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
@@ -278,26 +268,20 @@ internal class LiveTvPreviewPlayer(private val context: Context) {
 }
 
 /**
- * The focused channel, the way some TVs show it in their channel list: a small live picture
- * (after focus rests a moment, only while [playVideo]) above the channel and what is on now.
+ * The selected channel's live picture (after focus rests a moment, only while [playVideo]), its
+ * logo until the picture shows, as in the guide header of TV channel lists.
  */
 @Composable
-internal fun LiveTvPreviewPanel(
+internal fun LiveTvPreviewVideo(
     preview: LiveTvPreviewPlayer,
     channel: LiveTvChannel?,
     logo: String?,
-    programme: LiveTvProgramme?,
-    clock: State<Long>,
-    groupName: String?,
-    sourceLabel: String?,
     playVideo: Boolean,
     modifier: Modifier = Modifier,
-    hint: String? = null,
-    actions: @Composable RowScope.() -> Unit = {},
 ) {
     val sound = rememberLiveTvPreviewSoundEnabled()
     SideEffect { preview.soundEnabled = sound }
-    // The first channel focused after the list opens (or comes back) starts at once: that is
+    // The first channel selected after the guide opens (or comes back) starts at once: that is
     // landing, not scrolling past.
     var landed by remember { mutableStateOf(false) }
     LaunchedEffect(channel?.id, playVideo) {
@@ -307,128 +291,62 @@ internal fun LiveTvPreviewPanel(
             return@LaunchedEffect
         }
         // Stalker links are created per play, and portals flag a device that asks for many: those
-        // channels show their logo and what is on now, without a picture.
+        // channels show their logo, without a picture.
         if (LiveTvRepository.isStalker(channel)) return@LaunchedEffect
         if (landed) delay(PREVIEW_DELAY_MS)
         landed = true
         preview.play(channel)
     }
-    // Turning previews off removes the panel: nothing may keep playing unseen.
+    // Turning previews off removes the picture: nothing may keep playing unseen.
     DisposableEffect(preview) { onDispose { preview.stop() } }
 
-    Column(modifier = modifier) {
-        val shape = RoundedCornerShape(16.dp)
-        val videoAlpha by animateFloatAsState(if (preview.showingVideo) 1f else 0f, tween(260), label = "liveTvPreviewAlpha")
-        val videoScale by animateFloatAsState(
-            if (preview.showingVideo) 1f else 0.96f,
-            spring(dampingRatio = 0.65f, stiffness = 380f),
-            label = "liveTvPreviewScale",
-        )
-        Box(
+    val shape = RoundedCornerShape(16.dp)
+    val videoAlpha by animateFloatAsState(if (preview.showingVideo) 1f else 0f, tween(260), label = "liveTvPreviewAlpha")
+    val videoScale by animateFloatAsState(
+        if (preview.showingVideo) 1f else 0.96f,
+        spring(dampingRatio = 0.65f, stiffness = 380f),
+        label = "liveTvPreviewScale",
+    )
+    Box(
+        modifier = modifier
+            .aspectRatio(16f / 9f)
+            .clip(shape)
+            .background(NuvioTheme.colors.BackgroundElevated),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (channel != null) {
+            LiveTvLogo(url = logo, name = channel.name, width = 128.dp, height = 76.dp)
+        }
+        val context = LocalContext.current
+        val textureView = remember { TextureView(context) }
+        DisposableEffect(textureView) {
+            preview.attach(textureView)
+            onDispose { preview.detach(textureView) }
+        }
+        AndroidView(
+            factory = { textureView },
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(16f / 9f)
-                .clip(shape)
-                .background(NuvioTheme.colors.BackgroundElevated),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (channel != null) {
-                LiveTvLogo(url = logo, name = channel.name, width = 128.dp, height = 76.dp)
-            }
-            val context = LocalContext.current
-            val textureView = remember { TextureView(context) }
-            DisposableEffect(textureView) {
-                preview.attach(textureView)
-                onDispose { preview.detach(textureView) }
-            }
-            AndroidView(
-                factory = { textureView },
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .aspectRatio(preview.aspectRatio, matchHeightConstraintsFirst = true)
-                    .graphicsLayer {
-                        alpha = videoAlpha
-                        scaleX = videoScale
-                        scaleY = videoScale
-                    },
-            )
-            Text(
-                text = stringResource(R.string.live_tv_live_badge),
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.sp,
-                color = Color.Black,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(10.dp)
-                    .clip(LiveTvPillShape)
-                    .background(Color.White.copy(alpha = 0.9f))
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-            )
-        }
-        // Right under the picture, where TV channel lists put what can be done with it.
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = NuvioTheme.spacing.sm),
-            horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-            content = actions,
+                .fillMaxHeight()
+                .aspectRatio(preview.aspectRatio, matchHeightConstraintsFirst = true)
+                .graphicsLayer {
+                    alpha = videoAlpha
+                    scaleX = videoScale
+                    scaleY = videoScale
+                },
         )
-
-        Crossfade(targetState = channel to programme, animationSpec = tween(180), label = "liveTvPreviewInfo") { (shown, programme) ->
-            if (shown == null) return@Crossfade
-            Column(modifier = Modifier.fillMaxWidth().padding(top = NuvioTheme.spacing.md, start = 4.dp, end = 4.dp)) {
-                Text(
-                    text = shown.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = NuvioTheme.colors.TextPrimary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (programme != null) {
-                    Text(
-                        text = programme.title,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = NuvioTheme.colors.TextSecondary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                    Text(
-                        text = "${LiveTvClock.formatSpan(programme)}  ·  ${liveTvTimeLeft(programme, clock)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = NuvioTheme.colors.TextTertiary,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                    LiveTvProgressBar(
-                        programme = programme,
-                        clock = clock,
-                        fill = NuvioTheme.colors.TextPrimary,
-                        track = Color.White.copy(alpha = 0.12f),
-                        modifier = Modifier.padding(top = 8.dp).fillMaxWidth(),
-                    )
-                }
-                val details = listOfNotNull(groupName ?: shown.group.takeIf(String::isNotBlank), sourceLabel).joinToString("  ·  ")
-                if (details.isNotEmpty()) {
-                    Text(
-                        text = details,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = NuvioTheme.colors.TextTertiary,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                }
-            }
-        }
-        if (hint != null) {
-            Text(
-                text = hint,
-                style = MaterialTheme.typography.labelSmall,
-                color = NuvioTheme.colors.TextTertiary,
-                modifier = Modifier.padding(top = NuvioTheme.spacing.md, start = 4.dp, end = 4.dp),
-            )
-        }
+        Text(
+            text = stringResource(R.string.live_tv_live_badge),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 1.sp,
+            color = Color.Black,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(10.dp)
+                .clip(LiveTvPillShape)
+                .background(Color.White.copy(alpha = 0.9f))
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+        )
     }
 }
 

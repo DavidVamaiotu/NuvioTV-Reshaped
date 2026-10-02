@@ -9,9 +9,13 @@ import androidx.lifecycle.viewModelScope
 import com.nuvio.tv.R
 import com.nuvio.tv.core.profile.ProfileManager
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
+import com.nuvio.tv.reshaped.livetv.LiveTvClock
+import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvError
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.reshaped.livetv.LiveTvSource
+import com.nuvio.tv.reshaped.livetv.LiveTvUiState
 import com.nuvio.tv.ui.navigation.Screen
 import com.nuvio.tv.ui.screens.player.PlayerMediaSourceFactory
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -73,7 +77,53 @@ class LiveTvScreenModel @Inject constructor(
 
     /** Set when a channel starts playing: on return, focus goes back to the channel last watched. */
     var restoreFocusOnReturn = false
+
+    /** Sources whose categories are folded away in the category column. */
+    val collapsedSources = androidx.compose.runtime.mutableStateMapOf<String, Boolean>()
+
+    /** The category column's keys by item index, for bringing the selected one into view. */
+    var categoryKeys: List<String> = emptyList()
+
+    private var sectionsFor: List<Any>? = null
+    private var sections: LiveTvSections? = null
+
+    /** The sections already worked out for these inputs, or null. */
+    internal fun sourceSections(state: LiveTvUiState, visibleGroups: List<String>): LiveTvSections? =
+        sections.takeIf { sectionsFor?.sameAs(sectionInputs(state, visibleGroups)) == true }
+
+    /** Works out the sections (slow for big lists: off the main thread) and keeps them. */
+    internal fun computeSourceSections(state: LiveTvUiState, visibleGroups: List<String>): LiveTvSections {
+        val inputs = sectionInputs(state, visibleGroups)
+        val counts = HashMap<String, Int>()
+        val groupsBySource = HashMap<String, HashSet<String>>()
+        val shownGroups = visibleGroups.toHashSet()
+        var total = 0
+        state.channels.forEach { channel ->
+            if (channel.group !in shownGroups || channel.hideKey in state.hiddenChannelKeys) return@forEach
+            total++
+            counts[channel.sourceId] = (counts[channel.sourceId] ?: 0) + 1
+            groupsBySource.getOrPut(channel.sourceId) { HashSet() }.add(channel.group)
+        }
+        val bySource = state.sources.map { source ->
+            val own = groupsBySource[source.id].orEmpty()
+            LiveTvSourceSection(source, counts[source.id] ?: 0, visibleGroups.filter { it in own })
+        }
+        return LiveTvSections(total, bySource).also {
+            sectionsFor = inputs
+            sections = it
+        }
+    }
+
+    private fun sectionInputs(state: LiveTvUiState, visibleGroups: List<String>): List<Any> =
+        listOf(state.channels, visibleGroups, state.hiddenChannelKeys, state.sources)
+
+    private fun List<Any>.sameAs(other: List<Any>): Boolean = size == other.size && indices.all { this[it] === other[it] }
 }
+
+/** The channels shown in all, and each source's heading: its shown channels and categories, in order. */
+internal class LiveTvSections(val total: Int, val sources: List<LiveTvSourceSection>)
+
+internal class LiveTvSourceSection(val source: LiveTvSource, val channelCount: Int, val groups: List<String>)
 
 /** What the visible list was filtered from; lists are compared by identity, so this is cheap. */
 class LiveTvFilterInput(
@@ -83,11 +133,12 @@ class LiveTvFilterInput(
     val hiddenChannels: Set<Long>,
     val filterKey: String,
     val query: String,
+    val customLists: List<com.nuvio.tv.reshaped.livetv.LiveTvCustomList>,
 ) {
     fun sameAs(other: LiveTvFilterInput): Boolean =
         channels === other.channels && favoriteUrls === other.favoriteUrls && hiddenGroups === other.hiddenGroups &&
             hiddenChannels === other.hiddenChannels &&
-            filterKey == other.filterKey && query == other.query
+            filterKey == other.filterKey && query == other.query && customLists === other.customLists
 }
 
 /**
@@ -112,6 +163,29 @@ internal suspend fun liveTvPlayerRoute(channel: LiveTvChannel, profileId: Int): 
     )
 }
 
+/**
+ * The player route for a past programme of [channel] (catch-up), with no content id so no
+ * progress is saved; null when the provider does not keep it. It is routed as a channel, like
+ * live ones, so ▲▼ and Back to live channels in the same player stay live; the player's
+ * timeline treats catch-up links as seekable (see [LiveTvPlaybackRegistry.isCatchup]).
+ */
+internal suspend fun liveTvCatchupRoute(channel: LiveTvChannel, programme: LiveTvProgramme, profileId: Int): String? {
+    val playback = LiveTvRepository.catchupChannel(channel, programme) ?: return null
+    val playerUrl = PlayerMediaSourceFactory.normalizePlaybackRequest(playback.streamUrl, playback.headers).url
+    LiveTvPlaybackRegistry.register(playerUrl, listUrl = channel.streamUrl, catchup = true)
+    return Screen.Player.createRoute(
+        streamUrl = playback.streamUrl,
+        title = programme.title,
+        streamName = channel.name,
+        headers = playback.headers,
+        contentType = LIVE_TV_CONTENT_TYPE,
+        logo = LiveTvRepository.uiState.value.logoFor(channel),
+        addonName = LIVE_TV_ADDON_NAME,
+        streamDescription = "${channel.name}  ·  ${LiveTvClock.formatSpan(programme)}",
+        profileId = profileId,
+    )
+}
+
 internal const val LIVE_TV_CONTENT_TYPE = "channel"
 internal const val LIVE_TV_ADDON_NAME = "Live TV"
 
@@ -132,5 +206,6 @@ internal fun LiveTvError.message(context: Context): String = context.getString(
         LiveTvError.XtreamInvalidUrl -> R.string.live_tv_error_xtream_invalid_url
         LiveTvError.XtreamNoChannels -> R.string.live_tv_error_xtream_no_channels
         LiveTvError.XtreamFailed -> R.string.live_tv_error_xtream_failed
+        LiveTvError.GuideInvalidUrl -> R.string.live_tv_error_guide_url
     },
 )

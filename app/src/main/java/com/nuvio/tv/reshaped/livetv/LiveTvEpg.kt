@@ -4,7 +4,7 @@ import android.util.Xml
 import java.io.InputStream
 import java.time.Instant
 import java.time.LocalDateTime
-import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -25,11 +25,47 @@ private const val RELAXED_FEATURE = "http://xmlpull.org/v1/doc/features.html#rel
  * How much of the guide is kept per channel: programmes that ended up to [pastMs] ago (at most
  * [maxPast]) and ones starting within [aheadMs] (at most [maxAhead]). Weak TVs keep less.
  */
-internal class LiveTvGuideWindow(val pastMs: Long, val maxPast: Int, val aheadMs: Long, val maxAhead: Int) {
+internal class LiveTvGuideWindow(
+    val pastMs: Long,
+    val maxPast: Int,
+    val aheadMs: Long,
+    val maxAhead: Int,
+    /** How far back channels with catch-up keep programmes, so past ones can be played again. */
+    val catchupPastMs: Long = pastMs,
+    val maxCatchupPast: Int = maxPast,
+    /**
+     * Descriptions and pictures are what the guide's header shows; for every programme they would
+     * take tens of MB with big lists. They are read for programmes on within [detailsMs] from now,
+     * kept for the one on now and the next [detailsPerChannel] − 1 of each channel, cut to
+     * [maxDescription] characters, and stop being kept once [detailsBudgetChars] are used.
+     */
+    val detailsMs: Long = 0L,
+    val maxDescription: Int = 0,
+    val detailsPerChannel: Int = 0,
+    val detailsBudgetChars: Int = 0,
+    /**
+     * At most this many past programmes over all catch-up channels: with thousands of them
+     * (whole Xtream panels), each keeps fewer, never fewer than [maxPast].
+     */
+    val maxCatchupProgrammes: Int = Int.MAX_VALUE,
+) {
+    /** How far back [key]'s programmes are kept, given the request's catch-up channels. */
+    fun pastMsFor(catchup: Boolean): Long = if (catchup) catchupPastMs else pastMs
+
     companion object {
         private const val HOUR = 60L * 60 * 1000
-        val Regular = LiveTvGuideWindow(pastMs = 3 * HOUR, maxPast = 6, aheadMs = 12 * HOUR, maxAhead = 18)
-        val LowMemory = LiveTvGuideWindow(pastMs = 2 * HOUR, maxPast = 4, aheadMs = 8 * HOUR, maxAhead = 10)
+        val Regular = LiveTvGuideWindow(
+            pastMs = 3 * HOUR, maxPast = 6, aheadMs = 12 * HOUR, maxAhead = 18,
+            catchupPastMs = 24 * HOUR, maxCatchupPast = 48,
+            detailsMs = 6 * HOUR, maxDescription = 320, detailsPerChannel = 4, detailsBudgetChars = 6_000_000,
+            maxCatchupProgrammes = 300_000,
+        )
+        val LowMemory = LiveTvGuideWindow(
+            pastMs = 2 * HOUR, maxPast = 4, aheadMs = 8 * HOUR, maxAhead = 10,
+            catchupPastMs = 12 * HOUR, maxCatchupPast = 24,
+            detailsMs = 3 * HOUR, maxDescription = 200, detailsPerChannel = 2, detailsBudgetChars = 1_500_000,
+            maxCatchupProgrammes = 100_000,
+        )
     }
 }
 
@@ -41,19 +77,27 @@ internal class LiveTvGuideRequest(
     val keysByName: Map<String, List<String>>,
     /** Keys of channels the playlist gives no logo: the guide's own logo is used for them. */
     val keysWithoutLogo: Set<String>,
+    /** Keys of channels with catch-up: they keep more past programmes. */
+    val catchupKeys: Set<String> = emptySet(),
 ) {
     companion object {
         fun from(channels: List<LiveTvChannel>): LiveTvGuideRequest {
             val keys = HashSet<String>(channels.size * 2)
             val byName = HashMap<String, MutableList<String>>(channels.size * 2)
             val withoutLogo = HashSet<String>()
+            val catchup = HashSet<String>()
             channels.forEach { channel ->
+                if (channel.catchup != null) catchup += channel.guideKey
                 if (!keys.add(channel.guideKey)) return@forEach
                 val name = liveTvNameKey(channel.name)
                 if (name.isNotEmpty()) byName.getOrPut(name) { ArrayList(1) } += channel.guideKey
+                // Guides often list a channel by the playlist's tvg-name rather than its shown name.
+                channel.tvgName?.let(::liveTvNameKey)?.takeIf { it.isNotEmpty() && it != name }?.let { alias ->
+                    byName.getOrPut(alias) { ArrayList(1) } += channel.guideKey
+                }
                 if (channel.logoUrl.isNullOrBlank()) withoutLogo += channel.guideKey
             }
-            return LiveTvGuideRequest(keys, byName, withoutLogo)
+            return LiveTvGuideRequest(keys, byName, withoutLogo, catchup)
         }
     }
 }
@@ -63,6 +107,10 @@ internal class LiveTvGuide(
     val schedule: LiveTvSchedule,
     val logos: Map<String, String>,
     val truncated: Set<String>,
+    /** False when the file broke off (malformed or cut): what was read before it is kept. */
+    val complete: Boolean = true,
+    /** How many guide channels and programmes the file had: none means it was no guide (an HTML page). */
+    val elements: Int = 0,
 )
 
 /**
@@ -77,17 +125,27 @@ internal suspend fun readXmlTvGuide(
     nowEpochMs: Long,
     window: LiveTvGuideWindow,
 ): LiveTvGuide =
-    LiveTvHttp.readFile(file) { input ->
-        val builder = LiveTvScheduleBuilder(request, nowEpochMs, window)
-        // A malformed tail (unknown entity, cut download) keeps what was read before it.
-        try {
-            readGuide(input, builder)
-        } catch (cancel: CancellationException) {
-            throw cancel
-        } catch (_: Exception) {
-        }
-        builder.build()
+    LiveTvHttp.readFile(file) { input -> readXmlTvGuide(input, request, nowEpochMs, window) }
+
+/** [readXmlTvGuide] from a stream (blocking): a saved file, or a download as it arrives. */
+internal fun readXmlTvGuide(
+    input: InputStream,
+    request: LiveTvGuideRequest,
+    nowEpochMs: Long,
+    window: LiveTvGuideWindow,
+): LiveTvGuide {
+    val builder = LiveTvScheduleBuilder(request, nowEpochMs, window)
+    // A malformed tail (unknown entity, cut download) keeps what was read before it.
+    val complete = try {
+        readGuide(LiveTvHttp.gunzipIfNeeded(input), builder)
+        !Thread.currentThread().isInterrupted
+    } catch (cancel: CancellationException) {
+        throw cancel
+    } catch (_: Exception) {
+        false
     }
+    return builder.build(complete)
+}
 
 private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder) {
     val parser = Xml.newPullParser()
@@ -102,6 +160,7 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder) {
         if (event == XmlPullParser.START_TAG) {
             when {
                 parser.name.equals("programme", ignoreCase = true) -> {
+                    builder.elements++
                     val channelId = parser.getAttributeValue(null, "channel")?.trim()?.lowercase()
                     val keys = channelId?.let(builder::keysFor)
                     if (keys == null) {
@@ -109,11 +168,18 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder) {
                     } else {
                         val start = parser.getAttributeValue(null, "start")?.let(LiveTvClock::parseXmlTvTimestamp)
                         val stop = parser.getAttributeValue(null, "stop")?.let(LiveTvClock::parseXmlTvTimestamp)
-                        val title = parser.readFirstTitle()
-                        if (start != null && stop != null && title != null) builder.add(keys, title, start, stop)
+                        // Most of a week-long guide is outside what is kept: skipped without reading its text.
+                        if (start == null || stop == null || !builder.mayKeep(keys, start, stop)) {
+                            parser.skipElement()
+                        } else {
+                            val programme = parser.readProgramme(builder.wantsDetails(start, stop))
+                            val title = programme.title
+                            if (title != null) builder.add(keys, title, start, stop, programme.description, programme.image)
+                        }
                     }
                 }
                 parser.name.equals("channel", ignoreCase = true) -> {
+                    builder.elements++
                     val channelId = parser.getAttributeValue(null, "id")?.trim()?.lowercase()
                     if (channelId == null) parser.skipElement() else parser.readChannel(channelId, builder)
                 }
@@ -135,6 +201,43 @@ private fun XmlPullParser.skipElement() {
     }
 }
 
+/**
+ * From a START_TAG: its text, leaving the parser on its END_TAG. Unlike nextText(), markup inside
+ * (`<desc>Line<br/>line</desc>`, which guides do send) is skipped instead of throwing, which
+ * would end the whole read there.
+ */
+private fun XmlPullParser.readText(): String {
+    var text: StringBuilder? = null
+    var first: String? = null
+    var depth = 1
+    // Markup between two runs of text (a <br/>) reads as a space.
+    var gap = false
+    while (depth > 0) {
+        when (next()) {
+            XmlPullParser.START_TAG -> {
+                depth++
+                gap = true
+            }
+            XmlPullParser.END_TAG -> depth--
+            XmlPullParser.TEXT, XmlPullParser.CDSECT, XmlPullParser.ENTITY_REF -> {
+                val part = getText() ?: continue
+                when {
+                    first == null -> first = part
+                    text == null -> text = StringBuilder(first)
+                    else -> Unit
+                }
+                if (text != null) {
+                    if (gap && text.isNotEmpty() && !text.last().isWhitespace()) text.append(' ')
+                    text.append(part)
+                }
+                gap = false
+            }
+            XmlPullParser.END_DOCUMENT -> break
+        }
+    }
+    return text?.toString() ?: first.orEmpty()
+}
+
 /** From a channel's START_TAG: its names and logo, leaving the parser on its END_TAG. */
 private fun XmlPullParser.readChannel(channelId: String, builder: LiveTvScheduleBuilder) {
     val names = ArrayList<String>(2)
@@ -144,7 +247,7 @@ private fun XmlPullParser.readChannel(channelId: String, builder: LiveTvSchedule
         when (next()) {
             XmlPullParser.START_TAG -> when {
                 depth == 1 && name.equals("display-name", ignoreCase = true) -> {
-                    val text = nextText().trim()
+                    val text = readText().trim()
                     if (text.isNotEmpty()) names.add(text)
                 }
                 depth == 1 && name.equals("icon", ignoreCase = true) -> {
@@ -160,25 +263,39 @@ private fun XmlPullParser.readChannel(channelId: String, builder: LiveTvSchedule
     builder.channel(channelId, names, icon)
 }
 
-/** From a programme's START_TAG: its first title, leaving the parser on the programme's END_TAG. */
-private fun XmlPullParser.readFirstTitle(): String? {
+/** What [readProgramme] takes from a programme. */
+private class ProgrammeText {
     var title: String? = null
+    var description: String? = null
+    var image: String? = null
+}
+
+/**
+ * From a programme's START_TAG: its first title (and with [details], its first description and
+ * picture), leaving the parser on the programme's END_TAG.
+ */
+private fun XmlPullParser.readProgramme(details: Boolean): ProgrammeText {
+    val text = ProgrammeText()
     var depth = 1
     while (depth > 0) {
         when (next()) {
-            XmlPullParser.START_TAG -> {
-                if (title == null && depth == 1 && name.equals("title", ignoreCase = true)) {
-                    // nextText() ends on the title's END_TAG, so the depth is unchanged.
-                    title = nextText().trim().takeIf(String::isNotBlank)
-                } else {
+            XmlPullParser.START_TAG -> when {
+                // readText() ends on the element's END_TAG, so the depth is unchanged.
+                depth == 1 && text.title == null && name.equals("title", ignoreCase = true) ->
+                    text.title = readText().trim().takeIf(String::isNotBlank)
+                details && depth == 1 && text.description == null && name.equals("desc", ignoreCase = true) ->
+                    text.description = readText().trim().takeIf(String::isNotBlank)
+                details && depth == 1 && text.image == null && name.equals("icon", ignoreCase = true) -> {
+                    text.image = getAttributeValue(null, "src")?.trim()?.takeIf(String::isHttpUrl)
                     depth++
                 }
+                else -> depth++
             }
             XmlPullParser.END_TAG -> depth--
-            XmlPullParser.END_DOCUMENT -> return title
+            XmlPullParser.END_DOCUMENT -> return text
         }
     }
-    return title
+    return text
 }
 
 /** Collects programmes for the requested channels while a guide is read. */
@@ -189,6 +306,8 @@ internal class LiveTvScheduleBuilder(
 ) {
     private val entries = HashMap<String, MutableList<LiveTvProgramme>>()
     private val truncated = HashSet<String>()
+    /** Guide channels and programmes met, kept or not. */
+    var elements = 0
     /** Guide channel ids that feed channels matched by name, not by id. */
     private val aliases = HashMap<String, List<String>>()
     /** Keys some guide channel already feeds: one guide channel per list channel. */
@@ -238,13 +357,52 @@ internal class LiveTvScheduleBuilder(
         return if (channelId in request.keys) listOf(channelId) else null
     }
 
-    fun add(keys: List<String>, title: String, startEpochMs: Long, stopEpochMs: Long) {
-        keys.forEach { add(it, title, startEpochMs, stopEpochMs) }
+    /** Whether a programme from [startEpochMs] to [stopEpochMs] has its description and picture read. */
+    fun wantsDetails(startEpochMs: Long, stopEpochMs: Long): Boolean =
+        window.detailsPerChannel > 0 && stopEpochMs > nowEpochMs && startEpochMs < nowEpochMs + window.detailsMs
+
+    /** Past programmes each catch-up channel keeps, within [LiveTvGuideWindow.maxCatchupProgrammes] over all. */
+    private val catchupPastCount: Int = run {
+        val channels = request.catchupKeys.size.coerceAtLeast(1)
+        (window.maxCatchupProgrammes / channels).coerceIn(window.maxPast, window.maxCatchupPast)
+    }
+
+    /**
+     * Whether a programme from [startEpochMs] to [stopEpochMs] of channels [keys] can be kept at
+     * all; one starting too late marks them cut short, as [add] would.
+     */
+    fun mayKeep(keys: List<String>, startEpochMs: Long, stopEpochMs: Long): Boolean {
+        if (stopEpochMs <= startEpochMs) return false
+        if (startEpochMs >= nowEpochMs + window.aheadMs) {
+            keys.forEach { truncated += it }
+            return false
+        }
+        return stopEpochMs > nowEpochMs - window.pastMs ||
+            (stopEpochMs > nowEpochMs - window.catchupPastMs && keys.any { it in request.catchupKeys })
+    }
+
+    fun add(
+        keys: List<String>,
+        title: String,
+        startEpochMs: Long,
+        stopEpochMs: Long,
+        description: String? = null,
+        image: String? = null,
+    ) {
+        keys.forEach { add(it, title, startEpochMs, stopEpochMs, description, image) }
     }
 
     /** [key] must be one of the request's keys. */
-    fun add(key: String, title: String, startEpochMs: Long, stopEpochMs: Long) {
-        if (stopEpochMs <= startEpochMs || stopEpochMs <= nowEpochMs - window.pastMs) return
+    fun add(
+        key: String,
+        title: String,
+        startEpochMs: Long,
+        stopEpochMs: Long,
+        description: String? = null,
+        image: String? = null,
+    ) {
+        val catchup = key in request.catchupKeys
+        if (stopEpochMs <= startEpochMs || stopEpochMs <= nowEpochMs - window.pastMsFor(catchup)) return
         if (startEpochMs >= nowEpochMs + window.aheadMs) {
             truncated += key
             return
@@ -257,7 +415,7 @@ internal class LiveTvScheduleBuilder(
             if (programme.startEpochMs == startEpochMs) return
             if ((programme.stopEpochMs <= nowEpochMs) == past) kept++
         }
-        if (past && kept >= window.maxPast) {
+        if (past && kept >= (if (catchup) catchupPastCount else window.maxPast)) {
             // Keep the latest programmes that have ended.
             val earliest = list.filter { it.stopEpochMs <= nowEpochMs }.minBy { it.startEpochMs }
             if (earliest.startEpochMs >= startEpochMs) return
@@ -269,18 +427,69 @@ internal class LiveTvScheduleBuilder(
             if (latest.startEpochMs <= startEpochMs) return
             list.remove(latest)
         }
+        val details = wantsDetails(startEpochMs, stopEpochMs)
         list += LiveTvProgramme(
             title = titles.getOrPut(title) { title },
             startEpochMs = startEpochMs,
             stopEpochMs = stopEpochMs,
+            // Repeats share one copy, as titles do.
+            description = description?.takeIf { details }?.let(::shortDescription)?.let { titles.getOrPut(it) { it } },
+            image = image?.takeIf { details }?.let { titles.getOrPut(it) { it } },
         )
     }
 
-    fun build(): LiveTvGuide = LiveTvGuide(
-        schedule = entries.mapValues { (_, list) -> list.sortedBy { it.startEpochMs } },
-        logos = logos,
-        truncated = truncated,
-    )
+    /** Cut at a word near [LiveTvGuideWindow.maxDescription], with an ellipsis. */
+    private fun shortDescription(text: String): String {
+        val max = window.maxDescription
+        if (text.length <= max) return text
+        val cut = text.lastIndexOf(' ', max - 1).takeIf { it > max / 2 } ?: (max - 1)
+        return text.substring(0, cut).trimEnd() + "…"
+    }
+
+    fun build(complete: Boolean = true): LiveTvGuide {
+        val schedule = HashMap<String, List<LiveTvProgramme>>(entries.size * 2)
+        entries.forEach { (key, list) -> schedule[key] = list.sortedBy { it.startEpochMs } }
+        if (window.detailsPerChannel > 0) keepDetails(schedule)
+        titles.clear()
+        return LiveTvGuide(schedule = schedule, logos = logos, truncated = truncated, complete = complete, elements = elements)
+    }
+
+    /**
+     * Keeps descriptions and pictures for the programme on now of every channel first, then the
+     * next ones, up to [LiveTvGuideWindow.detailsPerChannel] each and the budget over all.
+     */
+    private fun keepDetails(schedule: HashMap<String, List<LiveTvProgramme>>) {
+        var budget = window.detailsBudgetChars.toLong()
+        val firstAhead = HashMap<String, Int>(schedule.size * 2)
+        schedule.forEach { (key, list) ->
+            firstAhead[key] = list.indexOfFirst { it.stopEpochMs > nowEpochMs }.let { if (it < 0) list.size else it }
+        }
+        val keep = HashMap<String, Int>(schedule.size * 2)
+        for (rank in 0 until window.detailsPerChannel) {
+            for ((key, list) in schedule) {
+                // A channel whose earlier programme did not fit keeps none after it.
+                if ((keep[key] ?: 0) != rank) continue
+                val programme = list.getOrNull(firstAhead.getValue(key) + rank) ?: continue
+                val size = (programme.description?.length ?: 0) + (programme.image?.length ?: 0)
+                if (budget < size) continue
+                budget -= size
+                keep[key] = rank + 1
+            }
+        }
+        schedule.entries.forEach { entry ->
+            val list = entry.value
+            val from = firstAhead.getValue(entry.key)
+            val until = from + (keep[entry.key] ?: 0)
+            if (list.indices.none { (it < from || it >= until) && list[it].hasDetails() }) return@forEach
+            entry.setValue(
+                list.mapIndexed { index, programme ->
+                    if ((index < from || index >= until) && programme.hasDetails()) programme.copy(description = null, image = null) else programme
+                },
+            )
+        }
+    }
+
+    private fun LiveTvProgramme.hasDetails(): Boolean = description != null || image != null
 }
 
 /**
@@ -362,9 +571,6 @@ internal fun liveTvGuideKey(tvgId: String?, name: String): String =
 private const val NAME_KEY_PREFIX = "\u0001"
 
 internal object LiveTvClock {
-    private val whitespace = Regex("\\s+")
-    private val offsetFormatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z")
-    private val localFormatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss")
     private val clockFormatter = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT)
 
     fun nowEpochMs(): Long = System.currentTimeMillis()
@@ -377,21 +583,51 @@ internal object LiveTvClock {
     fun formatSpan(programme: LiveTvProgramme): String =
         "${formatClock(programme.startEpochMs)} – ${formatClock(programme.stopEpochMs)}"
 
-    /** XMLTV `20260927213000 +0200` (or without an offset, then in local time). */
+    /**
+     * XMLTV `20260927213000 +0200`, also written `+02:00`, `+0200` without the space, `Z`/`UTC`/`GMT`,
+     * or with no offset (then local time). Seconds may be left out. Parsed by hand: a guide has
+     * hundreds of thousands of these.
+     */
     fun parseXmlTvTimestamp(value: String): Long? {
-        val parts = value.trim().split(whitespace, limit = 2)
-        val digits = parts.firstOrNull().orEmpty()
-        val normalized = when (digits.length) {
-            12 -> "${digits}00"
-            14 -> digits
-            else -> return null
+        val text = value.trim()
+        var digits = 0
+        while (digits < text.length && digits < 14 && text[digits].isDigit()) digits++
+        if (digits != 12 && digits != 14) return null
+        fun number(from: Int, length: Int): Int {
+            var result = 0
+            for (i in from until from + length) result = result * 10 + (text[i] - '0')
+            return result
         }
-        return runCatching {
-            if (parts.size > 1) {
-                OffsetDateTime.parse("$normalized ${parts[1]}", offsetFormatter).toInstant().toEpochMilli()
-            } else {
-                LocalDateTime.parse(normalized, localFormatter).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val year = number(0, 4)
+        val month = number(4, 2)
+        val day = number(6, 2)
+        val hour = number(8, 2)
+        val minute = number(10, 2)
+        val second = if (digits == 14) number(12, 2) else 0
+        if (month !in 1..12 || day !in 1..31 || hour > 23 || minute > 59 || second > 60) return null
+        val local = runCatching { LocalDateTime.of(year, month, day, hour, minute, minOf(second, 59)) }.getOrNull() ?: return null
+        // A fraction of a second (".000") some guides add is skipped.
+        var index = digits
+        if (index < text.length && text[index] == '.') {
+            index++
+            while (index < text.length && text[index].isDigit()) index++
+        }
+        val zone = text.substring(index).trim()
+        val offsetSeconds = when {
+            zone.isEmpty() -> return local.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            zone.equals("Z", true) || zone.equals("UTC", true) || zone.equals("GMT", true) -> 0
+            zone[0] == '+' || zone[0] == '-' -> {
+                // "+0200", "+02:00", "+02", also followed by a zone name ("+0200 CEST").
+                val hhmm = zone.substring(1).substringBefore(' ').replace(":", "")
+                if ((hhmm.length != 2 && hhmm.length != 4) || !hhmm.all(Char::isDigit)) return null
+                val hours = hhmm.take(2).toInt()
+                val minutes = if (hhmm.length >= 4) hhmm.substring(2, 4).toInt() else 0
+                val total = hours * 3600 + minutes * 60
+                if (zone[0] == '-') -total else total
             }
-        }.getOrNull()
+            // A region ("Europe/London"); abbreviations like "BST" are ambiguous and left out.
+            else -> return runCatching { local.atZone(ZoneId.of(zone)).toInstant().toEpochMilli() }.getOrNull()
+        }
+        return (local.toEpochSecond(ZoneOffset.UTC) - offsetSeconds) * 1000L
     }
 }

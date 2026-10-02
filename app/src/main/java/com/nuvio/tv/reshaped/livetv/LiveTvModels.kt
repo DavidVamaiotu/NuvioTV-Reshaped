@@ -20,7 +20,36 @@ data class LiveTvChannel(
     val hideKey: Long = 0L,
     /** What its guide is kept under: see [liveTvGuideKey]. */
     val guideKey: String = "",
+    /** The playlist's tvg-name when it differs from [name]: guides often list the channel by it. */
+    val tvgName: String? = null,
+    /** How past programmes of this channel can be played again; null when the provider keeps none. */
+    val catchup: LiveTvCatchup? = null,
 )
+
+/**
+ * A channel's catch-up (archive): how its provider builds the link to a past programme, and how
+ * many days back it goes. Channels of one source share one instance.
+ */
+@Immutable
+data class LiveTvCatchup(
+    val kind: Kind,
+    val days: Int,
+    /** M3U `catchup-source`: the link template, or what is added to the live link. */
+    val template: String? = null,
+) {
+    enum class Kind {
+        /** Xtream panels: `/timeshift/user/pass/minutes/start/id.ts`, in the panel's time zone. */
+        Xtream,
+        /** `catchup-source` is the whole link (or added to the live link when it is not one). */
+        Default,
+        /** `catchup-source` is added to the live link. */
+        Append,
+        /** `?utc=start&lutc=now` on the live link. */
+        Shift,
+        /** Flussonic servers: `index-start-duration.m3u8` / `timeshift_abs-start.ts`. */
+        Flussonic,
+    }
+}
 
 /** The category key of channels the playlist gives no category; the screens call it "Uncategorised". */
 const val LIVE_TV_UNGROUPED = ""
@@ -43,6 +72,13 @@ fun liveTvHideKey(sourceId: String, group: String, name: String): Long {
     return hash
 }
 
+/**
+ * A playlist the viewer made from channels of any source: [urls] are [LiveTvChannel.streamUrl]s,
+ * in the viewer's order. Lists sort by [id], which starts with when they were made.
+ */
+@Immutable
+data class LiveTvCustomList(val id: String, val name: String, val urls: List<String>)
+
 @Immutable
 data class LiveTvRecentChannel(
     val streamUrl: String,
@@ -59,6 +95,10 @@ data class LiveTvProgramme(
     val title: String,
     val startEpochMs: Long,
     val stopEpochMs: Long,
+    /** The guide's description, kept only for programmes near now (see [LiveTvGuideWindow.detailsMs]). */
+    val description: String? = null,
+    /** The guide's picture for it (an http link), kept like [description]. */
+    val image: String? = null,
 )
 
 enum class LiveTvSourceType { M3u, Stalker, Xtream }
@@ -91,11 +131,17 @@ data class LiveTvSource(
     val url: String = "",
     val stalker: LiveTvStalkerSettings = LiveTvStalkerSettings(),
     val xtream: LiveTvXtreamSettings = LiveTvXtreamSettings(),
+    /** A guide (XMLTV) link the viewer added; read before the source's own guide. */
+    val epgUrl: String = "",
+    /** The name the viewer gave the source; blank shows [label]'s default. */
+    val name: String = "",
 ) {
-    /** A short name for lists: the host of a link, or the imported file's name. */
+    /** A short name for lists: the viewer's name for it, else the host of a link, or the imported file's name. */
     val label: String
-        get() = url.substringAfter("://", url).substringBefore('/').substringBefore('?')
-            .substringAfterLast('@').ifBlank { url }
+        get() = name.trim().ifBlank {
+            url.substringAfter("://", url).substringBefore('/').substringBefore('?')
+                .substringAfterLast('@').ifBlank { url }
+        }
 
     /** Two sources with the same identity are one: adding it again replaces it. */
     internal val identity: String
@@ -134,6 +180,8 @@ data class LiveTvUiState(
     val guideVersion: Int = 0,
     val recentChannel: LiveTvRecentChannel? = null,
     val favoriteUrls: Set<String> = emptySet(),
+    /** The viewer's own playlists, oldest first. */
+    val customLists: List<LiveTvCustomList> = emptyList(),
     val isEpgLoading: Boolean = false,
     val isLoading: Boolean = false,
     val isLoaded: Boolean = false,
@@ -141,6 +189,8 @@ data class LiveTvUiState(
     val error: LiveTvError? = null,
     /** Goes up each time a source is added, so the Sources dialog can tell an add went through. */
     val addedCount: Int = 0,
+    /** How each source's guide did, for the Sources dialog; a source missing here has not been read yet. */
+    val sourceGuides: Map<String, LiveTvSourceGuide> = emptyMap(),
 ) {
     val hasSource: Boolean get() = sources.isNotEmpty()
 
@@ -151,4 +201,16 @@ data class LiveTvUiState(
     /** Categories the list shows. */
     val visibleGroups: List<String>
         get() = if (hiddenGroups.isEmpty()) groups else groups.filterNot(hiddenGroups::contains)
+}
+
+/** How a source's guide did: none offered, loading, read for [channels] channels, or failed. */
+@Immutable
+data class LiveTvSourceGuide(val state: State, val channels: Int = 0) {
+    enum class State { None, Loading, Loaded, Failed }
+
+    companion object {
+        val None = LiveTvSourceGuide(State.None)
+        val Loading = LiveTvSourceGuide(State.Loading)
+        val Failed = LiveTvSourceGuide(State.Failed)
+    }
 }

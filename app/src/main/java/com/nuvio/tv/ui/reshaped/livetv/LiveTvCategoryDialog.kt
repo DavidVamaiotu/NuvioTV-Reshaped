@@ -107,7 +107,8 @@ internal fun LiveTvCategoryDialog(onDismiss: () -> Unit) {
             )
             LiveTvPillButton(text = stringResource(R.string.live_tv_categories_show_all), onClick = { LiveTvRepository.setAllGroupsHidden(false) })
             LiveTvPillButton(text = stringResource(R.string.live_tv_categories_hide_all), onClick = { LiveTvRepository.setAllGroupsHidden(true) })
-            LiveTvPillButton(text = stringResource(R.string.live_tv_categories_sort), onClick = { LiveTvRepository.resetGroupOrder() })
+            LiveTvPillButton(text = stringResource(R.string.live_tv_categories_provider_order), onClick = { LiveTvRepository.resetGroupOrder() })
+            LiveTvPillButton(text = stringResource(R.string.live_tv_categories_sort), onClick = { LiveTvRepository.sortGroupsAlphabetically() })
             LiveTvPillButton(text = stringResource(R.string.live_tv_done), onClick = onDismiss)
         }
         if (uiState.groups.isEmpty()) {
@@ -239,7 +240,7 @@ private fun LiveTvCategoryChannels(group: String, uiState: LiveTvUiState, onBack
 }
 
 @Composable
-private fun LiveTvCategoryToggle(
+internal fun LiveTvCategoryToggle(
     label: String,
     count: String?,
     visible: Boolean,

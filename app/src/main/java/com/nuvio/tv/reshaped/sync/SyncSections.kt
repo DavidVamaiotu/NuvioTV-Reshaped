@@ -1,5 +1,6 @@
 package com.nuvio.tv.reshaped.sync
 
+import com.nuvio.tv.reshaped.livetv.LiveTvCustomList
 import com.nuvio.tv.reshaped.livetv.LiveTvRecentChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvSource
 import com.nuvio.tv.reshaped.livetv.LiveTvSourceType
@@ -24,6 +25,8 @@ internal object LiveTvSections {
     fun prefix(profileId: Int) = "live_tv/$profileId/"
     private fun sources(p: Int) = prefix(p) + "sources"
     private fun favorites(p: Int) = prefix(p) + "favorites"
+    // TV only: the phone app leaves sections it does not write as they are.
+    private fun customLists(p: Int) = prefix(p) + "custom_lists"
     private fun hiddenGroups(p: Int) = prefix(p) + "hidden_groups"
     private fun hiddenChannels(p: Int) = prefix(p) + "hidden_channels"
     private fun groupNames(p: Int) = prefix(p) + "group_names"
@@ -45,6 +48,7 @@ internal object LiveTvSections {
             source.identity to source.copy(id = known?.takeIf(String::isNotBlank) ?: source.id).toJson()
         },
         favorites(profileId) to data.favorites.associateWith { TRUE },
+        customLists(profileId) to data.customLists.mapValues { (_, list) -> list.toJson() },
         hiddenGroups(profileId) to data.hiddenGroups.associateWith { TRUE },
         hiddenChannels(profileId) to data.hiddenChannels.associate { it.toString() to TRUE },
         groupNames(profileId) to data.groupNames.mapValues { JsonPrimitive(it.value) },
@@ -55,6 +59,9 @@ internal object LiveTvSections {
     fun fromSections(profileId: Int, doc: SyncSections): LiveTvSyncData = LiveTvSyncData(
         sources = SyncDoc.values(doc, sources(profileId)).entries.sortedBy { it.key }.mapNotNull { (it.value as? JsonObject)?.toSource() },
         favorites = SyncDoc.values(doc, favorites(profileId)).keys,
+        customLists = SyncDoc.values(doc, customLists(profileId)).mapNotNull { (id, value) ->
+            (value as? JsonObject)?.toCustomList(id)?.let { id to it }
+        }.toMap(),
         hiddenGroups = SyncDoc.values(doc, hiddenGroups(profileId)).keys,
         hiddenChannels = SyncDoc.values(doc, hiddenChannels(profileId)).keys.mapNotNullTo(HashSet()) { it.toLongOrNull() },
         groupNames = SyncDoc.values(doc, groupNames(profileId)).mapNotNull { (key, value) ->
@@ -69,6 +76,9 @@ internal object LiveTvSections {
         put("id", id)
         put("type", type.name)
         put("url", url)
+        // Only when set, so a source without one reads the same as from versions before guide links.
+        if (epgUrl.isNotBlank()) put("epg", epgUrl)
+        if (name.isNotBlank()) put("name", name)
         when (type) {
             LiveTvSourceType.M3u -> Unit
             LiveTvSourceType.Xtream -> {
@@ -89,6 +99,10 @@ internal object LiveTvSections {
 
     private fun JsonObject.toSource(): LiveTvSource? {
         val type = LiveTvSourceType.entries.firstOrNull { it.name == text("type") } ?: return null
+        return toSourceOfType(type)?.copy(epgUrl = text("epg"), name = text("name"))
+    }
+
+    private fun JsonObject.toSourceOfType(type: LiveTvSourceType): LiveTvSource? {
         return when (type) {
             LiveTvSourceType.M3u -> LiveTvSource(text("id"), type, text("url")).takeIf { it.url.isNotBlank() }
             LiveTvSourceType.Xtream -> LiveTvSource(
@@ -100,6 +114,17 @@ internal object LiveTvSections {
                 stalker = LiveTvStalkerSettings(text("portal"), text("mac"), text("user"), text("password")),
             ).takeIf { it.stalker.isConfigured }
         }
+    }
+
+    private fun LiveTvCustomList.toJson(): JsonObject = buildJsonObject {
+        put("name", name)
+        put("channels", JsonArray(urls.map(::JsonPrimitive)))
+    }
+
+    private fun JsonObject.toCustomList(id: String): LiveTvCustomList? {
+        if (id.isBlank()) return null
+        val urls = (get("channels") as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank) }.orEmpty()
+        return LiveTvCustomList(id, text("name"), urls)
     }
 
     private fun LiveTvRecentChannel.toJson(): JsonObject = buildJsonObject {

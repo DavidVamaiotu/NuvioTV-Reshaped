@@ -14,20 +14,25 @@ import java.util.zip.GZIPOutputStream
  */
 internal object LiveTvGuideCache {
     const val FILE_NAME = "guide_kept.bin.gz"
-    private const val VERSION = 1
+    // 4: kept programmes written by a read that lost later gzip members are not served.
+    private const val VERSION = 4
     private const val MAX_TITLE = 1_000
 
     class Entry(val schedule: LiveTvSchedule, val logos: Map<String, String>, val nextReadAtMs: Long)
 
     /** What the saved programmes were read for: the guides, the channels and how much is kept. */
-    fun key(epgUrls: List<String>, guideKeys: Set<String>, window: LiveTvGuideWindow): Long {
+    fun key(epgUrls: List<String>, guideKeys: Set<String>, window: LiveTvGuideWindow, catchupKeys: Set<String> = emptySet()): Long {
         var channels = guideKeys.size.toLong()
         guideKeys.forEach { channels += it.hashCode() }
+        catchupKeys.forEach { channels += 31L * it.hashCode() }
         var key = epgUrls.hashCode().toLong()
         key = key * 31 + channels
         key = key * 31 + window.pastMs
         key = key * 31 + window.aheadMs
         key = key * 31 + window.maxPast * 1_000 + window.maxAhead
+        key = key * 31 + window.catchupPastMs + window.maxCatchupPast
+        key = key * 31 + window.detailsMs + window.maxDescription * 1_000L + window.detailsPerChannel
+        key = key * 31 + window.detailsBudgetChars + window.maxCatchupProgrammes
         return key
     }
 
@@ -49,10 +54,21 @@ internal object LiveTvGuideCache {
             repeat(input.readInt()) { logos[input.readUTF()] = input.readUTF() }
             val channels = input.readInt()
             val schedule = HashMap<String, List<LiveTvProgramme>>(channels * 2)
+            // Repeated titles share one copy, as after a full read.
+            val shared = HashMap<String, String>()
+            fun DataInputStream.readShared(): String = readUTF().let { shared.getOrPut(it) { it } }
             repeat(channels) {
                 val guideKey = input.readUTF()
                 val count = input.readInt()
-                schedule[guideKey] = List(count) { LiveTvProgramme(input.readUTF(), input.readLong(), input.readLong()) }
+                schedule[guideKey] = List(count) {
+                    LiveTvProgramme(
+                        title = input.readShared(),
+                        startEpochMs = input.readLong(),
+                        stopEpochMs = input.readLong(),
+                        description = if (input.readBoolean()) input.readShared() else null,
+                        image = input.readOptional(),
+                    )
+                }
             }
             Entry(schedule, logos, nextReadAtMs)
         }
@@ -81,6 +97,9 @@ internal object LiveTvGuideCache {
                         out.writeUTF(programme.title.take(MAX_TITLE))
                         out.writeLong(programme.startEpochMs)
                         out.writeLong(programme.stopEpochMs)
+                        out.writeOptional(programme.description?.take(MAX_TITLE))
+                        // A cut link would be a broken one.
+                        out.writeOptional(programme.image?.takeIf { it.length <= MAX_TITLE })
                     }
                 }
             }
@@ -92,5 +111,12 @@ internal object LiveTvGuideCache {
             temp.delete()
             file.delete()
         }
+    }
+
+    private fun DataInputStream.readOptional(): String? = if (readBoolean()) readUTF() else null
+
+    private fun DataOutputStream.writeOptional(value: String?) {
+        writeBoolean(value != null)
+        if (value != null) writeUTF(value)
     }
 }

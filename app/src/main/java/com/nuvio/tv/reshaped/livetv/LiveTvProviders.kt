@@ -29,8 +29,14 @@ internal fun LiveTvXtreamSettings.normalized(): LiveTvXtreamSettings = copy(
     password = password.trim(),
 )
 
+/** A provider's channels and its categories in the provider's own order. */
+internal class ProviderChannels(val channels: List<LiveTvChannel>, val groupOrder: List<String>, val incomplete: Boolean = false)
+
 internal object LiveTvXtream {
-    suspend fun channels(settings: LiveTvXtreamSettings): List<LiveTvChannel> {
+    /** Each panel's time zone (by server URL): catch-up start times are given in it. */
+    private val zones = java.util.concurrent.ConcurrentHashMap<String, java.time.ZoneId>()
+
+    suspend fun channels(settings: LiveTvXtreamSettings): ProviderChannels {
         val categories = LiveTvHttp.stream(apiUrl(settings, "get_live_categories"), LIVE_TV_PLAYLIST_HEADERS) { input ->
             readObjects(input) { fields ->
                 val id = fields["category_id"] ?: fields["id"] ?: return@readObjects null
@@ -39,6 +45,8 @@ internal object LiveTvXtream {
             }
         }.toMap()
         val extension = liveExtension(settings)
+        // One catch-up instance per archive length, shared by the channels that have it.
+        val catchups = HashMap<Int, LiveTvCatchup>()
         val seen = HashSet<String>()
         val channels = LiveTvHttp.stream(apiUrl(settings, "get_live_streams"), LIVE_TV_PLAYLIST_HEADERS) { input ->
             var index = 0
@@ -58,11 +66,43 @@ internal object LiveTvXtream {
                     logoUrl = fields["stream_icon"] ?: fields["logo"],
                     group = fields["category_id"]?.let(categories::get).orEmpty(),
                     headers = LIVE_TV_STREAM_HEADERS,
+                    catchup = if (fields["tv_archive"] == "1") {
+                        val days = fields["tv_archive_duration"]?.toIntOrNull()?.coerceIn(1, 30) ?: 1
+                        catchups.getOrPut(days) { LiveTvCatchup(LiveTvCatchup.Kind.Xtream, days) }
+                    } else {
+                        null
+                    },
                 )
             }
         }
-        return channels
+        return ProviderChannels(channels, categories.values.map(String::trim).distinct())
     }
+
+    /**
+     * The panel's time zone, which catch-up links give their start time in: from the login's
+     * `server_info.timezone`, read with the channel list (or now, once, when it was not), else the TV's.
+     */
+    suspend fun zone(serverUrl: String, username: String, password: String): java.time.ZoneId {
+        zones[serverUrl]?.let { return it }
+        // A login that failed (panel busy, timeout) is asked again, at most once a minute.
+        zoneFailedAt[serverUrl]?.let { if (System.currentTimeMillis() - it < 60_000L) return java.time.ZoneId.systemDefault() }
+        val settings = LiveTvXtreamSettings(serverUrl, username, password)
+        val login = runCatching { JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS)) }
+            .onFailure { if (it is CancellationException) throw it }
+            .getOrNull()
+        if (login == null) {
+            zoneFailedAt[serverUrl] = System.currentTimeMillis()
+            return java.time.ZoneId.systemDefault()
+        }
+        // A panel that gives no zone answers in the TV's own, as players assume.
+        return (zoneOf(login) ?: java.time.ZoneId.systemDefault()).also { zones[serverUrl] = it }
+    }
+
+    private val zoneFailedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun zoneOf(login: JSONObject): java.time.ZoneId? =
+        login.optJSONObject("server_info")?.optString("timezone")?.trim()?.takeIf(String::isNotEmpty)
+            ?.let { runCatching { java.time.ZoneId.of(it) }.getOrNull() }
 
     /**
      * The live format this account may use: MPEG-TS, as IPTV players prefer, unless the account only
@@ -71,6 +111,7 @@ internal object LiveTvXtream {
     private suspend fun liveExtension(settings: LiveTvXtreamSettings): String {
         val formats = try {
             val login = JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS))
+            zoneOf(login)?.let { zones[settings.serverUrl] = it }
             val allowed = login.optJSONObject("user_info")?.optJSONArray("allowed_output_formats")
             if (allowed == null) emptyList() else List(allowed.length()) { allowed.optString(it).trim().lowercase() }
         } catch (cancel: CancellationException) {
@@ -105,7 +146,7 @@ internal fun LiveTvStalkerSettings.normalized(): LiveTvStalkerSettings = copy(
     password = password.trim(),
 )
 
-internal data class StalkerChannels(val channels: List<LiveTvChannel>, val incomplete: Boolean)
+internal data class StalkerChannels(val channels: List<LiveTvChannel>, val incomplete: Boolean, val groupOrder: List<String> = emptyList())
 
 private class StalkerSession(val settings: LiveTvStalkerSettings, val token: String) {
     /** Built once per session and shared by every channel, not copied into each. */
@@ -133,7 +174,39 @@ internal object LiveTvStalker {
             .getOrElse { if (it is CancellationException) throw it else emptyList() }
         val seen = HashSet<String>()
         val result = if (all.isNotEmpty()) StalkerChannels(all, incomplete = false) else orderedPages(session, toChannel)
-        result.copy(channels = ArrayList(result.channels.filter { seen.add(it.id.ifBlank { it.streamUrl }) }))
+        result.copy(
+            channels = ArrayList(result.channels.filter { seen.add(it.id.ifBlank { it.streamUrl }) }),
+            groupOrder = genres.values.map(String::trim).distinct(),
+        )
+    }
+
+    /**
+     * The portal's own guide for the next [hours] hours, saved to [target] as a small gzipped
+     * XMLTV file so it is read like any other guide. [channels] maps the portal's channel ids to
+     * the ids the list keeps their guide under. Portals send it as one JSON answer, which is read
+     * one programme at a time.
+     */
+    suspend fun downloadGuide(settings: LiveTvStalkerSettings, channels: Map<String, String>, hours: Int, target: java.io.File) {
+        withSession(settings.normalized()) { session ->
+            val programmes = LiveTvHttp.stream(
+                url(session.settings, session.token, "itv", "get_epg_info", mapOf("period" to hours.toString())),
+                baseHeaders(session.settings) + tokenHeader(session.token),
+                LiveTvHttp.GUIDE_READ_TIMEOUT_S,
+            ) { input ->
+                var count = 0
+                LiveTvHttp.writeGzip(target) { out ->
+                    java.io.BufferedWriter(java.io.OutputStreamWriter(out, Charsets.UTF_8), 64 * 1024).let { writer ->
+                        count = writeStalkerGuide(input, channels, writer)
+                        writer.flush()
+                    }
+                    // An empty answer keeps the guide saved before.
+                    count > 0
+                }
+                count
+            }
+            // An expired session answers with no programmes: withSession renews it and asks once more.
+            if (programmes == 0) throw java.io.IOException("Portal sent no guide")
+        }
     }
 
     /** A playable link for a list entry: Stalker links are created per play and expire. */
@@ -355,6 +428,133 @@ internal object LiveTvStalker {
         if (isNull(name)) null else optString(name).trim().takeIf(String::isNotBlank)
 }
 
+/**
+ * Copies a Stalker `get_epg_info` answer (`{"js":{"data":{"<ch_id>":[{..},..]}}}`, or `data` as
+ * one array of programmes with their `ch_id`) to [out] as XMLTV, keeping the channels in
+ * [channels]. Returns how many programmes were written.
+ */
+private fun writeStalkerGuide(input: InputStream, channels: Map<String, String>, out: java.io.Writer): Int {
+    var count = 0
+    out.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv>\n")
+    JsonReader(InputStreamReader(input, Charsets.UTF_8)).use { reader ->
+        reader.isLenient = true
+        fun programme(channelId: String?) {
+            var chId = channelId
+            var title: String? = null
+            var description: String? = null
+            var start: Long? = null
+            var stop: Long? = null
+            var startText: String? = null
+            var stopText: String? = null
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "ch_id" -> reader.nextScalar()?.let { if (chId == null) chId = it }
+                    "name" -> title = reader.nextScalar()
+                    "descr" -> description = reader.nextScalar()?.trim()?.takeIf(String::isNotEmpty)
+                    "start_timestamp" -> start = reader.nextScalar()?.toLongOrNull()
+                    "stop_timestamp" -> stop = reader.nextScalar()?.toLongOrNull()
+                    "time" -> startText = reader.nextScalar()
+                    "time_to" -> stopText = reader.nextScalar()
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+            val guideId = chId?.let(channels::get) ?: return
+            // Timestamps are seconds; the text times are in the time zone the portal was sent (the TV's).
+            val startSeconds = start ?: startText?.let(::stalkerLocalSeconds) ?: return
+            val stopSeconds = stop ?: stopText?.let(::stalkerLocalSeconds) ?: return
+            val name = title ?: return
+            if (stopSeconds <= startSeconds) return
+            out.write("<programme start=\"")
+            out.write(xmlTvTime(startSeconds))
+            out.write("\" stop=\"")
+            out.write(xmlTvTime(stopSeconds))
+            out.write("\" channel=\"")
+            out.write(xmlEscaped(guideId))
+            out.write("\"><title>")
+            out.write(xmlEscaped(name))
+            out.write("</title>")
+            description?.let {
+                out.write("<desc>")
+                out.write(xmlEscaped(it))
+                out.write("</desc>")
+            }
+            out.write("</programme>\n")
+            count++
+        }
+        fun programmes(channelId: String?) {
+            reader.beginArray()
+            while (reader.hasNext()) {
+                if (reader.peek() == JsonToken.BEGIN_OBJECT) programme(channelId) else reader.skipValue()
+            }
+            reader.endArray()
+        }
+        fun data() {
+            when (reader.peek()) {
+                JsonToken.BEGIN_OBJECT -> {
+                    reader.beginObject()
+                    while (reader.hasNext()) {
+                        val channelId = reader.nextName()
+                        if (channelId in channels && reader.peek() == JsonToken.BEGIN_ARRAY) programmes(channelId) else reader.skipValue()
+                    }
+                    reader.endObject()
+                }
+                JsonToken.BEGIN_ARRAY -> programmes(null)
+                else -> reader.skipValue()
+            }
+        }
+        fun body() {
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "js" -> if (reader.peek() == JsonToken.BEGIN_OBJECT) body() else reader.skipValue()
+                    "data" -> data()
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+        }
+        if (reader.peek() == JsonToken.BEGIN_OBJECT) body()
+    }
+    out.write("</tv>\n")
+    return count
+}
+
+/** `2026-09-29 21:00:00` in the TV's time zone, as epoch seconds. */
+private fun stalkerLocalSeconds(text: String): Long? = runCatching {
+    java.time.LocalDateTime.parse(text.trim().replace(' ', 'T'))
+        .atZone(java.time.ZoneId.systemDefault()).toEpochSecond()
+}.getOrNull()
+
+/** Epoch seconds as XMLTV `yyyyMMddHHmmss +0000`. */
+private fun xmlTvTime(epochSeconds: Long): String {
+    val time = java.time.LocalDateTime.ofEpochSecond(epochSeconds, 0, java.time.ZoneOffset.UTC)
+    return buildString(20) {
+        append(time.year.toString().padStart(4, '0'))
+        fun two(value: Int) { if (value < 10) append('0'); append(value) }
+        two(time.monthValue); two(time.dayOfMonth); two(time.hour); two(time.minute); two(time.second)
+        append(" +0000")
+    }
+}
+
+/** Text safe inside XML: markup characters escaped, characters XML does not allow left out. */
+private fun xmlEscaped(text: String): String {
+    if (text.none { it == '&' || it == '<' || it == '>' || it == '"' || it < ' ' }) return text
+    return buildString(text.length + 16) {
+        text.forEach { char ->
+            when {
+                char == '&' -> append("&amp;")
+                char == '<' -> append("&lt;")
+                char == '>' -> append("&gt;")
+                char == '"' -> append("&quot;")
+                char < ' ' && char != '\t' && char != '\n' && char != '\r' -> Unit
+                else -> append(char)
+            }
+        }
+    }
+}
+
 private class StalkerPage<T>(val entries: List<T>, val totalItems: Int?, val maxPageItems: Int?)
 
 /** Streams a Stalker answer (`{"js":{"total_items":..,"data":[{..},..]}}` or without `js`). */
@@ -453,6 +653,8 @@ enum class LiveTvError {
     /** The list loaded, but some of the portal's pages did not: a notice, not a failed load. */
     StalkerIncomplete,
     XtreamRequired, XtreamInvalidUrl, XtreamNoChannels, XtreamFailed,
+    /** The guide link given with a source is not a web link. */
+    GuideInvalidUrl,
 }
 
 internal class LiveTvException(val error: LiveTvError) : Exception(error.name)
