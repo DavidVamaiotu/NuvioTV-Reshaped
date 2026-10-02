@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.tv.material3.Icon
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -151,6 +152,22 @@ internal class LiveTvGuideState(
         picked.clear()
     }
 
+    /**
+     * Moving the selected channel within the list (a playlist of the viewer's): ▲▼ call
+     * [onReorder] with it and a step, OK or Back put it down.
+     */
+    var moving by mutableStateOf(false)
+        private set
+    var onReorder: ((LiveTvChannel, Int) -> Unit)? = null
+
+    fun stopMoving() {
+        moving = false
+    }
+
+    fun startMoving() {
+        if (onReorder != null && channel != null) moving = true
+    }
+
     fun togglePicked(channel: LiveTvChannel) {
         if (picked.remove(channel.streamUrl) == null) picked[channel.streamUrl] = channel
     }
@@ -212,6 +229,10 @@ internal class LiveTvGuideState(
                             longPressed = false
                             return true
                         }
+                        if (moving) {
+                            moving = false
+                            return true
+                        }
                         if (selecting) {
                             togglePicked(picked)
                             return true
@@ -226,10 +247,24 @@ internal class LiveTvGuideState(
                             onPlay(picked)
                         }
                     }
-                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> if (selecting) stopSelecting() else onClose()
+                    KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> when {
+                        moving -> moving = false
+                        selecting -> stopSelecting()
+                        else -> onClose()
+                    }
                 }
             }
             return handled || event.keyCode in GUIDE_KEYS
+        }
+        if (moving) {
+            when (event.keyCode) {
+                // The list moves the channel; the selection follows it when the list comes back.
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    channel?.let { onReorder?.invoke(it, if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1) }
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> return true
+            }
         }
         val acted = when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> if (row == 0 && onExitUp != null) {
@@ -450,6 +485,7 @@ internal fun LiveTvGuideGrid(
                             logo = liveState.logoFor(channel),
                             isFavorite = channel.streamUrl in liveState.favoriteUrls,
                             picked = if (state.selecting) channel.streamUrl in state.picked else null,
+                            moving = state.moving && index == state.row,
                             selectedRow = index == state.row,
                             active = active,
                             guideVersion = liveState.guideVersion,
@@ -565,6 +601,8 @@ private fun GuideRow(
     isFavorite: Boolean,
     /** While picking channels: whether this one is ticked; null otherwise. */
     picked: Boolean?,
+    /** Being moved within the playlist. */
+    moving: Boolean,
     selectedRow: Boolean,
     active: Boolean,
     guideVersion: Int,
@@ -586,6 +624,9 @@ private fun GuideRow(
                 .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (moving) {
+                Icon(Icons.Filled.UnfoldMore, contentDescription = null, tint = Color.White, modifier = Modifier.padding(end = 6.dp).size(18.dp))
+            }
             if (picked != null) {
                 Box(
                     modifier = Modifier

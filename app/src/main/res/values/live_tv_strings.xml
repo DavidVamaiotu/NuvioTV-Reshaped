@@ -156,7 +156,10 @@
     <string name="live_tv_channel_lists_title">Add to playlist</string>
     <string name="live_tv_channel_lists_description">Choose where %1$s goes. OK adds it, or takes it out when it is there already.</string>
     <string name="live_tv_pick_several">Pick several</string>
-    <string name="live_tv_picking_keys">OK ticks a channel  ·  hold OK to add them  ·  Back stops</string>
+    <string name="live_tv_picking_keys">OK ticks a channel  ·  ◀ chooses the playlist  ·  Back stops</string>
+    <string name="live_tv_choose_playlist">Choose the playlist</string>
+    <string name="live_tv_choose_playlist_hint">The ticked channels go in it. If they are all in it already, they come out.</string>
+    <string name="live_tv_moving_keys">▲▼ moves the channel  ·  OK puts it down</string>
     <string name="live_tv_add_picked_description">OK on a list adds them all. Channels already in it stay once.</string>
     <plurals name="live_tv_picked">
         <item quantity="one">%d channel picked</item>
