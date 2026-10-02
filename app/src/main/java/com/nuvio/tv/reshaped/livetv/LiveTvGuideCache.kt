@@ -14,7 +14,8 @@ import java.util.zip.GZIPOutputStream
  */
 internal object LiveTvGuideCache {
     const val FILE_NAME = "guide_kept.bin.gz"
-    private const val VERSION = 3
+    // 4: kept programmes written by a read that lost later gzip members are not served.
+    private const val VERSION = 4
     private const val MAX_TITLE = 1_000
 
     class Entry(val schedule: LiveTvSchedule, val logos: Map<String, String>, val nextReadAtMs: Long)

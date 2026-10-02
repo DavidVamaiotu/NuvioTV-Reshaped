@@ -48,6 +48,8 @@ object LiveTvRepository {
     private const val EPG_MIN_READ_GAP_MS = 60L * 60 * 1000
     /** A guide that could not be read is tried again sooner. */
     private const val EPG_RETRY_MS = 30L * 60 * 1000
+    /** A held ▲ moving a playlist channel is saved once it pauses this long. */
+    private const val LIST_SAVE_DELAY_MS = 600L
     /**
      * How long Live TV may go unseen (no list, no Live TV channel in the player) before its
      * channels and guide are let go. Coming back after that loads them again.
@@ -454,22 +456,12 @@ object LiveTvRepository {
 
     fun renameCustomList(id: String, name: String) {
         val title = name.trim().ifEmpty { return }
-        updateCustomLists { lists -> lists.map { if (it.id == id) it.copy(name = title) else it } }
+        // Typed a letter at a time: saved once the typing pauses.
+        updateCustomLists(persistLater = true) { lists -> lists.map { if (it.id == id) it.copy(name = title) else it } }
     }
 
     fun deleteCustomList(id: String) {
         updateCustomLists { lists -> lists.filterNot { it.id == id } }
-    }
-
-    /** Adds [channel] to the end of list [id], or takes it out when it is in already. */
-    fun toggleInCustomList(id: String, channel: LiveTvChannel) {
-        updateCustomLists { lists ->
-            lists.map { list ->
-                if (list.id != id) list
-                else if (channel.streamUrl in list.urls) list.copy(urls = list.urls - channel.streamUrl)
-                else list.copy(urls = list.urls + channel.streamUrl)
-            }
-        }
     }
 
     /** Adds [channels] to the end of list [id], skipping ones already in it. */
@@ -495,28 +487,68 @@ object LiveTvRepository {
         ReshapedSync.onLocalChange()
     }
 
+    /** Takes [channels] out of favourites, in one change. */
+    fun removeFavorites(channels: Collection<LiveTvChannel>) {
+        val store = storage ?: return
+        val favorites = _uiState.value.favoriteUrls.toHashSet()
+        if (!favorites.removeAll(channels.mapTo(HashSet()) { it.streamUrl })) return
+        _uiState.update { it.copy(favoriteUrls = favorites) }
+        scope.launch(writer) { store.saveFavoriteUrls(favorites) }
+        ReshapedSync.onLocalChange()
+    }
+
     fun removeFromCustomList(id: String, url: String) {
         updateCustomLists { lists -> lists.map { if (it.id == id) it.copy(urls = it.urls - url) else it } }
     }
 
-    /** Moves the channel [url] of list [id] by [step] places. */
-    fun moveInCustomList(id: String, url: String, step: Int) {
-        updateCustomLists { lists ->
+    /** Takes [channels] out of list [id], in one change. */
+    fun removeFromCustomList(id: String, channels: Collection<LiveTvChannel>) {
+        val urls = channels.mapTo(HashSet()) { it.streamUrl }
+        updateCustomLists { lists -> lists.map { if (it.id == id) it.copy(urls = it.urls.filterNot(urls::contains)) else it } }
+    }
+
+    /**
+     * Moves the channel [url] of list [id] past [step] of its neighbours; only those [shown]
+     * counts (a channel no source lists now is hidden, and stepping over it would look stuck).
+     */
+    fun moveInCustomList(id: String, url: String, step: Int, shown: (String) -> Boolean = { true }) {
+        updateCustomLists(persistLater = true) { lists ->
             lists.map { list ->
                 val from = list.urls.indexOf(url)
-                val to = from + step
-                if (list.id != id || from < 0 || to !in list.urls.indices) return@map list
+                if (list.id != id || from < 0 || step == 0) return@map list
+                var to = from
+                var left = kotlin.math.abs(step)
+                val direction = if (step > 0) 1 else -1
+                while (left > 0) {
+                    var next = to + direction
+                    while (next in list.urls.indices && !shown(list.urls[next])) next += direction
+                    if (next !in list.urls.indices) break
+                    to = next
+                    left--
+                }
+                if (to == from) return@map list
                 list.copy(urls = list.urls.toMutableList().apply { add(to, removeAt(from)) })
             }
         }
     }
 
-    private fun updateCustomLists(change: (List<LiveTvCustomList>) -> List<LiveTvCustomList>) {
+    private var pendingListSave: Job? = null
+
+    /**
+     * [persistLater]: a run of quick changes (a held ▲ moving a channel) is saved and synced
+     * once it pauses, not on every step.
+     */
+    private fun updateCustomLists(persistLater: Boolean = false, change: (List<LiveTvCustomList>) -> List<LiveTvCustomList>) {
         val store = storage ?: return
         var saved: List<LiveTvCustomList> = emptyList()
         _uiState.update { state -> state.copy(customLists = change(state.customLists).also { saved = it }) }
-        scope.launch(writer) { store.saveCustomLists(saved) }
-        ReshapedSync.onLocalChange()
+        pendingListSave?.cancel()
+        pendingListSave = scope.launch(writer) {
+            if (persistLater) delay(LIST_SAVE_DELAY_MS)
+            store.saveCustomLists(saved)
+            if (persistLater) ReshapedSync.onLocalChange()
+        }
+        if (!persistLater) ReshapedSync.onLocalChange()
     }
 
     /** The playlists with links that moved ([moved], old link to new) changed over. */
@@ -845,10 +877,23 @@ object LiveTvRepository {
             if (now.streamUrl != old.streamUrl) moved[old.streamUrl] = now
         }
         if (moved.isEmpty()) return
-        val favorites = state.favoriteUrls.mapTo(HashSet()) { moved[it]?.streamUrl ?: it }
-        val newRecent = recent?.let { r -> moved[r.streamUrl]?.let { r.copy(streamUrl = it.streamUrl, logoUrl = it.logoUrl) } ?: r }
-        val lists = state.customLists.movedTo(moved)
-        _uiState.update { it.copy(favoriteUrls = favorites, customLists = lists, recentChannel = newRecent) }
+        saveMoved(moved, store)
+    }
+
+    /**
+     * Favourites, playlists and the last channel moved to their new links. Changed on the
+     * current state, so an edit made while the source loaded is not lost.
+     */
+    private fun saveMoved(moved: Map<String, LiveTvChannel>, store: LiveTvStorage) {
+        var favorites: Set<String> = emptySet()
+        var lists: List<LiveTvCustomList> = emptyList()
+        var newRecent: LiveTvChannel? = null
+        _uiState.update { state ->
+            favorites = state.favoriteUrls.mapTo(HashSet()) { moved[it]?.streamUrl ?: it }
+            lists = state.customLists.movedTo(moved)
+            newRecent = state.recentChannel?.let { r -> moved[r.streamUrl]?.let { r.copy(streamUrl = it.streamUrl, logoUrl = it.logoUrl) } ?: r }
+            state.copy(favoriteUrls = favorites, customLists = lists, recentChannel = newRecent)
+        }
         scope.launch(writer) {
             store.saveFavoriteUrls(favorites)
             store.saveCustomLists(lists)
@@ -877,15 +922,7 @@ object LiveTvRepository {
             if (now.streamUrl != url) moved[url] = now
         }
         if (moved.isEmpty()) return
-        val favorites = state.favoriteUrls.mapTo(HashSet()) { moved[it]?.streamUrl ?: it }
-        val newRecent = recent?.let { r -> moved[r.streamUrl]?.let { r.copy(streamUrl = it.streamUrl, logoUrl = it.logoUrl) } ?: r }
-        val lists = state.customLists.movedTo(moved)
-        _uiState.update { it.copy(favoriteUrls = favorites, customLists = lists, recentChannel = newRecent) }
-        scope.launch(writer) {
-            store.saveFavoriteUrls(favorites)
-            store.saveCustomLists(lists)
-            newRecent?.let(store::saveRecentChannel)
-        }
+        saveMoved(moved, store)
     }
 
     /** The server, user and password of an Xtream source, or of an M3U get.php link. */
@@ -1309,9 +1346,6 @@ object LiveTvRepository {
                             read = { input -> readXmlTvGuide(input, request, nowMs, window) },
                             keep = { guide -> guide.elements > 0 },
                         )
-                        // Broken off while downloading: the saved copy, now whole, is read again, so
-                        // nothing about reading a download as it comes ever costs part of a guide.
-                        if (read.elements > 0 && !read.complete) return readXmlTvGuide(file, request, nowMs, window)
                         if (read.elements > 0) return read
                         Log.w(TAG, "Guide link gave no guide")
                     } catch (cancel: CancellationException) {

@@ -365,13 +365,18 @@ fun LiveTvScreen(
     onGuideLongPress = { channel ->
         val shownList = filterFor(filterKey) as? LiveTvFilter.Custom
         when {
-            guide.selecting -> Unit
+            // Held while picking: ticks, as a press would.
+            guide.selecting -> guide.togglePicked(channel)
             shownList != null && query.isBlank() -> guide.startMoving()
             else -> guide.startSelecting(channel)
         }
     }
     guide.onReorder = { channel, step ->
-        (filterFor(filterKey) as? LiveTvFilter.Custom)?.let { LiveTvRepository.moveInCustomList(it.id, channel.streamUrl, step) }
+        (filterFor(filterKey) as? LiveTvFilter.Custom)?.let { list ->
+            // Steps over the channels shown, not ones no source lists now.
+            val shown = visibleChannels.mapTo(HashSet(visibleChannels.size * 2)) { it.streamUrl }
+            LiveTvRepository.moveInCustomList(list.id, channel.streamUrl, step, shown::contains)
+        }
     }
     LaunchedEffect(filterKey, query) { guide.stopMoving() }
     /**
@@ -393,9 +398,9 @@ fun LiveTvScreen(
             // Taking the selected channel out of the list on screen: the guide moves to its neighbour.
             if (removing && key == filterKey) guide.channel?.takeIf { it.streamUrl in guide.picked }?.let(keepNeighbour)
             when {
-                custom != null && removing -> picked.forEach { LiveTvRepository.removeFromCustomList(custom.id, it.streamUrl) }
+                custom != null && removing -> LiveTvRepository.removeFromCustomList(custom.id, picked)
                 custom != null -> LiveTvRepository.addToCustomList(custom.id, picked)
-                removing -> picked.forEach(LiveTvRepository::toggleFavorite)
+                removing -> LiveTvRepository.removeFavorites(picked)
                 else -> LiveTvRepository.addFavorites(picked)
             }
             guide.stopSelecting()
@@ -469,7 +474,9 @@ fun LiveTvScreen(
                             .focusRequester(gridFocus)
                             .onFocusChanged { gridFocused = it.isFocused }
                             .onPreviewKeyEvent { guide.onKey(it.nativeKeyEvent) }
-                            .focusable(enabled = visibleChannels.isNotEmpty()),
+                            // Focusable even when empty: a list emptied under the focus (the last channel taken out)
+                            // keeps it here until it goes on to the categories, instead of dropping it.
+                            .focusable(),
                     ) {
                         LiveTvGuideGrid(
                             state = guide,
@@ -1085,6 +1092,8 @@ private fun LiveTvCategoryColumn(
                     selected = false,
                     anchor = index == 0,
                     selectedModifier = selectedModifier,
+                    // Consumes the guide's ◀ mark, so a later category focus picks as usual.
+                    holdSelection = holdSelection,
                     count = entry.count,
                     icon = if (entry.action) Icons.Filled.Add else null,
                     onClick = { onChoose(entry.key) },

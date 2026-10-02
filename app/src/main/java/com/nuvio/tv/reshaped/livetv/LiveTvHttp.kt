@@ -8,8 +8,13 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.Deflater
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -62,16 +67,17 @@ internal object LiveTvHttp {
         readTimeoutSeconds: Long = 0L,
         expectXml: Boolean = false,
     ) {
-        runInterruptible(Dispatchers.IO) {
+        interruptibleCall { calling ->
             // Some panels build their guide on request and send nothing for a minute or more.
             val http = if (readTimeoutSeconds > 0) client.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build() else client
             val request = Request.Builder().url(url).apply {
                 headers.forEach { (name, value) -> header(name, value) }
             }.build()
             target.parentFile?.mkdirs()
-            val temp = File(target.path + ".part")
+            // Its own name: a download still stopping must not write into or delete this one.
+            val temp = File.createTempFile(target.name, ".part", target.parentFile)
             try {
-                http.newCall(request).execute().use { response ->
+                calling(http.newCall(request)).execute().use { response ->
                     if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
                     val body = response.body ?: throw IOException("Empty response")
                     BufferedInputStream(body.byteStream(), BUFFER_BYTES).use { buffered ->
@@ -104,15 +110,16 @@ internal object LiveTvHttp {
         read: (InputStream) -> T,
         keep: (T) -> Boolean,
     ): T =
-        runInterruptible(Dispatchers.IO) {
+        interruptibleCall { calling ->
             val http = if (readTimeoutSeconds > 0) client.newBuilder().readTimeout(readTimeoutSeconds, TimeUnit.SECONDS).build() else client
             val request = Request.Builder().url(url).apply {
                 headers.forEach { (name, value) -> header(name, value) }
             }.build()
             target.parentFile?.mkdirs()
-            val temp = File(target.path + ".part")
+            // Its own name: a download still stopping must not write into or delete this one.
+            val temp = File.createTempFile(target.name, ".part", target.parentFile)
             try {
-                val result = http.newCall(request).execute().use { response ->
+                val result = calling(http.newCall(request)).execute().use { response ->
                     if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
                     val body = response.body ?: throw IOException("Empty response")
                     BufferedInputStream(body.byteStream(), BUFFER_BYTES).use { buffered ->
@@ -134,6 +141,27 @@ internal object LiveTvHttp {
                 temp.delete()
             }
         }
+
+    /**
+     * [block] on the IO threads, interruptible; the call it passes through `calling` is also
+     * cancelled with the coroutine, since a socket read stalled on a slow panel ignores the
+     * interrupt and would carry on for the whole read timeout.
+     */
+    private suspend fun <T> interruptibleCall(block: (calling: (Call) -> Call) -> T): T = coroutineScope {
+        val current = java.util.concurrent.atomic.AtomicReference<Call?>()
+        val closer = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                current.get()?.cancel()
+            }
+        }
+        try {
+            runInterruptible(Dispatchers.IO) { block { call -> call.also(current::set) } }
+        } finally {
+            closer.cancel()
+        }
+    }
 
     /** Passes every byte read on to [copy]. */
     private class TeeInputStream(private val source: InputStream, private val copy: java.io.OutputStream) : InputStream() {

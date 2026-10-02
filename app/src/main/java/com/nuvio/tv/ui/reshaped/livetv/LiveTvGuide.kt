@@ -263,8 +263,15 @@ internal class LiveTvGuideState(
                     channel?.let { onReorder?.invoke(it, if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1) }
                     return true
                 }
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> return true
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+                KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN,
+                KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN -> return true
             }
+        }
+        // While picking, ◀ goes to the playlists at once, not back through a catch-up channel's past.
+        if (selecting && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && onExitLeft != null) {
+            if (event.repeatCount == 0) onExitLeft.invoke()
+            return true
         }
         val acted = when (event.keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> if (row == 0 && onExitUp != null) {
