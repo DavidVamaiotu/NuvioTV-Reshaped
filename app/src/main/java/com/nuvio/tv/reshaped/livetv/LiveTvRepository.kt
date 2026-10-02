@@ -1154,9 +1154,8 @@ object LiveTvRepository {
      */
     private fun startEpg(epgUrls: List<String>, channels: List<LiveTvChannel>, guideKeys: Set<String>) {
         val window = if (LiveTvDevice.isLowMemory(appContext)) LiveTvGuideWindow.LowMemory else LiveTvGuideWindow.Regular
-        // What is shown stays until the new read replaces it; weak TVs let go of the old
-        // programmes first, so two guides are never held at once.
-        if (window === LiveTvGuideWindow.LowMemory) keptSchedule = emptyMap()
+        // The last good guide stays visible while a refresh runs, on weak TVs too: their kept
+        // window is small, and they read one guide at a time below.
         epgGeneration++
         epgJob?.cancel()
         val generation = epgGeneration
