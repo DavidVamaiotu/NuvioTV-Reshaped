@@ -57,7 +57,6 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.fadeIn
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
@@ -457,7 +456,8 @@ fun LiveTvScreen(
                             )
                         }
                     }
-                    AnimatedVisibility(
+                    // Called by its full name: inside the Column the ColumnScope variant would be picked.
+                    androidx.compose.animation.AnimatedVisibility(
                         visible = categoriesOpen,
                         enter = slideInHorizontally(tween(PANEL_MS, easing = FastOutSlowInEasing)) { -it } + fadeIn(tween(PANEL_MS)),
                         exit = slideOutHorizontally(tween(PANEL_MS, easing = FastOutSlowInEasing)) { -it } + fadeOut(tween(PANEL_MS)),
