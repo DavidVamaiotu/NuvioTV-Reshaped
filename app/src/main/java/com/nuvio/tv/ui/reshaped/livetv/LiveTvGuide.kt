@@ -733,6 +733,7 @@ private fun GuideRow(
                     selected = programme === selected && active,
                     state = cellState,
                     progress = if (cellState == GuideCellState.Now) programme else null,
+                    progressSpan = cellStart to cellStop,
                     clock = clock,
                     modifier = Modifier
                         .offset { IntOffset(timeline.x(cellStart).roundToInt(), 0) }
@@ -778,6 +779,8 @@ private fun GuideCell(
     modifier: Modifier = Modifier,
     /** The programme on now, whose progress shows as a line along the bottom. */
     progress: LiveTvProgramme? = null,
+    /** The time the cell spans when it is cut to the view: the line runs along that part only. */
+    progressSpan: Pair<Long, Long>? = null,
     clock: State<Long>? = null,
     titleShift: () -> Int = { 0 },
 ) {
@@ -808,11 +811,12 @@ private fun GuideCell(
             .drawBehind { drawRect(fill) }
             .then(
                 if (progress != null && clock != null) {
-                    val span = (progress.stopEpochMs - progress.startEpochMs).coerceAtLeast(1L)
+                    val from = progressSpan?.first ?: progress.startEpochMs
+                    val span = ((progressSpan?.second ?: progress.stopEpochMs) - from).coerceAtLeast(1L)
                     val line = if (selected) Color.Black.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.7f)
                     // Read at draw time: the minute tick redraws it without recomposing.
                     Modifier.drawBehind {
-                        val fraction = ((clock.value - progress.startEpochMs).toFloat() / span).coerceIn(0f, 1f)
+                        val fraction = ((clock.value - from).toFloat() / span).coerceIn(0f, 1f)
                         val height = 3.dp.toPx()
                         drawRect(line, topLeft = Offset(0f, size.height - height), size = Size(size.width * fraction, height))
                     }
