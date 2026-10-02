@@ -139,6 +139,13 @@ internal object LiveTvHttp {
     private class TeeInputStream(private val source: InputStream, private val copy: java.io.OutputStream) : InputStream() {
         override fun read(): Int = source.read().also { if (it >= 0) copy.write(it) }
         override fun read(b: ByteArray, off: Int, len: Int): Int = source.read(b, off, len).also { if (it > 0) copy.write(b, off, it) }
+
+        /**
+         * Never 0: GZIPInputStream looks for a further gzip member only when bytes are available,
+         * and a download between two packets has none, so a guide made of several members (as
+         * some are) would end after the first. At the real end, its look finds nothing and stops.
+         */
+        override fun available(): Int = maxOf(source.available(), 1)
         fun drain() {
             val buffer = ByteArray(BUFFER_BYTES)
             while (read(buffer, 0, buffer.size) >= 0) Unit

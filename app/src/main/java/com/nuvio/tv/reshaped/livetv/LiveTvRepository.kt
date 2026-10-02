@@ -1309,6 +1309,9 @@ object LiveTvRepository {
                             read = { input -> readXmlTvGuide(input, request, nowMs, window) },
                             keep = { guide -> guide.elements > 0 },
                         )
+                        // Broken off while downloading: the saved copy, now whole, is read again, so
+                        // nothing about reading a download as it comes ever costs part of a guide.
+                        if (read.elements > 0 && !read.complete) return readXmlTvGuide(file, request, nowMs, window)
                         if (read.elements > 0) return read
                         Log.w(TAG, "Guide link gave no guide")
                     } catch (cancel: CancellationException) {
