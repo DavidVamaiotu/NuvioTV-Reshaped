@@ -887,7 +887,7 @@ object LiveTvRepository {
     private fun saveMoved(moved: Map<String, LiveTvChannel>, store: LiveTvStorage) {
         var favorites: Set<String> = emptySet()
         var lists: List<LiveTvCustomList> = emptyList()
-        var newRecent: LiveTvChannel? = null
+        var newRecent: LiveTvRecentChannel? = null
         _uiState.update { state ->
             favorites = state.favoriteUrls.mapTo(HashSet()) { moved[it]?.streamUrl ?: it }
             lists = state.customLists.movedTo(moved)
