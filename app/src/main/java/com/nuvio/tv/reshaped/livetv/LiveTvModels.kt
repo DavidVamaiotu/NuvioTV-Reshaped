@@ -166,6 +166,11 @@ data class LiveTvUiState(
     val hiddenGroups: Set<String> = emptySet(),
     /** Names the viewer gave categories, by the playlist's name. */
     val groupNames: Map<String, String> = emptyMap(),
+    /**
+     * Each source's own order of its categories, by [LiveTvSource.identity], when the viewer moved
+     * one under that source: two sources with a category of the same name keep their own places.
+     */
+    val sourceGroupOrders: Map<String, List<String>> = emptyMap(),
     /** Single channels the viewer chose not to see ([LiveTvChannel.hideKey]), inside categories that stay. */
     val hiddenChannelKeys: Set<Long> = emptySet(),
     /** [channels] without hidden categories and channels: what All channels and zapping go through. */
@@ -200,6 +205,10 @@ data class LiveTvUiState(
     fun logoFor(channel: LiveTvChannel): String? =
         channel.logoUrl?.takeIf(String::isNotBlank) ?: guideLogos[channel.guideKey]
 
+    /** [source]'s categories among [groups] (those it has: [own]), in its own order, then the shared one. */
+    fun groupsOf(source: LiveTvSource, own: Set<String>, groups: List<String> = this.groups): List<String> =
+        liveTvSourceGroups(sourceGroupOrders[source.identity], groups, own)
+
     /** Categories the list shows. */
     val visibleGroups: List<String>
         get() = if (hiddenGroups.isEmpty()) groups else groups.filterNot(hiddenGroups::contains)
@@ -215,4 +224,15 @@ data class LiveTvSourceGuide(val state: State, val channels: Int = 0) {
         val Loading = LiveTvSourceGuide(State.Loading)
         val Failed = LiveTvSourceGuide(State.Failed)
     }
+}
+
+/** [own] in [custom]'s order (a source's own), then in [shared]'s; only those [shared] lists. */
+internal fun liveTvSourceGroups(custom: List<String>?, shared: List<String>, own: Set<String>): List<String> {
+    if (custom.isNullOrEmpty()) return shared.filter { it in own }
+    val listed = shared.toHashSet()
+    val placed = HashSet<String>()
+    val result = ArrayList<String>()
+    custom.forEach { if (it in own && it in listed && placed.add(it)) result += it }
+    shared.forEach { if (it in own && placed.add(it)) result += it }
+    return result
 }

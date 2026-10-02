@@ -79,4 +79,34 @@ class SyncDocTest {
         assertFailsWith<SyncDoc.NewerFormatException> { SyncDoc.decode("""{"v":99,"s":{}}""") }
         assertEquals(emptyMap(), SyncDoc.decode("not json"))
     }
+
+    private val list = com.nuvio.tv.reshaped.livetv.LiveTvSource("s1", com.nuvio.tv.reshaped.livetv.LiveTvSourceType.M3u, "https://lists.example/a.m3u")
+    private val other = com.nuvio.tv.reshaped.livetv.LiveTvSource("s2", com.nuvio.tv.reshaped.livetv.LiveTvSourceType.M3u, "https://lists.example/b.m3u")
+
+    private fun withSources(vararg sources: com.nuvio.tv.reshaped.livetv.LiveTvSource) =
+        com.nuvio.tv.reshaped.livetv.LiveTvSyncData(sources = sources.toList(), favorites = setOf("https://x/1"))
+
+    @Test
+    fun aSourceThisDeviceLacksIsNotDeletedForEveryone() {
+        val start = device(emptyMap(), LiveTvSections.toSections(1, withSources(list, other), emptyMap()), emptyMap(), 1_000)
+        // This device has only one of them (an older version dropped one, or it was not loaded yet).
+        val after = device(start, LiveTvSections.toSections(1, withSources(list), start), start, 2_000)
+        assertEquals(2, LiveTvSections.fromSections(1, after).sources.size)
+    }
+
+    @Test
+    fun aSourceRemovedHereIsDeletedForEveryone() {
+        val start = device(emptyMap(), LiveTvSections.toSections(1, withSources(list, other), emptyMap()), emptyMap(), 1_000)
+        val after = device(start, LiveTvSections.toSections(1, withSources(list), start, removed = setOf(other.identity)), start, 2_000)
+        assertEquals(listOf(list.url), LiveTvSections.fromSections(1, after).sources.map { it.url })
+    }
+
+    @Test
+    fun aDeviceWithNoSourcesYetEmptiesNothing() {
+        val start = device(emptyMap(), LiveTvSections.toSections(1, withSources(list), emptyMap()), emptyMap(), 1_000)
+        val empty = LiveTvSections.toSections(1, com.nuvio.tv.reshaped.livetv.LiveTvSyncData(), start)
+        assertEquals(emptyMap(), empty)
+        val after = device(start, empty, start, 2_000)
+        assertEquals(setOf("https://x/1"), LiveTvSections.fromSections(1, after).favorites)
+    }
 }

@@ -106,7 +106,8 @@ class LiveTvScreenModel @Inject constructor(
         }
         val bySource = state.sources.map { source ->
             val own = groupsBySource[source.id].orEmpty()
-            LiveTvSourceSection(source, counts[source.id] ?: 0, visibleGroups.filter { it in own })
+            // In the source's own order when the viewer moved its categories (see LiveTvUiState.sourceGroupOrders).
+            LiveTvSourceSection(source, counts[source.id] ?: 0, state.groupsOf(source, own, visibleGroups))
         }
         return LiveTvSections(total, bySource).also {
             sectionsFor = inputs
@@ -115,7 +116,7 @@ class LiveTvScreenModel @Inject constructor(
     }
 
     private fun sectionInputs(state: LiveTvUiState, visibleGroups: List<String>): List<Any> =
-        listOf(state.channels, visibleGroups, state.hiddenChannelKeys, state.sources)
+        listOf(state.channels, visibleGroups, state.hiddenChannelKeys, state.sources, state.sourceGroupOrders)
 
     private fun List<Any>.sameAs(other: List<Any>): Boolean = size == other.size && indices.all { this[it] === other[it] }
 }

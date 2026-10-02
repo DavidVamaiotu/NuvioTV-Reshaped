@@ -164,14 +164,15 @@ object LiveTvRepository {
             stopEpg()
             epgKey = null
             pendingEpg = null
-            val store = withContext(Dispatchers.IO) {
+            // Read on [writer], so a sync writing this profile's files finishes first or waits (see applySync).
+            val store = withContext(writer) {
                 LiveTvStorage(appContext, profileId).also {
                     it.favoriteUrls() // first read parses the file
                     groupOrder = it.groupOrder()
                 }
             }
-            val sources = withContext(Dispatchers.IO) { store.sources() }
-            val hiddenChannels = withContext(Dispatchers.IO) { store.hiddenChannelKeys() }
+            val sources = withContext(writer) { store.sources() }
+            val hiddenChannels = withContext(writer) { store.hiddenChannelKeys() }
             storage = store
             loaded.clear()
             _uiState.value = LiveTvUiState(
@@ -180,6 +181,7 @@ object LiveTvRepository {
                 customLists = store.customLists(),
                 hiddenGroups = store.hiddenGroups(),
                 groupNames = store.groupNames(),
+                sourceGroupOrders = store.sourceGroupOrders(),
                 hiddenChannelKeys = hiddenChannels,
                 recentChannel = store.recentChannel(),
                 isLoading = sources.isNotEmpty(),
@@ -335,12 +337,17 @@ object LiveTvRepository {
         val store = storage ?: return
         sourceJobs.remove(sourceId)?.cancel()
         scope.launch(serial) {
+            val gone = _uiState.value.sources.firstOrNull { it.id == sourceId } ?: return@launch
             val sources = _uiState.value.sources.filterNot { it.id == sourceId }
-            if (sources.size == _uiState.value.sources.size) return@launch
             LiveTvStalker.clearSession()
             loaded.remove(sourceId)
             _uiState.update { it.copy(sources = sources, sourceErrors = it.sourceErrors - sourceId, error = null) }
+            val orders = _uiState.value.sourceGroupOrders
+            if (gone.identity in orders) _uiState.update { it.copy(sourceGroupOrders = orders - gone.identity) }
             scope.launch(writer) {
+                // Removed by the viewer: the other devices remove it too on the next sync.
+                store.markSyncRemoved(gone.identity)
+                if (gone.identity in orders) store.saveSourceGroupOrders(orders - gone.identity)
                 store.saveSources(sources)
                 store.deletePlaylistFile(sourceId)
             }
@@ -388,6 +395,45 @@ object LiveTvRepository {
     }
 
     /**
+     * Moves [group] one place up or down among [source]'s own categories only: another source
+     * with a category of the same name keeps its order.
+     */
+    fun moveSourceGroup(source: LiveTvSource, own: Set<String>, group: String, step: Int) {
+        val state = _uiState.value
+        val groups = state.groupsOf(source, own)
+        val from = groups.indexOf(group)
+        val to = from + step
+        if (from < 0 || to !in groups.indices) return
+        val neighbour = groups[to]
+        val reordered = ArrayList(groups).apply { add(to, removeAt(from)) }
+        val orders = state.sourceGroupOrders + (source.identity to reordered)
+        // The shared order (the player's categories, one list for all sources) moves it past the
+        // same neighbour, so it follows where it can.
+        val shared = ArrayList(state.groups).apply {
+            if (remove(group)) {
+                val at = indexOf(neighbour)
+                if (at < 0) add(group) else add(if (step < 0) at else at + 1, group)
+            }
+        }
+        groupOrder = shared
+        _uiState.update { it.copy(sourceGroupOrders = orders, groups = shared) }
+        storage?.let { store ->
+            scope.launch(writer) {
+                store.saveSourceGroupOrders(orders)
+                store.saveGroupOrder(shared)
+            }
+        }
+        ReshapedSync.onLocalChange()
+    }
+
+    /** Each source's own order goes: every source follows the shared order again. */
+    private fun clearSourceGroupOrders() {
+        if (_uiState.value.sourceGroupOrders.isEmpty()) return
+        _uiState.update { it.copy(sourceGroupOrders = emptyMap()) }
+        storage?.let { store -> scope.launch(writer) { store.saveSourceGroupOrders(emptyMap()) } }
+    }
+
+    /**
      * Gives a category a name of its own (blank goes back to the playlist's name). It
      * keeps its channels, hiding and place: everything still goes by the playlist's name.
      */
@@ -404,6 +450,7 @@ object LiveTvRepository {
 
     /** Back to the providers' own order. */
     fun resetGroupOrder() {
+        clearSourceGroupOrders()
         groupOrder = emptyList()
         _uiState.update { it.copy(groups = orderedGroups(it.groupCounts.keys, it.groupNames)) }
         storage?.let { store -> scope.launch(writer) { store.saveGroupOrder(emptyList()) } }
@@ -430,6 +477,7 @@ object LiveTvRepository {
 
     /** Sorts the categories A to Z (by the names shown), as the viewer's own order. */
     fun sortGroupsAlphabetically() {
+        clearSourceGroupOrders()
         val state = _uiState.value
         val sorted = state.groups.sortedWith(
             compareBy<String> { it == LIVE_TV_UNGROUPED && it !in state.groupNames }
@@ -776,11 +824,21 @@ object LiveTvRepository {
                         }
                     }
                     if (adding) {
+                        // An edit that changed what the source is (another link or login) removes the old one.
+                        val replaced = _uiState.value.sources.firstOrNull { it.id == source.id }?.identity?.takeIf { it != source.identity }
                         val sources = _uiState.value.sources.let { current ->
                             if (known) current.map { if (it.id == source.id) source else it } else current + source
                         }
                         _uiState.update { it.copy(sources = sources, addedCount = it.addedCount + 1, error = notice) }
+                        // Its own category order follows it to what it is now.
+                        val orders = _uiState.value.sourceGroupOrders
+                        val movedOrders = replaced?.let { old -> orders[old]?.let { orders - old + (source.identity to it) } }
+                        if (movedOrders != null) _uiState.update { it.copy(sourceGroupOrders = movedOrders) }
                         scope.launch(writer) {
+                            movedOrders?.let(store::saveSourceGroupOrders)
+                            replaced?.let(store::markSyncRemoved)
+                            // Added again after a removal: no longer removed.
+                            store.clearSyncRemoved(listOf(source.identity))
                             store.saveSources(sources)
                             if (source.type != LiveTvSourceType.M3u || source.url.isHttpUrl()) store.deletePlaylistFile(source.id)
                         }
@@ -868,7 +926,8 @@ object LiveTvRepository {
                 channels to listOf("${settings.serverUrl}/xmltv.php?username=${settings.username.urlEncoded()}&password=${settings.password.urlEncoded()}")
             }
             LiveTvSourceType.Stalker -> {
-                val (channels, incomplete, genres) = LiveTvStalker.channels(source.stalker)
+                // As play and the guide use it (a MAC typed without colons, formatted).
+                val (channels, incomplete, genres) = LiveTvStalker.channels(source.stalker.normalized())
                 providerOrder = genres
                 if (channels.isEmpty()) throw LiveTvException(LiveTvError.StalkerNoChannels)
                 if (incomplete) notice = LiveTvError.StalkerIncomplete
@@ -886,7 +945,9 @@ object LiveTvRepository {
             // Portal channels without a guide id get one from their portal id, which the portal's guide uses.
             val tvgId = if (stalker && channel.tvgId.isNullOrBlank()) "stalker.${source.id}.${channel.id}".lowercase() else channel.tvgId
             val headers = if (agent != null && channel.streamUrl.isHttpUrl() &&
-                channel.headers["User-Agent"].let { it == null || it == LIVE_TV_STREAM_HEADERS["User-Agent"] }
+                // A channel's own agent (any spelling of the name) stays.
+                channel.headers.entries.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
+                    .let { it == null || it == LIVE_TV_STREAM_HEADERS["User-Agent"] }
             ) {
                 withLiveTvUserAgent(channel.headers, agent)
             } else {
@@ -1008,8 +1069,14 @@ object LiveTvRepository {
     private suspend fun fetchM3u(url: String, userAgent: String = ""): ParsedM3uPlaylist {
         if (url.looksLikeDirectVideoUrl()) return ParsedM3uPlaylist(listOf(directStreamChannel(url)), emptyList())
         // Kodi style "list.m3u|User-Agent=…": the options are headers, not part of the link.
-        val link = url.substringBefore('|').trim()
-        val linkHeaders = url.substringAfter('|', "").split('&').mapNotNull { entry ->
+        // Only when what follows "|" reads as header options: a "|" inside a password stays in the link.
+        val options = url.substringAfterLast('|', "")
+        val isOptions = options.isNotEmpty() && options.split('&').all { entry ->
+            val key = entry.substringBefore('=', "").trim()
+            key.isNotEmpty() && key.all { it.isLetterOrDigit() || it == '-' || it == '_' } && entry.contains('=')
+        }
+        val link = if (isOptions) url.substringBeforeLast('|').trim() else url.trim()
+        val linkHeaders = if (!isOptions) emptyMap() else options.split('&').mapNotNull { entry ->
             val key = entry.substringBefore('=').trim()
             val value = entry.substringAfter('=', "").trim()
                 .let { if ('%' in it) runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) else it }
@@ -1137,6 +1204,7 @@ object LiveTvRepository {
 
     /** What [profileId] has now: the shown state when it is loaded, else the saved files. */
     internal suspend fun syncSnapshot(context: Context, profileId: Int): LiveTvSyncData {
+        awaitProfileLoad()
         val shown = withContext(serial) {
             if (loadedProfileId != profileId || storage == null) return@withContext null
             val state = _uiState.value
@@ -1148,10 +1216,25 @@ object LiveTvRepository {
                 hiddenChannels = state.hiddenChannelKeys,
                 groupNames = state.groupNames,
                 groupOrder = groupOrder,
+                sourceGroupOrders = state.sourceGroupOrders,
                 recent = state.recentChannel,
             )
         }
         return shown ?: withContext(writer) { LiveTvStorage(context.applicationContext, profileId).syncData() }
+    }
+
+    /** Lets a profile load that is reading the saved files finish first (it runs on [serial]). */
+    private suspend fun awaitProfileLoad() {
+        withContext(serial) { profileJob }?.join()
+    }
+
+    /** Sources the viewer removed on [profileId] that sync has yet to send (see [LiveTvStorage.syncRemovedSources]). */
+    internal suspend fun syncRemovedSources(context: Context, profileId: Int): Set<String> =
+        withContext(writer) { LiveTvStorage(context.applicationContext, profileId).syncRemovedSources() }
+
+    internal suspend fun clearSyncRemoved(context: Context, profileId: Int, identities: Collection<String>) {
+        if (identities.isEmpty()) return
+        withContext(writer) { LiveTvStorage(context.applicationContext, profileId).clearSyncRemoved(identities) }
     }
 
     /** The id [profileId] gives the source with [identity] (after a sync), or null. */
@@ -1178,7 +1261,17 @@ object LiveTvRepository {
     internal suspend fun applySync(context: Context, profileId: Int, before: LiveTvSyncData, after: LiveTvSyncData) {
         if (before == after) return
         val appContext = context.applicationContext
-        val applied = withContext(serial) {
+        // A load of this profile starting while the files are written would show (and later save)
+        // what it read before: then the change is made on the loaded state instead.
+        repeat(2) {
+            // Saved files changed while a profile load is reading them would be undone by that load.
+            awaitProfileLoad()
+            if (applySyncShown(profileId, before, after) || applySyncSaved(appContext, profileId, before, after)) return
+        }
+    }
+
+    private suspend fun applySyncShown(profileId: Int, before: LiveTvSyncData, after: LiveTvSyncData): Boolean =
+        withContext(serial) {
             val store = storage
             if (loadedProfileId != profileId || store == null) return@withContext false
             val oldSources = _uiState.value.sources
@@ -1190,6 +1283,7 @@ object LiveTvRepository {
                     hiddenGroups = state.hiddenGroups.withSyncChange(before.hiddenGroups, after.hiddenGroups),
                     hiddenChannelKeys = state.hiddenChannelKeys.withSyncChange(before.hiddenChannels, after.hiddenChannels),
                     groupNames = state.groupNames.withSyncChange(before.groupNames, after.groupNames),
+                    sourceGroupOrders = state.sourceGroupOrders.withSyncChange(before.sourceGroupOrders, after.sourceGroupOrders),
                     recentChannel = if (before.recent != after.recent) after.recent else state.recentChannel,
                 )
             }
@@ -1222,13 +1316,18 @@ object LiveTvRepository {
                 store.saveHiddenGroups(state.hiddenGroups)
                 store.saveHiddenChannelKeys(state.hiddenChannelKeys)
                 store.saveGroupNames(state.groupNames)
+                store.saveSourceGroupOrders(state.sourceGroupOrders)
                 store.saveGroupOrder(order)
                 state.recentChannel?.let(store::saveRecentChannel)
             }
             true
         }
-        if (applied) return
+
+    /** Writes the change to the saved files of [profileId]; false when a load of it has begun meanwhile. */
+    private suspend fun applySyncSaved(appContext: Context, profileId: Int, before: LiveTvSyncData, after: LiveTvSyncData): Boolean =
         withContext(writer) {
+            // The load reads on [writer] too: begun now means it reads after this check, so it waits.
+            if (loadedProfileId == profileId) return@withContext false
             val store = LiveTvStorage(appContext, profileId)
             val sources = store.sources()
             val synced = sources.withSyncChange(before.sources, after.sources, store::newSourceId)
@@ -1240,10 +1339,11 @@ object LiveTvRepository {
             store.saveHiddenGroups(store.hiddenGroups().withSyncChange(before.hiddenGroups, after.hiddenGroups))
             store.saveHiddenChannelKeys(store.hiddenChannelKeys().withSyncChange(before.hiddenChannels, after.hiddenChannels))
             store.saveGroupNames(store.groupNames().withSyncChange(before.groupNames, after.groupNames))
+            store.saveSourceGroupOrders(store.sourceGroupOrders().withSyncChange(before.sourceGroupOrders, after.sourceGroupOrders))
             if (before.groupOrder != after.groupOrder) store.saveGroupOrder(after.groupOrder)
             if (before.recent != after.recent) after.recent?.let(store::saveRecentChannel)
+            true
         }
-    }
 
     // endregion
 
@@ -1500,7 +1600,7 @@ object LiveTvRepository {
             }
             // A saved guide that has run out (a provider's file covering less than the refresh
             // interval) is downloaded again rather than leaving the guide empty until then.
-            if (cached?.canReplaceSavedGuide == true && (cached.schedule.isEmpty() || cached.hasAhead(nowMs) || nowMs - saved < EPG_MIN_READ_GAP_MS)) return cached
+            if (cached?.canReplaceSavedGuide == true && (cached.schedule.isEmpty() || cached.hasAhead(nowMs) || nowMs - saved < maxOf(EPG_MIN_READ_GAP_MS, EPG_DOWNLOAD_MS / 2))) return cached
             // Also repair a recently saved, incomplete feed from an earlier app version.
             if (force || saved == 0L || nowMs - saved !in 0 until EPG_DOWNLOAD_MS || cached != null) {
                 if (url != null) {

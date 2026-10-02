@@ -269,12 +269,14 @@ internal object LiveTvStalker {
     private suspend fun handshake(settings: LiveTvStalkerSettings): StalkerSession {
         val token = settings.portalEndpoints().let { candidates ->
             var failure: Exception? = null
+            // Each link is tried as given and kept only once it answers, so a parallel request
+            // never borrows a link that is still being tried.
             candidates.firstNotNullOfOrNull { endpoint ->
-                endpoints[settings] = endpoint
                 try {
-                    JSONObject(request(settings, null, "stb", "handshake"))
+                    JSONObject(request(settings, null, "stb", "handshake", endpoint = endpoint))
                         .let { it.optJSONObject("js") ?: it }
                         .optNonBlank("token")
+                        ?.also { endpoints[settings] = endpoint }
                         // The portal answered but gave no token (MAC not allowed): that is the error to show.
                         ?: run { failure = LiveTvException(LiveTvError.StalkerToken); null }
                 } catch (cancel: CancellationException) {
@@ -284,7 +286,6 @@ internal object LiveTvStalker {
                     null
                 }
             } ?: run {
-                endpoints.remove(settings)
                 throw failure ?: LiveTvException(LiveTvError.StalkerToken)
             }
         }
@@ -386,7 +387,8 @@ internal object LiveTvStalker {
         type: String,
         action: String,
         extra: Map<String, String> = emptyMap(),
-    ): String = LiveTvHttp.text(url(settings, token, type, action, extra), baseHeaders(settings) + tokenHeader(token))
+        endpoint: String = settings.portalEndpoint(),
+    ): String = LiveTvHttp.text(url(settings, token, type, action, extra, endpoint), baseHeaders(settings) + tokenHeader(token))
 
     private fun url(
         settings: LiveTvStalkerSettings,
@@ -394,6 +396,7 @@ internal object LiveTvStalker {
         type: String,
         action: String,
         extra: Map<String, String> = emptyMap(),
+        endpoint: String = settings.portalEndpoint(),
     ): String {
         val parameters = buildMap {
             put("type", type)
@@ -404,7 +407,6 @@ internal object LiveTvStalker {
             if (settings.password.isNotBlank()) put("password", settings.password)
             putAll(extra)
         }
-        val endpoint = settings.portalEndpoint()
         return endpoint + parameters.entries.joinToString("&", prefix = if ('?' in endpoint) "&" else "?") { (key, value) ->
             "${key.urlEncoded()}=${value.urlEncoded()}"
         }

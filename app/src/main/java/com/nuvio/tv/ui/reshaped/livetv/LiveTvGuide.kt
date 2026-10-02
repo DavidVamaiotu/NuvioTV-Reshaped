@@ -654,10 +654,10 @@ private fun GuideRow(
                     if (picked) Icon(Icons.Filled.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(14.dp))
                 }
             }
-            LiveTvLogo(url = logo, name = channel.name, width = 44.dp, height = 26.dp)
+            LiveTvLogo(url = logo, name = channel.name, width = 48.dp, height = 30.dp)
             Text(
                 text = channel.name,
-                style = MaterialTheme.typography.bodyMedium,
+                style = if (rowHeight >= 48.dp) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
                 fontWeight = if (selectedRow) FontWeight.SemiBold else FontWeight.Normal,
                 color = Color.White.copy(alpha = if (selectedRow) 1f else 0.75f),
                 maxLines = 1,

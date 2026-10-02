@@ -510,8 +510,9 @@ fun LiveTvScreen(
                             state = guide,
                             active = gridFocused,
                             clock = minuteClock,
-                            channelColumn = 210.dp,
-                            rowHeight = 36.dp,
+                            // About 7 channels at once, with room for longer names.
+                            channelColumn = 280.dp,
+                            rowHeight = 52.dp,
                             modifier = Modifier.fillMaxSize(),
                             corner = { LiveTvGuideDate(guide.viewStartMs, minuteClock) },
                         )
@@ -878,7 +879,7 @@ private fun LiveTvHeader(
     }
 }
 
-private val HEADER_HEIGHT = 116.dp
+private val HEADER_HEIGHT = 104.dp
 
 private const val POSTER_DELAY_MS = 250L
 private val POSTER_WIDTH = HEADER_HEIGHT * 2 / 3
@@ -963,7 +964,7 @@ private fun LiveTvGuideInfo(
                 }
                 Text(
                     text = programme?.title ?: channel.name,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = NuvioTheme.colors.TextPrimary,
                     maxLines = 1,
@@ -999,12 +1000,13 @@ private fun LiveTvGuideInfo(
                             modifier = Modifier.padding(top = 6.dp).widthIn(max = 420.dp).fillMaxWidth(),
                         )
                     }
-                    programme.description?.let { description ->
+                    // One line only: a status (guide loading, a source failing) takes its place, so it fits.
+                    programme.description?.takeIf { status == null }?.let { description ->
                         Text(
                             text = description,
                             style = MaterialTheme.typography.bodySmall,
                             color = NuvioTheme.colors.TextTertiary,
-                            maxLines = 2,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(top = 6.dp).widthIn(max = 640.dp),
                         )
@@ -1068,7 +1070,7 @@ private fun LiveTvCategoryColumn(
     val visibleGroups = remember(uiState.groups, uiState.hiddenGroups) { uiState.visibleGroups }
     // Which categories each source has and the channels shown: one pass over the channels, off
     // the main thread, kept in the model so coming back from the player shows them at once.
-    val sections by produceState(viewModel.sourceSections(uiState, visibleGroups), uiState.channels, visibleGroups, uiState.hiddenChannelKeys, uiState.sources) {
+    val sections by produceState(viewModel.sourceSections(uiState, visibleGroups), uiState.channels, visibleGroups, uiState.hiddenChannelKeys, uiState.sources, uiState.sourceGroupOrders) {
         value = viewModel.sourceSections(uiState, visibleGroups)
             ?: withContext(Dispatchers.Default) { viewModel.computeSourceSections(uiState, visibleGroups) }
     }

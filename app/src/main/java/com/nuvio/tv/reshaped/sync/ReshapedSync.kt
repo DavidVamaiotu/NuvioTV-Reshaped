@@ -53,7 +53,7 @@ internal object ReshapedSync {
     private const val KEY_SETTINGS = "sync_settings"
     private const val KEY_LIVE_TV = "sync_live_tv"
     private const val KEY_LAST_SYNC = "last_sync_ms"
-    /** Per Live TV profile: where in the file it synced last (see liveTvSectionProfileId). */
+    /** Per Live TV profile: where in the file it synced last (an earlier version moved some profiles). */
     private const val KEY_SECTION = "live_tv_section_"
     private const val FOREGROUND_MIN_GAP_MS = 60_000L
     private const val CHANGE_DEBOUNCE_MS = 5_000L
@@ -196,8 +196,9 @@ internal object ReshapedSync {
         if (!GoogleAccount.isConfigured || !GoogleAccount.isSignedIn(context)) return
         mutex.withLock {
             val profileId = if (liveTvOn) activeProfileId(context) else null
-            // The profile's place in the file: the phone app's (see liveTvSectionProfileId).
-            val sectionId = profileId?.let { liveTvSectionProfileId(context, it) }
+            // Each TV profile syncs its own place: two profiles of one TV keep their own Live TV
+            // and must never share a place, where each would remove what only the other has.
+            val sectionId = profileId
             val lastSection = profileId?.let { prefs(context).getInt(KEY_SECTION + it, it) }
             val savedBase = withContext(Dispatchers.IO) { readBase(context) }
             // A profile syncing into another place than before (it now shares the main profile's)
@@ -210,10 +211,12 @@ internal object ReshapedSync {
             // Settings are read and set on the main thread, as their screens do.
             val settings = if (settingsOn) withContext(Dispatchers.Main) { ReshapedSyncedSettings.current(context) } else emptyMap()
             val liveTv = profileId?.let { LiveTvRepository.syncSnapshot(context, it) }
+            val removed = profileId?.let { LiveTvRepository.syncRemovedSources(context, it) }.orEmpty()
             // Imported playlists changed here go up first, so the file can name their copies.
-            val playlists = if (profileId != null && liveTv != null) SyncedPlaylists.uploaded(context, profileId, liveTv.sources) else emptyMap()
+            val uploads = if (profileId != null && liveTv != null) SyncedPlaylists.uploaded(context, profileId, liveTv.sources) else null
+            val playlists = uploads?.refs.orEmpty()
             val current = settings + (
-                if (sectionId != null && liveTv != null) LiveTvSections.toSections(sectionId, liveTv, base, playlists) else emptyMap()
+                if (sectionId != null && liveTv != null) LiveTvSections.toSections(sectionId, liveTv, base, playlists, removed) else emptyMap()
             )
             if (onlyIfChanged && SyncDoc.stamp(base, current, 0L) == base) return
             _status.update { it.copy(running = true) }
@@ -221,8 +224,11 @@ internal object ReshapedSync {
                 val remoteFile = DriveAppFolder.read(context)
                 val remote = remoteFile.others.fold(SyncDoc.decode(remoteFile.text)) { doc, (_, text) -> SyncDoc.merge(SyncDoc.decode(text), doc) }
                 val now = SyncDoc.stampTime(System.currentTimeMillis(), base, remote)
-                val local = SyncDoc.stamp(base, current, now)
-                val merged = SyncDoc.prune(SyncDoc.merge(local, remote), now)
+                val local = withRemovals(SyncDoc.stamp(base, current, now), sectionId, removed, now)
+                val merged = SyncDoc.prune(
+                    keepLocalSources(SyncDoc.merge(local, remote), sectionId, liveTv, base, local, removed),
+                    now,
+                )
 
                 if (settingsOn) {
                     withContext(Dispatchers.Main) { ReshapedSyncedSettings.apply(context, settings, merged) }
@@ -257,7 +263,8 @@ internal object ReshapedSync {
                             LiveTvRepository.reloadSource(profileId, id)
                         }
                     }
-                    SyncedPlaylists.deleteUnused(context, refs.values.mapTo(HashSet()) { it.driveId } + playlists.values.map { it.driveId })
+                    // Every profile's copies stay, not only this one's.
+                    SyncedPlaylists.deleteUnused(context, LiveTvSections.playlistDriveIds(merged) + playlists.values.map { it.driveId })
                 }
                 if (merged != remote || remoteFile.id == null || remoteFile.others.isNotEmpty()) {
                     driveFileId = DriveAppFolder.write(context, remoteFile.id ?: driveFileId, SyncDoc.encode(merged))
@@ -265,11 +272,31 @@ internal object ReshapedSync {
                     driveFileId = remoteFile.id
                 }
                 remoteFile.others.forEach { (id, _) -> runCatching { DriveAppFolder.delete(context, id) } }
-                withContext(Dispatchers.IO) { writeBase(context, merged) }
+                uploads?.let { SyncedPlaylists.commit(context, it.sent) }
+                // Only what this device took in moves its base on: another profile's Live TV (or
+                // settings, or Live TV, while their sync is off) stays as this device last had it,
+                // so changes it never applied are never taken for deletions here later.
+                val nextBase = HashMap<String, Map<String, SyncEntry>>()
+                (merged.keys + savedBase.keys).forEach { name ->
+                    val applied = if (name.startsWith("live_tv/")) {
+                        sectionId != null && liveTv != null && name.startsWith(LiveTvSections.prefix(sectionId))
+                    } else {
+                        settingsOn
+                    }
+                    (if (applied) merged[name] else savedBase[name])?.let { nextBase[name] = it }
+                }
+                withContext(Dispatchers.IO) { writeBase(context, nextBase) }
                 val syncedAt = System.currentTimeMillis()
                 val edit = prefs(context).edit().putLong(KEY_LAST_SYNC, syncedAt)
                 if (profileId != null && sectionId != null) edit.putInt(KEY_SECTION + profileId, sectionId)
                 edit.apply()
+                // Removals the file now has (no source section lists them any more) are done.
+                if (profileId != null && sectionId != null) {
+                    val sent = removed.filter { identity ->
+                        LiveTvSections.sourceSections(sectionId).none { merged[it]?.get(identity)?.value != null }
+                    }
+                    LiveTvRepository.clearSyncRemoved(context, profileId, sent)
+                }
                 _status.value = ReshapedSyncStatus(lastSyncedAtMs = syncedAt)
             } catch (cancel: CancellationException) {
                 _status.update { it.copy(running = false) }
@@ -286,20 +313,61 @@ internal object ReshapedSync {
         }
     }
 
+    /**
+     * A deletion in the file removes a source here only when this device had already synced
+     * that source ([base] has it): a source this device has that the account never had (or had
+     * once, deleted long ago) is kept, and goes up as new, rather than being wiped by an old
+     * deletion. Sources removed here ([removed]) stay removed.
+     */
+    private fun keepLocalSources(
+        merged: SyncSections,
+        sectionId: Int?,
+        liveTv: com.nuvio.tv.reshaped.livetv.LiveTvSyncData?,
+        base: SyncSections,
+        local: SyncSections,
+        removed: Set<String>,
+    ): SyncSections {
+        if (sectionId == null || liveTv == null) return merged
+        var result = merged
+        LiveTvSections.sourceSections(sectionId).forEach { name ->
+            val entries = result[name] ?: return@forEach
+            val mine = local[name].orEmpty()
+            var kept: MutableMap<String, SyncEntry>? = null
+            liveTv.sources.forEach { source ->
+                val key = source.identity
+                if (key in removed || entries[key]?.value != null) return@forEach
+                // Known when the base has it in either section (imported playlists moved section).
+                if (LiveTvSections.sourceSections(sectionId).any { base[it]?.get(key)?.value != null }) return@forEach
+                val own = mine[key]?.value ?: return@forEach
+                val time = maxOf(entries[key]?.time ?: 0L, mine[key]?.time ?: 0L) + 1
+                (kept ?: entries.toMutableMap().also { kept = it })[key] = SyncEntry(own, time)
+            }
+            kept?.let { result = result + (name to it) }
+        }
+        return result
+    }
+
+    /**
+     * [local] with a deletion of each source removed here in both source sections, also when the
+     * base never had it (the stamp only marks what the base had), unless it is back here.
+     */
+    private fun withRemovals(local: SyncSections, sectionId: Int?, removed: Set<String>, now: Long): SyncSections {
+        if (sectionId == null || removed.isEmpty()) return local
+        val result = local.toMutableMap()
+        LiveTvSections.sourceSections(sectionId).forEach { name ->
+            val entries = result[name].orEmpty().toMutableMap()
+            removed.forEach { identity ->
+                val entry = entries[identity]
+                if (entry == null || (entry.value != null && entry.time < now)) entries[identity] = SyncEntry(null, now)
+            }
+            result[name] = entries
+        }
+        return result
+    }
+
     private fun activeProfileId(context: Context): Int =
         EntryPointAccessors.fromApplication(context.applicationContext, SyncEntryPoint::class.java)
             .profileManager().activeProfileId.value
-
-    /**
-     * Where [profileId]'s Live TV sits in the file, as the phone app places it: a profile that
-     * uses the main profile's addons shares the main profile's (1), others their own.
-     */
-    private fun liveTvSectionProfileId(context: Context, profileId: Int): Int {
-        if (profileId == 1) return 1
-        val profile = EntryPointAccessors.fromApplication(context.applicationContext, SyncEntryPoint::class.java)
-            .profileManager().profiles.value.firstOrNull { it.id == profileId } ?: return profileId
-        return if (profile.usesPrimaryAddons || profile.usesPrimaryPlugins) 1 else profileId
-    }
 
     // The file as last synced, to tell what changed here since.
     private fun baseFile(context: Context) = File(context.applicationContext.filesDir, "reshaped_sync/base.json")
