@@ -1,4 +1,6 @@
-- **Updated to official NuvioTV 1.1.0-beta.3.** Includes the upstream playback, settings, and service updates.
-- **Reshaped functionality preserved.** Keeps Reshaped AutoSync and AudioSync, Live TV, seek previews, disk read-ahead, sync, fonts, and pill navigation.
-- **Settings adapted to the new layout.** The Nuvio Reshaped section remains available with the existing controls and behavior.
-- **Validation:** APK build and Reshaped feature tests passed. The 18 failures in the full unit-test suite also reproduce on the original fork; the merge introduced no new failures. Physical TV playback has not been tested.
+- **Live TV guide overhaul.** Guides now work better with Stalker portals and Xtream M3U sources, support editable guide links, read while downloading, show more rows, and move more smoothly.
+- **Catch-up TV.** Supported providers can open past programmes directly from the guide.
+- **Custom channel playlists.** Build your own playlists from channels across different Live TV sources and sync them with Google.
+- **Faster channel management.** Select several channels at once to add them to favourites or playlists, and hold OK inside a playlist to move a channel.
+- **More efficient AutoSync.** It gets more useful information from each sampled spot, skips recognition work that cannot help, re-evaluates listening when the stream changes, and counts each place in the film only once when voting on words.
+- **Updated to official NuvioTV 1.1.0-beta.3.** Reshaped AutoSync, AudioSync, Live TV, seek previews, sync, fonts and navigation remain preserved.
