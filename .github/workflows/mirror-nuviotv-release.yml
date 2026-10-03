@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: Live TV fixes, replays and Start over, guide and player list, AutoSync PGS timeout, seek previews (NuvioTV 1.1.0-beta.3)
+# Release trigger: Catch-up programme duration and Live TV search-to-settings navigation (NuvioTV 1.1.0-beta.3)
 
 
 on:
