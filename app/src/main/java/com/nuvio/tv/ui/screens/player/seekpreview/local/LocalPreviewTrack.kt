@@ -154,6 +154,12 @@ internal class LocalPreviewTrack(
     /** Slot the viewer last looked at, so its keyframes are decoded first. */
     @Volatile private var focusSlot = -1
 
+    /**
+     * +1 while the viewer scrubs forward, -1 backward, 0 otherwise (set by the owner from the
+     * scrub position): spooled frames in that direction are decoded first.
+     */
+    @Volatile var scrubDirection = 0
+
     fun start() {
         // Coalesce UI updates: at most a few revisions per second however fast frames land.
         scope.launch {
@@ -293,6 +299,23 @@ internal class LocalPreviewTrack(
     }
 
     /**
+     * Whether a keyframe from just before to [KEYFRAME_LOOKAHEAD_MS] after [timeUs] could still be
+     * wanted ([wantsKeyframe]). False lets the tap skip copying the video until the next slot that
+     * still needs a frame comes within reach. Only ever false where [wantsKeyframe] would be too.
+     */
+    fun mayWantKeyframesNear(timeUs: Long): Boolean {
+        if (closed) return false
+        val fromMs = timeUs / 1_000L - KEYFRAME_LOOKBEHIND_MS
+        val toMs = timeUs / 1_000L + KEYFRAME_LOOKAHEAD_MS
+        if (toMs < 0L || fromMs > durationMs + SLOT_MS) return false
+        val first = ((fromMs.coerceAtLeast(0L) + SLOT_MS / 2) / SLOT_MS).toInt().coerceIn(0, slotCount - 1)
+        val last = ((toMs.coerceAtLeast(0L) + SLOT_MS / 2) / SLOT_MS).toInt().coerceIn(0, slotCount - 1)
+        return synchronized(lock) {
+            candidate != null || (first..last).any { slotState[it] == EMPTY }
+        }
+    }
+
+    /**
      * A keyframe playback downloaded. Each slot keeps the keyframe nearest its time rather than
      * the first one that arrives: keyframes come in playback order, so one before the slot's
      * time waits as the candidate until the next keyframe shows whether it is closer. One at or
@@ -403,7 +426,7 @@ internal class LocalPreviewTrack(
         if (closed || !mayDecodeNow()) return
         val next = synchronized(lock) {
             val focus = focusSlot
-            val slot = if (focus >= 0) spooled.keys.minByOrNull { abs(it - focus) } else spooled.keys.minOrNull()
+            val slot = if (focus >= 0) spooled.keys.minByOrNull { drainCost(it, focus) } else spooled.keys.minOrNull()
             slot?.let { it to spooled.remove(it)!! }
         }
         if (next == null) {
@@ -425,6 +448,17 @@ internal class LocalPreviewTrack(
         }.getOrNull()
         if (bytes != null) decodeInto(slot, entry.format, bytes, entry.timeUs) else release(slot)
         scheduleDrain()
+    }
+
+    /**
+     * Order of decoding around the scrub position: the slot itself, then the ones in the direction
+     * of the scrub before those behind it, so the next steps already have their frames.
+     */
+    private fun drainCost(slot: Int, focus: Int): Int {
+        val distance = abs(slot - focus)
+        val direction = scrubDirection
+        val behind = direction != 0 && (slot - focus) * direction < 0
+        return if (behind) distance * 2 else distance * 2 - 1
     }
 
     private fun deleteStaleSpools() {
@@ -543,6 +577,13 @@ internal class LocalPreviewTrack(
     companion object {
         private const val TAG = "NuvioLocalPreviews"
         const val SLOT_MS = 10_000L
+        /**
+         * How far past the latest sample time the next keyframe is looked for. In decode order a
+         * keyframe's time is later than every sample before it, by at most the B-frame reorder span
+         * (well under a second); the margins leave room for that and for timestamps' jitter.
+         */
+        private const val KEYFRAME_LOOKAHEAD_MS = 3_000L
+        private const val KEYFRAME_LOOKBEHIND_MS = 1_000L
         private const val MAX_DECODED = 48
         private const val STAND_IN_SAMPLE_SIZE = 4
         private const val LOW_MEMORY_BYTES = 3L * 1024L * 1024L * 1024L

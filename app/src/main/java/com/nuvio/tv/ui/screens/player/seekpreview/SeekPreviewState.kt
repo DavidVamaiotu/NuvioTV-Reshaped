@@ -5,8 +5,10 @@ import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
 import com.nuvio.tv.ui.screens.player.currentPlaybackDurationMs
 import com.nuvio.tv.ui.screens.player.currentPlaybackPositionMs
 import com.nuvio.tv.ui.screens.player.hideControls
+import com.nuvio.tv.ui.screens.player.setPlaybackPaused
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSource
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSources
+import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewTrack
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalSeekPreviewSettings
 import com.nuvio.tv.ui.screens.player.seekpreview.local.localSeekPreviewCacheKey
 import androidx.media3.exoplayer.SeekParameters
@@ -174,6 +176,55 @@ class SeekPreviewState internal constructor(
             }
         }.stateIn(scope, SharingStarted.Eagerly, null)
 
+    init {
+        // Scrubbing pauses the video and playback resumes once the scrub ends (committed or
+        // abandoned), unless the viewer paused or played meanwhile. A paused player leaves the
+        // CPU to the preview frames and stops the picture moving under a frame that is elsewhere.
+        scope.launch {
+            var pausedForScrub = false
+            controller.uiState
+                .map { it.pendingPreviewSeekPosition != null }
+                .distinctUntilChanged()
+                .collect { scrubbing ->
+                    val state = controller.uiState.value
+                    if (scrubbing) {
+                        if (state.isPlaying && state.error == null) {
+                            pausedForScrub = true
+                            controller.setPlaybackPaused(true)
+                        }
+                    } else if (pausedForScrub) {
+                        pausedForScrub = false
+                        val latest = controller.uiState.value
+                        if (!latest.isPlaying && !controller.userPausedManually &&
+                            latest.error == null && !latest.playbackEnded
+                        ) {
+                            controller.setPlaybackPaused(false)
+                        }
+                    }
+                }
+        }
+        // Which way the viewer scrubs, so on-device frames ahead of the scrub decode first.
+        // Snapping onto a cue start moves the position a little; only whole steps count.
+        scope.launch {
+            var previous: Long? = null
+            controller.uiState
+                .map { it.pendingPreviewSeekPosition }
+                .distinctUntilChanged()
+                .collect { position ->
+                    val track = localTrack.value as? LocalPreviewTrack
+                    val last = previous
+                    previous = position
+                    if (position == null || last == null) {
+                        if (position == null) track?.scrubDirection = 0
+                        return@collect
+                    }
+                    if (abs(position - last) >= SCRUB_STEP_MIN_MS) {
+                        track?.scrubDirection = if (position > last) 1 else -1
+                    }
+                }
+        }
+    }
+
     /**
      * The duration gap between the playing release and the preview source, offered as a
      * starting point for Preview Sync. Deliberately not applied automatically: the backend
@@ -286,3 +337,6 @@ class SeekPreviewState internal constructor(
             synchronized(states) { states[controller]?.get() }
     }
 }
+
+/** A change of the scrub position at least this large is a step, not a snap onto a cue start. */
+private const val SCRUB_STEP_MIN_MS = 6_000L
