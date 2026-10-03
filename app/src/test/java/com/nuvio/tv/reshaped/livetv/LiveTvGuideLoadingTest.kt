@@ -95,6 +95,21 @@ class LiveTvGuideLoadingTest {
         assertEquals(Instant.parse("2026-10-02T08:00:00Z").toEpochMilli(), programmes.single().startEpochMs)
     }
 
+    @Test fun anAllDayPlaceholderNeverHidesTheProgrammesInsideIt() {
+        val selected = channel("one")
+        val guide = read("""
+            <tv><channel id="shared"/>
+              <programme channel="shared" start="20261002060000 +0000" stop="20261002120000 +0000"><title>To Be Announced</title></programme>
+              <programme channel="shared" start="20261002080000 +0000" stop="20261002090000 +0000"><title>Morning</title></programme>
+              <programme channel="shared" start="20261002090000 +0000" stop="20261002100000 +0000"><title>Late morning</title></programme>
+            </tv>
+        """.trimIndent(), listOf(selected))
+        val programmes = guide.schedule.getValue(selected.guideKey)
+        assertEquals(listOf("To Be Announced", "Morning", "Late morning", "To Be Announced"), programmes.map { it.title })
+        programmes.zipWithNext().forEach { (a, b) -> assertTrue(a.stopEpochMs <= b.startEpochMs) }
+        assertEquals("Morning", currentProgrammes(guide.schedule, setOf(selected.guideKey), now)[selected.guideKey]?.title)
+    }
+
     @Test fun missingStopUsesTheNextStartOfTheSameChannel() {
         val selected = channel("one")
         val guide = read("""

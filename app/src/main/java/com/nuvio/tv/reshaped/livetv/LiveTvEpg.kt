@@ -583,7 +583,7 @@ internal class LiveTvScheduleBuilder(
 
     fun build(complete: Boolean = true): LiveTvGuide {
         val schedule = HashMap<String, List<LiveTvProgramme>>(entries.size * 2)
-        entries.forEach { (key, list) -> schedule[key] = list.sortedBy { it.startEpochMs } }
+        entries.forEach { (key, list) -> schedule[key] = liveTvWithoutOverlaps(list.sortedBy { it.startEpochMs }) }
         if (window.detailsPerChannel > 0) keepDetails(schedule)
         titles.clear()
         return LiveTvGuide(schedule = schedule, logos = logos, truncated = truncated, complete = complete, elements = elements)
@@ -633,6 +633,61 @@ internal class LiveTvScheduleBuilder(
  * gain nothing from reading it sooner, unless the whole guide ends before the next refresh (a
  * portal's guide covers only the hours asked for): then it is read, and fetched, again as it runs out.
  */
+/**
+ * A channel's programmes ([sorted] by start) so that one is on at a time, as the guide grid shows
+ * them. Guides overlap: an entry running into the next, a long placeholder ("To Be Announced"
+ * all day) with the real programmes inside it, two feeds merged into one. The later entry gets
+ * its time and the earlier one keeps what is left before it (and after it, when it lies inside);
+ * the same show listed twice is kept once. Without this, the player (what is on now, replays,
+ * the channel's programme list) found the placeholder where the grid showed the programme.
+ */
+internal fun liveTvWithoutOverlaps(sorted: List<LiveTvProgramme>): List<LiveTvProgramme> {
+    var overlaps = false
+    var latestStop = Long.MIN_VALUE
+    for (programme in sorted) {
+        if (programme.startEpochMs < latestStop) {
+            overlaps = true
+            break
+        }
+        latestStop = maxOf(latestStop, programme.stopEpochMs)
+    }
+    // The usual case: nothing to do, nothing copied.
+    if (!overlaps) return sorted
+    val out = ArrayList<LiveTvProgramme>(sorted.size + 2)
+    for (programme in sorted) {
+        val start = programme.startEpochMs
+        val stop = programme.stopEpochMs
+        if (stop <= start) continue
+        val last = out.lastOrNull()
+        if (last != null && last.stopEpochMs > start && last.isSameShow(programme)) {
+            if (stop > last.stopEpochMs) out[out.size - 1] = last.copy(stopEpochMs = stop)
+            continue
+        }
+        // Programmes kept so far that this one overlaps all end after its start, and the list
+        // is in order with no overlaps, so they are at its end.
+        var i = out.size - 1
+        while (i >= 0 && out[i].stopEpochMs > start) {
+            val kept = out[i]
+            if (kept.startEpochMs < stop) {
+                out.removeAt(i)
+                if (kept.stopEpochMs - stop >= OVERLAP_MIN_PIECE_MS) out.add(i, kept.copy(startEpochMs = stop))
+                if (start - kept.startEpochMs >= OVERLAP_MIN_PIECE_MS) out.add(i, kept.copy(stopEpochMs = start))
+            }
+            i--
+        }
+        var at = out.size
+        while (at > 0 && out[at - 1].startEpochMs >= start) at--
+        out.add(at, programme)
+    }
+    return out
+}
+
+/** Pieces left of an overlapped programme shorter than this are dropped. */
+private const val OVERLAP_MIN_PIECE_MS = 60_000L
+
+private fun LiveTvProgramme.isSameShow(other: LiveTvProgramme): Boolean =
+    title === other.title || title.trim().equals(other.title.trim(), ignoreCase = true)
+
 internal fun nextScheduleReadAt(
     schedule: LiveTvSchedule,
     truncated: Set<String>,
