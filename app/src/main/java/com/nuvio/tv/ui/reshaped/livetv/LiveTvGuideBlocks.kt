@@ -45,6 +45,13 @@ internal fun liveTvGuideBlocks(programmes: List<LiveTvProgramme>): List<LiveTvGu
         val start = programme.startEpochMs
         val stop = programme.stopEpochMs
         if (stop <= start) continue
+        // The same show listed twice with slightly different times (two feeds merged into one
+        // guide, or a repeat entry): one block for both, rather than a sliver and then the show again.
+        val last = out.lastOrNull()
+        if (last?.programme != null && last.stop > start && sameShow(last.programme, programme)) {
+            if (stop > last.stop) out[out.size - 1] = last.copy(stop = stop)
+            continue
+        }
         // Blocks already laid out that the new one overlaps: all end after its start, and the
         // list is in order with no overlaps, so they are at its end.
         var i = out.size - 1
@@ -63,6 +70,9 @@ internal fun liveTvGuideBlocks(programmes: List<LiveTvProgramme>): List<LiveTvGu
     }
     return out
 }
+
+private fun sameShow(a: LiveTvProgramme, b: LiveTvProgramme): Boolean =
+    a.title === b.title || a.title.trim().equals(b.title.trim(), ignoreCase = true)
 
 /** The lowest index whose block ends after [at] ([size] when none does). */
 private fun List<LiveTvGuideBlock>.firstEndingAfter(at: Long): Int {

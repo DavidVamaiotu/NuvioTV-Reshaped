@@ -450,9 +450,43 @@ internal class LiveTvScheduleBuilder(
     /** The channel keys a programme of guide channel [channelId] (lower case) is kept under, or null. */
     fun keysFor(channelId: String): List<String>? {
         if (!channelsDone) finishChannels()
-        directKeys(channelId)?.let { return it }
-        aliases[channelId]?.let { return it }
+        directKeys(channelId)?.let { return ownKeys(channelId, it, direct = true) }
+        aliases[channelId]?.let { return ownKeys(channelId, it, direct = false) }
         return null
+    }
+
+    /** The guide channel feeding each channel key, and whether it matched by id. */
+    private val feeders = HashMap<String, String>()
+    private val nameFed = HashSet<String>()
+
+    /**
+     * Of [keys], the ones guide channel [channelId] feeds: one guide channel per channel key. A
+     * guide can list programmes for an id it has no `<channel>` for, so a channel can also be
+     * matched by name to another guide channel (often a +1 or HD copy): two schedules in one row
+     * showed every programme twice. The id match wins, whichever comes first in the file.
+     */
+    private fun ownKeys(channelId: String, keys: List<String>, direct: Boolean): List<String>? {
+        var all = true
+        for (key in keys) {
+            val feeder = feeders[key]
+            when {
+                feeder == null -> {
+                    feeders[key] = channelId
+                    if (!direct) nameFed += key
+                }
+                feeder == channelId -> Unit
+                direct && key in nameFed -> {
+                    // What the name match brought in so far goes.
+                    feeders[key] = channelId
+                    nameFed -= key
+                    entries.remove(key)
+                    truncated -= key
+                }
+                else -> all = false
+            }
+        }
+        if (all) return keys
+        return keys.filter { feeders[it] == channelId }.takeIf { it.isNotEmpty() }
     }
 
     private fun directKeys(channelId: String): List<String>? =

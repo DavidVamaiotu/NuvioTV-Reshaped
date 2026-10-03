@@ -80,6 +80,21 @@ class LiveTvGuideLoadingTest {
         assertEquals("Exact", guide.schedule.getValue(selected.guideKey).single().title)
     }
 
+    @Test fun aChannelIsFedByOneGuideChannelEvenWithoutItsChannelEntry() {
+        val selected = channel("one")
+        val guide = read("""
+            <tv>
+              <channel id="news.plus1"><display-name>News</display-name></channel>
+              <programme channel="news.plus1" start="20261002083000 +0000" stop="20261002093000 +0000"><title>Morning</title></programme>
+              <programme channel="shared" start="20261002080000 +0000" stop="20261002090000 +0000"><title>Morning</title></programme>
+              <programme channel="news.plus1" start="20261002093000 +0000" stop="20261002103000 +0000"><title>Later</title></programme>
+            </tv>
+        """.trimIndent(), listOf(selected))
+        val programmes = guide.schedule.getValue(selected.guideKey)
+        assertEquals(1, programmes.size)
+        assertEquals(Instant.parse("2026-10-02T08:00:00Z").toEpochMilli(), programmes.single().startEpochMs)
+    }
+
     @Test fun missingStopUsesTheNextStartOfTheSameChannel() {
         val selected = channel("one")
         val guide = read("""

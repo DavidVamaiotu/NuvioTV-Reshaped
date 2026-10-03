@@ -35,6 +35,16 @@ class LiveTvGuideBlocksTest {
     }
 
     @Test
+    fun theSameShowListedTwiceIsOneBlock() {
+        val blocks = liveTvGuideBlocks(
+            listOf(p("Film", 0, 2 * hour), p("film ", 5 * minute, 2 * hour + 5 * minute), p("News", 2 * hour + 5 * minute, 3 * hour)),
+        )
+        assertEquals(listOf("Film", "News"), blocks.map { it.programme?.title })
+        assertEquals(0L to 2 * hour + 5 * minute, blocks.first().start to blocks.first().stop)
+        assertNoOverlaps(blocks)
+    }
+
+    @Test
     fun emptyTimeStepsByHalfHoursCutAtProgrammes() {
         val blocks = liveTvGuideBlocks(listOf(p("a", 0, hour + 10 * minute), p("b", 2 * hour + 20 * minute, 3 * hour)))
         val gap = blocks.after(blocks.first())
