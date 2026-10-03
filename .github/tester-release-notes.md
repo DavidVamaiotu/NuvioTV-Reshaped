@@ -1,4 +1,2 @@
-- Live TV guide rebuilt: shows never overlap, nothing ends up out of view or blank, and rows with no guide scroll with the rest.
-- ◀ and ▶ always move to the next programme (or half hour where the guide has nothing), and the timeline scrolls only as far as needed, like TiviMate.
-- ▲▼ glide as before but stay on the selection on 720p TVs; jumps longer than a screen snap into place.
-- Please report anything in the guide that looks wrong.
+- Live TV: with the search bar highlighted (not opened), ▶ or ◀ now goes straight to the settings button beside it.
+- Still includes the rebuilt Live TV guide from build 2. Please report anything in the guide that looks wrong.
