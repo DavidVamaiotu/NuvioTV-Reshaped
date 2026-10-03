@@ -9,6 +9,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
@@ -69,8 +71,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -712,14 +716,15 @@ private fun GuideRow(
             // still shows (no colour fading over from the cell that used to be in that place).
             gaps.forEach { (gapStart, gapStop) ->
                 key("gap", gapStart) {
+                    val gapSelected = selectedRow && active && selected == null && state.anchorMs >= gapStart && state.anchorMs < gapStop
                     GuideCell(
                         title = noGuide,
-                        selected = selectedRow && active && selected == null && state.anchorMs >= gapStart && state.anchorMs < gapStop,
+                        selected = gapSelected,
                         state = GuideCellState.Future,
                         modifier = Modifier
                             .offset { IntOffset(timeline.x(gapStart).roundToInt(), 0) }
                             .wrapContentWidth(Alignment.Start, unbounded = true)
-                            .width(with(density) { ((gapStop - gapStart) * timeline.pxPerMs).toDp() })
+                            .cellWidth(with(density) { ((gapStop - gapStart) * timeline.pxPerMs).toDp() }, gapSelected)
                             .fillMaxHeight()
                             .padding(end = 4.dp),
                         titleShift = { (-timeline.x(gapStart)).coerceAtLeast(0f).roundToInt() },
@@ -739,19 +744,21 @@ private fun GuideRow(
                         programme.startEpochMs <= clock.value -> GuideCellState.Now
                         else -> GuideCellState.Future
                     }
+                    val cellSelected = programme === selected && active
                     GuideCell(
                         title = programme.title,
-                        selected = programme === selected && active,
+                        selected = cellSelected,
                         state = cellState,
                         progress = if (cellState == GuideCellState.Now) programme else null,
                         progressSpan = cellStart to cellStop,
+                        progressWidth = widthDp - 4.dp,
                         clock = clock,
                         modifier = Modifier
                             .offset { IntOffset(timeline.x(cellStart).roundToInt(), 0) }
                             // Wider than the view, it keeps its width: held to the row's width, a
                             // cell begun hours back would end before the screen and leave a black gap.
                             .wrapContentWidth(Alignment.Start, unbounded = true)
-                            .width(widthDp)
+                            .cellWidth(widthDp, cellSelected)
                             .fillMaxHeight()
                             .padding(end = 4.dp),
                         // A programme that began before the view keeps its title in view, marked ‹ as TV guides do.
@@ -780,6 +787,23 @@ private fun guideGaps(programmes: List<LiveTvProgramme>, from: Long, to: Long): 
 
 private const val GAP_MIN_MS = 60_000L
 
+/**
+ * A cell's width. A short one, selected, grows over its neighbour to show its title (up to
+ * [GROW_MAX]) and settles back when the selection moves on; only cells that short can animate.
+ */
+private fun Modifier.cellWidth(width: Dp, selected: Boolean): Modifier =
+    if (width >= GROW_MAX) {
+        width(width)
+    } else {
+        // The same chain either way, so the size animation carries on from one to the other.
+        zIndex(if (selected) 1f else 0f)
+            .animateContentSize(GROW_SPRING)
+            .then(if (selected) Modifier.widthIn(min = width, max = GROW_MAX) else Modifier.width(width))
+    }
+
+private val GROW_MAX = 280.dp
+private val GROW_SPRING = spring<IntSize>(dampingRatio = 0.85f, stiffness = 500f)
+
 /** How far down the guide the selected row rests. */
 private const val SELECTION_AT = 0.4f
 /** The guide's glide, for rows and the timeline: quick, and settling without a bounce. */
@@ -796,6 +820,8 @@ private fun GuideCell(
     progress: LiveTvProgramme? = null,
     /** The time the cell spans when it is cut to the view: the line runs along that part only. */
     progressSpan: Pair<Long, Long>? = null,
+    /** The width the cell's time takes: the line keeps to it while the cell is grown. */
+    progressWidth: Dp? = null,
     clock: State<Long>? = null,
     titleShift: () -> Int = { 0 },
 ) {
@@ -833,7 +859,8 @@ private fun GuideCell(
                     Modifier.drawBehind {
                         val fraction = ((clock.value - from).toFloat() / span).coerceIn(0f, 1f)
                         val height = 3.dp.toPx()
-                        drawRect(line, topLeft = Offset(0f, size.height - height), size = Size(size.width * fraction, height))
+                        val width = progressWidth?.toPx()?.coerceAtMost(size.width) ?: size.width
+                        drawRect(line, topLeft = Offset(0f, size.height - height), size = Size(width * fraction, height))
                     }
                 } else {
                     Modifier
