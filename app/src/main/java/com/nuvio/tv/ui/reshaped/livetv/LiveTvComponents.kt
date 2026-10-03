@@ -135,7 +135,7 @@ internal fun LiveTvTextField(
     keyboardType: KeyboardType = KeyboardType.Uri,
     password: Boolean = false,
     onDone: () -> Unit = {},
-    /** Where ◀ and ▶ go from the field (a button beside it), rather than looking for something that way. */
+    /** Where ▶ goes from the field (a button beside it), rather than looking for something that way. */
     sideFocus: FocusRequester? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -151,10 +151,7 @@ internal fun LiveTvTextField(
         modifier = modifier
             .fillMaxWidth()
             .then(
-                if (sideFocus == null) Modifier else Modifier.focusProperties {
-                    left = sideFocus
-                    right = sideFocus
-                },
+                if (sideFocus == null) Modifier else Modifier.focusProperties { right = sideFocus },
             )
             .onFocusChanged { focused = it.isFocused || it.hasFocus },
         colors = CardDefaults.colors(
@@ -198,7 +195,7 @@ internal fun LiveTvTextField(
                             else -> return@onPreviewKeyEvent false
                         } ?: return@onPreviewKeyEvent false
                         keyboardController?.hide()
-                        if (sideFocus != null && (direction == FocusDirection.Left || direction == FocusDirection.Right)) {
+                        if (sideFocus != null && direction == FocusDirection.Right) {
                             runCatching { sideFocus.requestFocus() }
                             return@onPreviewKeyEvent true
                         }

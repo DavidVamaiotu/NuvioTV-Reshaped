@@ -1100,7 +1100,7 @@ private fun LiveTvCategoryColumn(
     onEditList: (String) -> Unit,
     settingsButton: @Composable () -> Unit,
     modifier: Modifier = Modifier,
-    /** The settings button beside the search, which ◀ and ▶ on the search reach. */
+    /** The settings button beside the search, which ▶ on the search reaches. */
     settingsFocus: FocusRequester? = null,
     /** Channels are being picked: only Favorites and the playlists, to choose where they go. */
     pickMode: Boolean = false,
