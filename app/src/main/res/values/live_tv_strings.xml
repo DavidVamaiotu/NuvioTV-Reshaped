@@ -166,6 +166,7 @@
     <string name="live_tv_playlist_unavailable">Channel not in your sources now</string>
     <string name="live_tv_picking_keys">OK ticks a channel  ·  ◀ chooses the playlist  ·  Back stops</string>
     <string name="live_tv_choose_playlist">Choose the playlist</string>
+    <string name="live_tv_remove_from_list">Remove from %1$s</string>
     <string name="live_tv_choose_playlist_hint">The ticked channels go in it. If they are all in it already, they come out.</string>
     <string name="live_tv_moving_keys">▲▼ moves the channel  ·  OK puts it down</string>
     <plurals name="live_tv_picked">

@@ -66,6 +66,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -370,7 +371,6 @@ fun LiveTvScreen(
         visibleChannels.isNotEmpty() && runCatching { gridFocus.requestFocus() }.isSuccess
     }
     val currentToCategories by rememberUpdatedState(toCategories)
-    val currentOpenCategories by rememberUpdatedState(openCategories)
     // Unfavouriting a channel in Favorites removes its row: the guide moves to the next one, or
     // to the categories when none is left.
     var keepAfterRefilter by remember { mutableStateOf<String?>(null) }
@@ -386,8 +386,8 @@ fun LiveTvScreen(
             // selected, or (scrolled out of view) the nearest one.
             onClose = { currentToCategories() },
             onExitLeft = { currentToCategories() },
-            // ▲ from the first channel: the settings button, at the top of the categories.
-            onExitUp = { currentOpenCategories(settingsFocus) },
+            // ▲ from the first channel stays there: the categories open only on ◀ or Back.
+            onExitUp = {},
             // Held OK: in a playlist of the viewer's, moves the channel; elsewhere starts picking
             // channels for favorites or a playlist.
             onLongPress = { channel -> onGuideLongPress(channel) },
@@ -577,6 +577,7 @@ fun LiveTvScreen(
                             onNewList = { naming = true },
                             onEditList = { editingList = it },
                             pickMode = guide.selecting,
+                            picked = guide.picked.keys,
                             onChoose = choosePlaylist,
                             settingsButton = {
                                 LiveTvPillButton(
@@ -1074,6 +1075,8 @@ private class LiveTvCategoryEntry(
     val listId: String? = null,
     /** "+ New playlist": OK names one, focus picks nothing. */
     val action: Boolean = false,
+    /** While picking: the list has every ticked channel, so OK takes them out. */
+    val removes: Boolean = false,
 )
 
 /**
@@ -1098,6 +1101,8 @@ private fun LiveTvCategoryColumn(
     modifier: Modifier = Modifier,
     /** Channels are being picked: only Favorites and the playlists, to choose where they go. */
     pickMode: Boolean = false,
+    /** The ticked channels' links: a list that has them all offers to take them out instead. */
+    picked: Set<String> = emptySet(),
     onChoose: (String) -> Unit = {},
 ) {
     val selectedModifier = Modifier.focusRequester(selectedFocus)
@@ -1113,10 +1118,20 @@ private fun LiveTvCategoryColumn(
     val favoritesLabel = stringResource(R.string.live_tv_favorites)
     val uncategorised = liveTvGroupLabel(LIVE_TV_UNGROUPED)
     // New playlists are made only in the menu's My playlists.
-    val pickEntries = remember(uiState.customLists, favoritesLabel) {
+    val removeFrom = stringResource(R.string.live_tv_remove_from_list)
+    val pickedNow = if (pickMode) picked.toSet() else emptySet()
+    val pickEntries = remember(uiState.customLists, uiState.favoriteUrls, favoritesLabel, pickedNow, removeFrom) {
+        // OK takes the ticked channels out of a list that has them all already: it says so.
+        fun hasAll(urls: Collection<String>) = pickedNow.isNotEmpty() && pickedNow.all(urls::contains)
+        fun entry(key: String, name: String, urls: Collection<String>, count: Int?, listId: String?) =
+            if (hasAll(urls)) {
+                LiveTvCategoryEntry(key, removeFrom.format(name), count = count, listId = listId, removes = true)
+            } else {
+                LiveTvCategoryEntry(key, name, count = count, listId = listId)
+            }
         buildList {
-            add(LiveTvCategoryEntry(FILTER_FAVORITES, favoritesLabel))
-            uiState.customLists.forEach { add(LiveTvCategoryEntry(FILTER_LIST_PREFIX + it.id, it.name, count = it.urls.size, listId = it.id)) }
+            add(entry(FILTER_FAVORITES, favoritesLabel, uiState.favoriteUrls, null, null))
+            uiState.customLists.forEach { add(entry(FILTER_LIST_PREFIX + it.id, it.name, it.urls, it.urls.size, it.id)) }
         }
     }
     val showAll by LiveTvPreferences.showAll.collectAsStateWithLifecycle()
@@ -1193,7 +1208,11 @@ private fun LiveTvCategoryColumn(
                     // Consumes the guide's ◀ mark, so a later category focus picks as usual.
                     holdSelection = holdSelection,
                     count = entry.count,
-                    icon = if (entry.action) Icons.Filled.Add else null,
+                    icon = when {
+                        entry.removes -> Icons.Filled.Remove
+                        entry.action -> Icons.Filled.Add
+                        else -> null
+                    },
                     onClick = { onChoose(entry.key) },
                 ) {}
             }
