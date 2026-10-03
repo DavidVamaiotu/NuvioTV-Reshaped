@@ -1,5 +1,6 @@
 package com.nuvio.tv.reshaped.sync
 
+import com.nuvio.tv.reshaped.livetv.inSyncOrder
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -108,5 +109,35 @@ class SyncDocTest {
         assertEquals(emptyMap(), empty)
         val after = device(start, empty, start, 2_000)
         assertEquals(setOf("https://x/1"), LiveTvSections.fromSections(1, after).favorites)
+    }
+    private val third = com.nuvio.tv.reshaped.livetv.LiveTvSource("s3", com.nuvio.tv.reshaped.livetv.LiveTvSourceType.M3u, "https://lists.example/c.m3u")
+
+    private fun ordered(vararg sources: com.nuvio.tv.reshaped.livetv.LiveTvSource) =
+        withSources(*sources).copy(sourceOrder = sources.map { it.identity })
+
+    @Test
+    fun theSourceOrderSyncs() {
+        val main = device(emptyMap(), LiveTvSections.toSections(1, ordered(other, third, list), emptyMap()), emptyMap(), 1_000)
+        val order = LiveTvSections.fromSections(1, main).sourceOrder
+        assertEquals(listOf(other.identity, third.identity, list.identity), order)
+        // Another TV that got them in another order takes this one: sorted, none added or lost.
+        val shown = listOf(list, other, third).inSyncOrder(order)
+        assertEquals(listOf(other, third, list), shown)
+    }
+
+    @Test
+    fun aDeviceNewToTheOrderDoesNotReplaceIt() {
+        val main = device(emptyMap(), LiveTvSections.toSections(1, ordered(other, third, list), emptyMap()), emptyMap(), 1_000)
+        // Never synced the order: its own (alphabetical) one loses to the account's.
+        val second = device(emptyMap(), LiveTvSections.toSections(1, ordered(list, other, third), emptyMap()), main, 2_000)
+        assertEquals(listOf(other.identity, third.identity, list.identity), LiveTvSections.fromSections(1, second).sourceOrder)
+    }
+
+    @Test
+    fun aSourceThisDeviceLacksKeepsItsPlaceInTheOrder() {
+        val start = device(emptyMap(), LiveTvSections.toSections(1, ordered(other, third, list), emptyMap()), emptyMap(), 1_000)
+        val after = device(start, LiveTvSections.toSections(1, ordered(other, list), start), start, 2_000)
+        assertEquals(listOf(other.identity, third.identity, list.identity), LiveTvSections.fromSections(1, after).sourceOrder)
+        assertEquals(3, LiveTvSections.fromSections(1, after).sources.size)
     }
 }

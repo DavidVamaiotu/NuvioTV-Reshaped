@@ -16,7 +16,20 @@ internal data class LiveTvSyncData(
     /** Each source's own category order, by source identity. */
     val sourceGroupOrders: Map<String, List<String>> = emptyMap(),
     val recent: LiveTvRecentChannel? = null,
+    /** The order the viewer keeps the sources in, by identity. Only ever sorts: never adds or removes one. */
+    val sourceOrder: List<String> = emptyList(),
 )
+
+/**
+ * These sources in [order] (identities): the ones it names first, as it has them, then the rest as
+ * they were. Sorting only: every source is kept.
+ */
+internal fun List<LiveTvSource>.inSyncOrder(order: List<String>): List<LiveTvSource> {
+    if (order.isEmpty() || size < 2) return this
+    val at = HashMap<String, Int>(order.size * 2)
+    order.forEachIndexed { index, identity -> at.putIfAbsent(identity, index) }
+    return sortedBy { at[it.identity] ?: Int.MAX_VALUE }
+}
 
 /** Every source syncs; an imported playlist's file travels as its own Drive copy (reshaped/sync/SyncedPlaylists). */
 internal val LiveTvSource.isSyncable: Boolean
@@ -88,4 +101,5 @@ internal fun LiveTvStorage.syncData(): LiveTvSyncData = LiveTvSyncData(
     groupOrder = groupOrder(),
     sourceGroupOrders = sourceGroupOrders(),
     recent = recentChannel(),
+    sourceOrder = sources().filter { it.isSyncable }.map { it.identity },
 )

@@ -36,6 +36,8 @@ internal object LiveTvSections {
     // TV only: each source's own category order, by source identity.
     private fun sourceGroupOrder(p: Int) = prefix(p) + "source_group_order"
     private fun recent(p: Int) = prefix(p) + "recent"
+    // TV only: the order of the sources, by identity. Versions before it and the phone app leave it.
+    private fun sourceOrder(p: Int) = prefix(p) + "source_order"
 
     /**
      * [data] as sections. A source keeps the id the file already gives it ([base]), so devices
@@ -60,7 +62,30 @@ internal object LiveTvSections {
         // Imported playlists the file still lists with the links (as versions before their own
         // section wrote them) stay there too, so a TV on such a version keeps them.
         val linksHave = SyncDoc.values(base, sources(profileId)).filterValues(::isFileEntry).keys
-        return sectionsWith(profileId, data, knownSources, playlists, removed, linksHave)
+        val order = sentOrder(data.sourceOrder, orderOf(profileId, base), knownSources.keys - removed)
+        return sectionsWith(profileId, data.copy(sourceOrder = order), knownSources, playlists, removed, linksHave)
+    }
+
+    private fun orderOf(profileId: Int, doc: SyncSections): List<String> =
+        (SyncDoc.values(doc, sourceOrder(profileId))["order"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+
+    /**
+     * This device's order, with the sources the file has that it lacks (but never removed) kept
+     * where the file had them, so a device without one of them never moves it on the others.
+     */
+    private fun sentOrder(local: List<String>, fileOrder: List<String>, kept: Set<String>): List<String> {
+        if (fileOrder.isEmpty()) return local
+        val result = ArrayList(local)
+        val has = HashSet(local)
+        fileOrder.forEachIndexed { index, identity ->
+            if (identity in has || identity !in kept) return@forEachIndexed
+            // After the nearest one before it that is in the list, else first.
+            val after = (index - 1 downTo 0).firstOrNull { fileOrder[it] in has }?.let { result.indexOf(fileOrder[it]) } ?: -1
+            result.add(after + 1, identity)
+            has += identity
+        }
+        return result
     }
 
     /** Every Drive copy of an imported playlist the file names, for every profile. */
@@ -135,6 +160,7 @@ internal object LiveTvSections {
             groupOrder(profileId) to if (data.groupOrder.isEmpty()) emptyMap() else mapOf("order" to JsonArray(data.groupOrder.map(::JsonPrimitive))),
             sourceGroupOrder(profileId) to data.sourceGroupOrders.mapValues { (_, groups) -> JsonArray(groups.map(::JsonPrimitive)) },
             recent(profileId) to (data.recent?.let { mapOf("channel" to it.toJson()) } ?: emptyMap()),
+            sourceOrder(profileId) to if (data.sourceOrder.isEmpty()) emptyMap() else mapOf("order" to JsonArray(data.sourceOrder.map(::JsonPrimitive))),
         )
     }
 
@@ -155,6 +181,7 @@ internal object LiveTvSections {
             (value as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.takeIf { it.isNotEmpty() }?.let { identity to it }
         }.toMap(),
         recent = (SyncDoc.values(doc, recent(profileId))["channel"] as? JsonObject)?.toRecent(),
+        sourceOrder = orderOf(profileId, doc),
     )
 
     private fun LiveTvSource.toJson(): JsonObject = buildJsonObject {

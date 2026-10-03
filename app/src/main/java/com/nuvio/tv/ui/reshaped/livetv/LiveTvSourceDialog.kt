@@ -16,10 +16,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -191,39 +195,44 @@ internal fun LiveTvSourceDialog(onDismiss: () -> Unit) {
                 if (!adding) {
                     var confirmRemoveId by remember { mutableStateOf<String?>(null) }
                     uiState.sources.forEachIndexed { index, source ->
-                        LiveTvSourceRow(
-                            source = source,
-                            channelCount = uiState.sourceCounts[source.id] ?: 0,
-                            error = uiState.sourceErrors[source.id]?.message(context),
-                            guide = uiState.sourceGuides[source.id],
-                            confirmingRemove = confirmRemoveId == source.id,
-                            onEdit = {
-                                confirmRemoveId = null
-                                tab = source.type
-                                m3uUrl = source.url
-                                xtreamServer = source.xtream.serverUrl
-                                xtreamUser = source.xtream.username
-                                xtreamPassword = source.xtream.password
-                                stalkerPortal = source.stalker.portalUrl
-                                stalkerMac = source.stalker.macAddress
-                                stalkerUser = source.stalker.username
-                                stalkerPassword = source.stalker.password
-                                epgLink = source.epgUrl
-                                sourceName = source.name
-                                userAgent = source.userAgent
-                                editingId = source.id
-                                adding = true
-                            },
-                            onRemove = {
-                                if (confirmRemoveId == source.id) {
+                        // Keyed, so the focus goes with a source that is moved.
+                        key(source.id) {
+                            LiveTvSourceRow(
+                                source = source,
+                                channelCount = uiState.sourceCounts[source.id] ?: 0,
+                                error = uiState.sourceErrors[source.id]?.message(context),
+                                guide = uiState.sourceGuides[source.id],
+                                confirmingRemove = confirmRemoveId == source.id,
+                                onEdit = {
                                     confirmRemoveId = null
-                                    LiveTvRepository.removeSource(source.id)
-                                } else {
-                                    confirmRemoveId = source.id
-                                }
-                            },
-                            modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
-                        )
+                                    tab = source.type
+                                    m3uUrl = source.url
+                                    xtreamServer = source.xtream.serverUrl
+                                    xtreamUser = source.xtream.username
+                                    xtreamPassword = source.xtream.password
+                                    stalkerPortal = source.stalker.portalUrl
+                                    stalkerMac = source.stalker.macAddress
+                                    stalkerUser = source.stalker.username
+                                    stalkerPassword = source.stalker.password
+                                    epgLink = source.epgUrl
+                                    sourceName = source.name
+                                    userAgent = source.userAgent
+                                    editingId = source.id
+                                    adding = true
+                                },
+                                onRemove = {
+                                    if (confirmRemoveId == source.id) {
+                                        confirmRemoveId = null
+                                        LiveTvRepository.removeSource(source.id)
+                                    } else {
+                                        confirmRemoveId = source.id
+                                    }
+                                },
+                                // The order the guide and the categories list the sources in, synced.
+                                onMove = if (uiState.sources.size > 1) { step -> LiveTvRepository.moveSource(source.id, step) } else null,
+                                modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                            )
+                        }
                     }
                     if (uiState.isLoading) {
                         Text(
@@ -364,6 +373,8 @@ private fun LiveTvSourceRow(
     confirmingRemove: Boolean,
     onEdit: () -> Unit,
     onRemove: () -> Unit,
+    /** Moves the source up (-1) or down (1); null when there is nothing to order. */
+    onMove: ((Int) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     val kind = stringResource(
@@ -404,6 +415,22 @@ private fun LiveTvSourceRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        if (onMove != null) {
+            LiveTvPillButton(
+                text = "",
+                onClick = { onMove(-1) },
+                icon = Icons.Filled.KeyboardArrowUp,
+                iconDescription = stringResource(R.string.live_tv_move_source_up),
+            )
+            Spacer(Modifier.width(NuvioTheme.spacing.sm))
+            LiveTvPillButton(
+                text = "",
+                onClick = { onMove(1) },
+                icon = Icons.Filled.KeyboardArrowDown,
+                iconDescription = stringResource(R.string.live_tv_move_source_down),
+            )
+            Spacer(Modifier.width(NuvioTheme.spacing.sm))
         }
         LiveTvPillButton(
             text = stringResource(R.string.live_tv_edit_source),

@@ -242,6 +242,8 @@ internal object ReshapedSync {
                         sources = fromFile.sources
                             .map { source -> localIds[source.identity]?.let { source.copy(id = it) } ?: source }
                             .sortedBy { order[it.identity] ?: Int.MAX_VALUE },
+                        // A file without an order (older versions only) leaves this device's as it is.
+                        sourceOrder = fromFile.sourceOrder.ifEmpty { liveTv.sourceOrder },
                     )
                     // Imported playlists another device sent or changed are fetched before they load.
                     val refs = LiveTvSections.playlistRefs(sectionId, merged)

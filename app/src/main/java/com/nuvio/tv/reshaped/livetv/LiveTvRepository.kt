@@ -366,6 +366,25 @@ object LiveTvRepository {
         }
     }
 
+    /**
+     * Moves a source [step] places up (negative) or down: its channels and categories follow it in
+     * the lists. Order only; the sources themselves are left as they are.
+     */
+    fun moveSource(sourceId: String, step: Int) {
+        val store = storage ?: return
+        scope.launch(serial) {
+            val sources = _uiState.value.sources
+            val from = sources.indexOfFirst { it.id == sourceId }
+            val to = from + step
+            if (from < 0 || to !in sources.indices) return@launch
+            val reordered = ArrayList(sources).apply { add(to, removeAt(from)) }
+            _uiState.update { it.copy(sources = reordered) }
+            scope.launch(writer) { store.saveSources(reordered) }
+            ReshapedSync.onLocalChange()
+            publish()
+        }
+    }
+
     /** Shows or hides a category. */
     fun setGroupHidden(group: String, hidden: Boolean) {
         val current = _uiState.value.hiddenGroups
@@ -1300,6 +1319,7 @@ object LiveTvRepository {
                 groupOrder = groupOrder,
                 sourceGroupOrders = state.sourceGroupOrders,
                 recent = state.recentChannel,
+                sourceOrder = state.sources.filter { it.isSyncable }.map { it.identity },
             )
         }
         return shown ?: withContext(writer) { LiveTvStorage(context.applicationContext, profileId).syncData() }
@@ -1359,7 +1379,8 @@ object LiveTvRepository {
             val oldSources = _uiState.value.sources
             _uiState.update { state ->
                 state.copy(
-                    sources = state.sources.withSyncChange(before.sources, after.sources, store::newSourceId),
+                    sources = state.sources.withSyncChange(before.sources, after.sources, store::newSourceId)
+                        .withSyncOrder(before, after),
                     favoriteUrls = state.favoriteUrls.withSyncChange(before.favorites, after.favorites),
                     customLists = state.customLists.withSyncChange(before.customLists, after.customLists),
                     hiddenGroups = state.hiddenGroups.withSyncChange(before.hiddenGroups, after.hiddenGroups),
@@ -1412,7 +1433,7 @@ object LiveTvRepository {
             if (loadedProfileId == profileId) return@withContext false
             val store = LiveTvStorage(appContext, profileId)
             val sources = store.sources()
-            val synced = sources.withSyncChange(before.sources, after.sources, store::newSourceId)
+            val synced = sources.withSyncChange(before.sources, after.sources, store::newSourceId).withSyncOrder(before, after)
             store.saveSources(synced)
             val kept = synced.mapTo(HashSet()) { it.id }
             sources.filter { it.id !in kept }.forEach { store.deletePlaylistFile(it.id) }
@@ -1426,6 +1447,10 @@ object LiveTvRepository {
             if (before.recent != after.recent) after.recent?.let(store::saveRecentChannel)
             true
         }
+
+    /** Sync's new source order, when it brought one: sorting only, every source stays. */
+    private fun List<LiveTvSource>.withSyncOrder(before: LiveTvSyncData, after: LiveTvSyncData): List<LiveTvSource> =
+        if (after.sourceOrder.isNotEmpty() && after.sourceOrder != before.sourceOrder) inSyncOrder(after.sourceOrder) else this
 
     // endregion
 
