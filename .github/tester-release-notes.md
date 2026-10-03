@@ -1,3 +1,4 @@
-- First tester build: the same app as Nuvio Reshaped 1.1.0-beta.3 (build 6), plus the new **Tester** update channel in Settings > About > Update channel.
-- Installing this APK moves the app to the Tester channel, so you'll get tester builds from now on. Switch back to Beta any time; you'll move over with Beta's next release.
-- Please report anything that looks wrong.
+- Live TV guide rebuilt: shows never overlap, nothing ends up out of view or blank, and rows with no guide scroll with the rest.
+- ◀ and ▶ always move to the next programme (or half hour where the guide has nothing), and the timeline scrolls only as far as needed, like TiviMate.
+- ▲▼ glide as before but stay on the selection on 720p TVs; jumps longer than a screen snap into place.
+- Please report anything in the guide that looks wrong.
