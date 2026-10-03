@@ -1,0 +1,3 @@
+- First tester build: the same app as Nuvio Reshaped 1.1.0-beta.3 (build 6), plus the new **Tester** update channel in Settings > About > Update channel.
+- Installing this APK moves the app to the Tester channel, so you'll get tester builds from now on. Switch back to Beta any time; you'll move over with Beta's next release.
+- Please report anything that looks wrong.
