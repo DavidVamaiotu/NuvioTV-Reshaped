@@ -9,6 +9,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -497,13 +500,15 @@ fun LiveTvScreen(
                     clock = minuteClock,
                     showTitle = showBuiltInHeader,
                     preview = if (previewsEnabled) preview else null,
+                    // The guide keeps six channels; the header (description, preview) takes the rest.
+                    modifier = Modifier.weight(1f),
                     playVideo = (gridFocused || settingsFocused || (categoriesOpen && screenFocused)) && started && !launching &&
                         !showSourceDialog && !showCategoryDialog && !showMenu && !showPlaylists &&
                         !naming && editingList == null,
                 )
                 Spacer(Modifier.height(NuvioTheme.spacing.sm))
                 LaunchedEffect(gridFocused) { if (gridFocused) categoriesOpen = false }
-                Box(modifier = Modifier.fillMaxSize()) {
+                Box(modifier = Modifier.fillMaxWidth().height(GUIDE_RULER + GUIDE_ROW * GUIDE_ROWS)) {
                     // The guide moves aside for the categories: drawn moved, not laid out again.
                     val shift by animateDpAsState(
                         if (categoriesOpen || guide.selecting) CATEGORY_COLUMN + NuvioTheme.spacing.md else 0.dp,
@@ -525,9 +530,10 @@ fun LiveTvScreen(
                             state = guide,
                             active = gridFocused,
                             clock = minuteClock,
-                            // About 7 channels at once, with room for longer names.
+                            // Six channels at once, with room for longer names.
                             channelColumn = 280.dp,
-                            rowHeight = 52.dp,
+                            rowHeight = GUIDE_ROW,
+                            rulerHeight = GUIDE_RULER,
                             modifier = Modifier.fillMaxSize(),
                             corner = { LiveTvGuideDate(guide.viewStartMs, minuteClock) },
                         )
@@ -852,6 +858,7 @@ private fun LiveTvHeader(
     showTitle: Boolean,
     preview: LiveTvPreviewPlayer?,
     playVideo: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val shownChannel = guide.channel
@@ -871,33 +878,41 @@ private fun LiveTvHeader(
         uiState.isEpgLoading -> stringResource(R.string.live_tv_guide_loading)
         else -> null
     }
-    Row(modifier = Modifier.fillMaxWidth().height(HEADER_HEIGHT)) {
-        LiveTvGuideInfo(
-            channel = shownChannel,
-            logo = shownChannel?.let(uiState::logoFor),
-            programme = shownProgramme,
-            clock = clock,
-            status = status,
-            statusIsError = (failedSource != null || uiState.error != null) && !uiState.isLoading,
-            showTitle = showTitle && shownChannel == null,
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-        )
-        if (preview != null) {
-            LiveTvPreviewVideo(
-                preview = preview,
+    BoxWithConstraints(modifier = modifier.fillMaxWidth().heightIn(min = HEADER_HEIGHT)) {
+        // Never shorter than before; on a tall screen it grows with what the guide leaves.
+        val headerHeight = maxHeight.coerceAtLeast(HEADER_HEIGHT)
+        Row(modifier = Modifier.fillMaxWidth().height(headerHeight)) {
+            LiveTvGuideInfo(
                 channel = shownChannel,
                 logo = shownChannel?.let(uiState::logoFor),
-                playVideo = playVideo,
-                modifier = Modifier.padding(start = NuvioTheme.spacing.xl).fillMaxHeight(),
+                programme = shownProgramme,
+                clock = clock,
+                status = status,
+                statusIsError = (failedSource != null || uiState.error != null) && !uiState.isLoading,
+                showTitle = showTitle && shownChannel == null,
+                height = headerHeight,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
             )
+            if (preview != null) {
+                LiveTvPreviewVideo(
+                    preview = preview,
+                    channel = shownChannel,
+                    logo = shownChannel?.let(uiState::logoFor),
+                    playVideo = playVideo,
+                    modifier = Modifier.padding(start = NuvioTheme.spacing.xl).fillMaxHeight(),
+                )
+            }
         }
     }
 }
 
+/** The least the header takes; it grows into what the guide's six rows leave. */
 private val HEADER_HEIGHT = 104.dp
+private val GUIDE_ROW = 52.dp
+private val GUIDE_RULER = 28.dp
+private const val GUIDE_ROWS = 6
 
 private const val POSTER_DELAY_MS = 250L
-private val POSTER_WIDTH = HEADER_HEIGHT * 2 / 3
 
 /** "Wed, Sep 30 · 9:43 AM": the day the guide shows, and the time now. */
 @Composable
@@ -929,6 +944,8 @@ private fun LiveTvGuideInfo(
     status: String?,
     statusIsError: Boolean,
     showTitle: Boolean,
+    /** The header's height: the programme's 2:3 picture fills it. */
+    height: Dp,
     modifier: Modifier = Modifier,
 ) {
     Row(modifier = modifier) {
@@ -944,8 +961,9 @@ private fun LiveTvGuideInfo(
         var posterSlot by remember { mutableStateOf(false) }
         LaunchedEffect(image != null) { if (image != null) posterSlot = true }
         if (posterSlot) {
-            Box(modifier = Modifier.padding(end = NuvioTheme.spacing.lg).size(POSTER_WIDTH, HEADER_HEIGHT)) {
-                LiveTvPoster(url = poster, width = POSTER_WIDTH, height = HEADER_HEIGHT)
+            val posterWidth = height * 2 / 3
+            Box(modifier = Modifier.padding(end = NuvioTheme.spacing.lg).size(posterWidth, height)) {
+                LiveTvPoster(url = poster, width = posterWidth, height = height)
             }
         }
         // A new selection fades in instead of switching hard; the fade is drawn, not recomposed.
@@ -1015,15 +1033,16 @@ private fun LiveTvGuideInfo(
                             modifier = Modifier.padding(top = 6.dp).widthIn(max = 420.dp).fillMaxWidth(),
                         )
                     }
-                    // One line only: a status (guide loading, a source failing) takes its place, so it fits.
+                    // As many lines as the header leaves room for (up to four); a status (guide
+                    // loading, a source failing) takes its place, so it fits.
                     programme.description?.takeIf { status == null }?.let { description ->
                         Text(
                             text = description,
                             style = MaterialTheme.typography.bodySmall,
                             color = NuvioTheme.colors.TextTertiary,
-                            maxLines = 1,
+                            maxLines = 4,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 6.dp).widthIn(max = 640.dp),
+                            modifier = Modifier.padding(top = 6.dp).widthIn(max = 720.dp).weight(1f, fill = false),
                         )
                     }
                 }
