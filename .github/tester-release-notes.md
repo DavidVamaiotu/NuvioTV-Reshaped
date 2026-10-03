@@ -1,2 +1,4 @@
-- Live TV: with the search bar highlighted (not opened), ▶ or ◀ now goes straight to the settings button beside it.
-- Still includes the rebuilt Live TV guide from build 2. Please report anything in the guide that looks wrong.
+- Live TV player: shows the programme the guide shows. Channels whose guide has an all-day "To Be Announced" entry no longer show it in fullscreen, replays or the channel's programme list.
+- Live TV guide: each show appears once (no more shows listed twice in a row).
+- Live TV guide: a short show, when selected, expands to show its title and moves the shows after it along instead of covering them.
+- From build 3: with the search bar highlighted, ▶ or ◀ goes straight to the settings button.
