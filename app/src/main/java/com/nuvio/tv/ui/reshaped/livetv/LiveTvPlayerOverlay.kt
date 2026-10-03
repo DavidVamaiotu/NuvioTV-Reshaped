@@ -137,6 +137,8 @@ internal class LiveTvPlayerState(
     /** The channel whose programmes the panel lists (▶ from the channel list), or null. */
     var programmesChannel by mutableStateOf<LiveTvChannel?>(null)
         private set
+    /** The channel held OK on in the panel: the Add to dialog is open for it. */
+    var addingChannel by mutableStateOf<LiveTvChannel?>(null)
     /** The channel the list comes back to from its programmes, instead of the one playing. */
     internal var panelReturnUrl: String? = null
         private set
@@ -400,6 +402,7 @@ internal class LiveTvPlayerState(
         panelFocusedUrl = null
         panelReturnUrl = null
         programmesChannel = null
+        addingChannel = null
         folderJob?.cancel()
         panelFolderKey = null
         val (channels, folderKey) = zapTarget()
@@ -554,6 +557,7 @@ internal class LiveTvPlayerState(
         // The programmes stay as they are while the panel slides away; opening it clears them.
         panelOpen = false
         foldersOpen = false
+        addingChannel = null
         runCatching { containerFocusRequester.requestFocus() }
     }
 
@@ -935,6 +939,9 @@ private fun LiveTvChannelPanel(state: LiveTvPlayerState, programmes: Map<String,
             }
         }
     }
+    state.addingChannel?.let { channel ->
+        LiveTvAddToListDialog(channel = channel, onDismiss = { state.addingChannel = null })
+    }
 }
 
 /** The categories: focusing one lists its channels beside it (after a short rest, so passing over is cheap). */
@@ -1109,6 +1116,7 @@ private fun LiveTvChannelColumn(
                     playing = channel.streamUrl == state.currentListUrl,
                     clock = clock,
                     onClick = { state.pickFromPanel(channel) },
+                    onLongClick = { state.addingChannel = channel },
                     onFocused = { state.panelFocusedUrl = channel.streamUrl },
                     modifier = if (index == startIndex) Modifier.focusRequester(currentFocus) else Modifier,
                 )
@@ -1137,6 +1145,7 @@ private fun PanelRow(
     playing: Boolean,
     clock: State<Long>,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onFocused: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1144,7 +1153,7 @@ private fun PanelRow(
     val shape = RoundedCornerShape(12.dp)
     Card(
         onClick = onClick,
-        onLongClick = { LiveTvRepository.toggleFavorite(channel) },
+        onLongClick = onLongClick,
         modifier = modifier.fillMaxWidth().onFocusChanged {
             focused = it.isFocused
             if (it.isFocused) onFocused()
