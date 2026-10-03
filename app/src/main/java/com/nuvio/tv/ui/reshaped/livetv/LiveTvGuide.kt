@@ -453,7 +453,8 @@ internal fun LiveTvGuideGrid(
         val timeline = remember { GuideTimeline(Snapshot.withoutReadObservation { state.viewStartMs }, pxPerMs) }
         timeline.pxPerMs = pxPerMs
         LaunchedEffect(state.viewStartMs) {
-            timeline.scroll.animateTo((state.viewStartMs - timeline.origin).toFloat(), GUIDE_GLIDE)
+            val to = (state.viewStartMs - timeline.origin).toFloat()
+            timeline.scroll.animateTo(to, GUIDE_GLIDE, glideVelocity(timeline.scroll.velocity, timeline.scroll.value, to))
         }
         Column {
             Row(modifier = Modifier.fillMaxWidth().height(rulerHeight), verticalAlignment = Alignment.CenterVertically) {
@@ -493,7 +494,7 @@ internal fun LiveTvGuideGrid(
                     }
                     if (!glide.isRunning) glide.snapTo(current)
                     glideScope.launch {
-                        glide.animateTo(target, GUIDE_GLIDE) {
+                        glide.animateTo(target, GUIDE_GLIDE, glideVelocity(glide.velocity, glide.value, target)) {
                             val now = listState.firstVisibleItemIndex * rowPx + listState.firstVisibleItemScrollOffset
                             listState.dispatchRawDelta(value - now)
                         }
@@ -802,12 +803,27 @@ private fun Modifier.cellWidth(width: Dp, selected: Boolean): Modifier =
     }
 
 private val GROW_MAX = 280.dp
-private val GROW_SPRING = spring<IntSize>(dampingRatio = 0.85f, stiffness = 500f)
+private val GROW_SPRING = spring<IntSize>(dampingRatio = 1f, stiffness = 500f)
 
 /** How far down the guide the selected row rests. */
 private const val SELECTION_AT = 0.4f
 /** The guide's glide, for rows and the timeline: quick, and settling without a bounce. */
 private val GUIDE_GLIDE = spring<Float>(dampingRatio = 1f, stiffness = 320f)
+
+/**
+ * The speed a glide to [to] starts with: what it had, but never so much towards [to] that it
+ * would pass it and come back (a critically damped spring does when its speed tops ω × distance),
+ * so letting go of a held ▲▼ lands on the row without a wobble.
+ */
+private fun glideVelocity(velocity: Float, from: Float, to: Float): Float {
+    val distance = to - from
+    if (distance * velocity <= 0f) return velocity
+    val limit = GLIDE_OMEGA * kotlin.math.abs(distance)
+    return velocity.coerceIn(-limit, limit)
+}
+
+/** [GUIDE_GLIDE]'s natural frequency, √stiffness. */
+private val GLIDE_OMEGA = kotlin.math.sqrt(320f)
 private val SELECTION_FADE = tween<Color>(durationMillis = 140, easing = FastOutSlowInEasing)
 
 @Composable
