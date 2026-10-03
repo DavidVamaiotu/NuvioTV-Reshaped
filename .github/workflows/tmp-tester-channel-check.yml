@@ -140,14 +140,17 @@ jobs:
             echo "NUVIO_RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
           } >> "$GITHUB_ENV"
 
-      - name: Compile both flavors and run updater tests
-        run: |
-          ./gradlew \
-            :app:compileFullDebugKotlin \
-            :app:compilePlaystoreDebugKotlin \
-            :app:testFullReleaseUnitTest --tests 'com.nuvio.tv.updater.*' \
-            --build-cache \
-            --stacktrace
+      - name: Compile app
+        timeout-minutes: 30
+        run: ./gradlew :app:compileFullDebugKotlin --build-cache --stacktrace
+
+      - name: Run updater tests
+        timeout-minutes: 40
+        run: ./gradlew :app:testFullReleaseUnitTest --tests 'com.nuvio.tv.updater.*' --build-cache --stacktrace
+
+      - name: Compile Play Store flavor
+        timeout-minutes: 30
+        run: ./gradlew :app:compilePlaystoreDebugKotlin --build-cache --stacktrace
 
       - name: Build installable APK
         run: |
