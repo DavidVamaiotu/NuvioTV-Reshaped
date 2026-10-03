@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Size
@@ -134,6 +135,8 @@ internal fun LiveTvTextField(
     keyboardType: KeyboardType = KeyboardType.Uri,
     password: Boolean = false,
     onDone: () -> Unit = {},
+    /** Where ◀ and ▶ go from the field (a button beside it), rather than looking for something that way. */
+    sideFocus: FocusRequester? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     val inputFocusRequester = remember { FocusRequester() }
@@ -147,6 +150,12 @@ internal fun LiveTvTextField(
         onClick = { inputFocusRequester.requestFocus(); keyboardController?.show() },
         modifier = modifier
             .fillMaxWidth()
+            .then(
+                if (sideFocus == null) Modifier else Modifier.focusProperties {
+                    left = sideFocus
+                    right = sideFocus
+                },
+            )
             .onFocusChanged { focused = it.isFocused || it.hasFocus },
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.TextPrimary.copy(alpha = 0.05f),
@@ -189,6 +198,10 @@ internal fun LiveTvTextField(
                             else -> return@onPreviewKeyEvent false
                         } ?: return@onPreviewKeyEvent false
                         keyboardController?.hide()
+                        if (sideFocus != null && (direction == FocusDirection.Left || direction == FocusDirection.Right)) {
+                            runCatching { sideFocus.requestFocus() }
+                            return@onPreviewKeyEvent true
+                        }
                         // Nothing that way (the top of the screen): stay, rather than typing an arrow.
                         focusManager.moveFocus(direction)
                         true

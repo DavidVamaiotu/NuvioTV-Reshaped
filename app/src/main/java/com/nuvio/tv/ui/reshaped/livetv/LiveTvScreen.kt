@@ -579,6 +579,7 @@ fun LiveTvScreen(
                             pickMode = guide.selecting,
                             picked = guide.picked.keys,
                             onChoose = choosePlaylist,
+                            settingsFocus = settingsFocus,
                             settingsButton = {
                                 LiveTvPillButton(
                                     text = "",
@@ -1099,6 +1100,8 @@ private fun LiveTvCategoryColumn(
     onEditList: (String) -> Unit,
     settingsButton: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    /** The settings button beside the search, which ◀ and ▶ on the search reach. */
+    settingsFocus: FocusRequester? = null,
     /** Channels are being picked: only Favorites and the playlists, to choose where they go. */
     pickMode: Boolean = false,
     /** The ticked channels' links: a list that has them all offers to take them out instead. */
@@ -1231,6 +1234,7 @@ private fun LiveTvCategoryColumn(
                     placeholder = stringResource(R.string.live_tv_search),
                     keyboardType = androidx.compose.ui.text.input.KeyboardType.Text,
                     modifier = Modifier.weight(1f),
+                    sideFocus = settingsFocus,
                 )
                 settingsButton()
             }
