@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Star
@@ -717,6 +718,7 @@ private fun GuideRow(
                         state = GuideCellState.Future,
                         modifier = Modifier
                             .offset { IntOffset(timeline.x(gapStart).roundToInt(), 0) }
+                            .wrapContentWidth(Alignment.Start, unbounded = true)
                             .width(with(density) { ((gapStop - gapStart) * timeline.pxPerMs).toDp() })
                             .fillMaxHeight()
                             .padding(end = 4.dp),
@@ -746,6 +748,9 @@ private fun GuideRow(
                         clock = clock,
                         modifier = Modifier
                             .offset { IntOffset(timeline.x(cellStart).roundToInt(), 0) }
+                            // Wider than the view, it keeps its width: held to the row's width, a
+                            // cell begun hours back would end before the screen and leave a black gap.
+                            .wrapContentWidth(Alignment.Start, unbounded = true)
                             .width(widthDp)
                             .fillMaxHeight()
                             .padding(end = 4.dp),
