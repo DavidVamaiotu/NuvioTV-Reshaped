@@ -47,8 +47,8 @@ object LiveTvRepository {
     private const val EPG_TICK_MS = 60_000L
     /** How long a replay waits for the panel's HLS playlist before playing its TS replay. */
     private const val HLS_CHECK_MS = 6_000L
-    /** How long a replay runs on past its programme's end before the next part is asked for. */
-    private const val REPLAY_RUN_ON_MS = 60L * 60 * 1000
+    /** How long a part of a replay is when the guide has no programme for that time. */
+    private const val REPLAY_PART_MS = 30L * 60 * 1000
     /** Playlists: panels that build get.php on request may send nothing for a minute or more. */
     private const val PLAYLIST_READ_TIMEOUT_S = 120L
     private const val TS_PACKET = 188
@@ -715,11 +715,11 @@ object LiveTvRepository {
         replayChannel(channel, programme.startEpochMs, programme.stopEpochMs)
 
     /**
-     * A replay of [channel] from [startMs]: through [programmeEndMs] and on for
-     * [REPLAY_RUN_ON_MS] more (a programme that overran, the ones after it), never past now. The
-     * player asks for the next part, or goes live, as it gets to the end.
+     * A replay of [channel] from [startMs] to [programmeEndMs] (by default the end of the guide's
+     * programme on at [startMs]), never past now, so the player shows the programme's own length.
+     * The player asks for the next part, or goes live, as it gets to the end.
      */
-    suspend fun replayChannel(channel: LiveTvChannel, startMs: Long, programmeEndMs: Long = startMs): LiveTvReplay? {
+    suspend fun replayChannel(channel: LiveTvChannel, startMs: Long, programmeEndMs: Long = replayPartEnd(channel, startMs)): LiveTvReplay? {
         val catchup = channel.catchup ?: return null
         val now = LiveTvClock.nowEpochMs()
         if (!LiveTvCatchupLinks.isPlayableFrom(catchup, startMs, now)) return null
@@ -732,9 +732,9 @@ object LiveTvRepository {
         } else {
             null
         }
-        // Past the guide's end time, so a programme that overran plays to its real end and the
-        // next ones follow; up to now at most.
-        val stop = minOf(now, maxOf(programmeEndMs, startMs) + REPLAY_RUN_ON_MS)
+        // Just the programme (a seek bar as long as it is), up to now at most; one that overran
+        // goes on in the next part, which the player asks for at the end.
+        val stop = minOf(now, if (programmeEndMs > startMs) programmeEndMs else startMs + REPLAY_PART_MS)
         // "Prefer HLS": the panel's HLS replay has a length, so it shows a progress bar and seeks.
         // A panel that gives none (or no playlist in time) plays the TS replay as before.
         val hlsLink = if (LiveTvCatchupLinks.isXtreamReplay(channel.streamUrl, catchup, xtreamPanel) && preferHls()) {
@@ -753,6 +753,17 @@ object LiveTvRepository {
         LiveTvPlaybackRegistry.register(link, listUrl = channel.streamUrl, catchup = true, window = window)
         recordRecentChannel(channel)
         return LiveTvReplay(channel.copy(streamUrl = link), window)
+    }
+
+    /**
+     * Where the next part of a replay from [startMs] ends: the end of the programme on then (or the
+     * start of the next, after a gap in the guide), from the kept guide. Never a part of under a minute.
+     */
+    private fun replayPartEnd(channel: LiveTvChannel, startMs: Long): Long {
+        val minEnd = startMs + 60_000L
+        val programmes = keptSchedule[channel.guideKey].orEmpty()
+        val programme = programmes.firstOrNull { it.stopEpochMs > minEnd } ?: return startMs + REPLAY_PART_MS
+        return if (programme.startEpochMs > minEnd) programme.startEpochMs else programme.stopEpochMs
     }
 
     private fun preferHls(): Boolean {
