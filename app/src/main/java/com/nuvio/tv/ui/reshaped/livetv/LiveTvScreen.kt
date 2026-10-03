@@ -1103,12 +1103,12 @@ private fun LiveTvCategoryColumn(
     }
     val showAll by LiveTvPreferences.showAll.collectAsStateWithLifecycle()
     val showFavorites by LiveTvPreferences.showFavorites.collectAsStateWithLifecycle()
-    val entries = remember(newListLabel, sections, visibleGroups, uiState.groupNames, uiState.customLists, collapsed.toMap(), allLabel, favoritesLabel, uncategorised, showAll, showFavorites) {
+    val entries = remember(sections, visibleGroups, uiState.groupNames, uiState.customLists, collapsed.toMap(), allLabel, favoritesLabel, uncategorised, showAll, showFavorites) {
         fun label(group: String) = liveTvGroupName(group, uiState.groupNames) ?: if (group == LIVE_TV_UNGROUPED) uncategorised else group
         buildList {
             if (showFavorites) add(LiveTvCategoryEntry(FILTER_FAVORITES, favoritesLabel))
+            // New playlists are made in the menu's My playlists (and while picking channels), not here.
             uiState.customLists.forEach { add(LiveTvCategoryEntry(FILTER_LIST_PREFIX + it.id, it.name, count = it.urls.size, listId = it.id)) }
-            add(LiveTvCategoryEntry(NEW_LIST_KEY, newListLabel, action = true))
             if (showAll) add(LiveTvCategoryEntry(FILTER_ALL, allLabel, count = sections?.total))
             val bySource = sections?.sources
             if (bySource != null && bySource.size > 1) {
