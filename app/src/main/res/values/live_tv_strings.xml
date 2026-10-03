@@ -90,7 +90,7 @@
     <string name="settings_live_tv_preview_sound_description">Hear the channel in the preview. It fades in, and stops when you leave the list</string>
 
     <string name="live_tv_player_channels">Channels</string>
-    <string name="live_tv_player_categories_hint">◀ Categories  ·  ▶ Guide</string>
+    <string name="live_tv_player_categories_hint">◀ Categories  ·  ▶ Guide  ·  Hold OK: add to a list</string>
     <string name="live_tv_player_programmes_hint">◀ Channels  ·  OK Watch</string>
     <string name="live_tv_player_hint">▲▼ Switch channel  ·  ◀ Channel list  ·  OK Info</string>
     <string name="live_tv_info_hint">OK Controls  ·  ◀ Channel list  ·  ▲▼ Switch channel</string>
@@ -170,6 +170,8 @@
     <string name="live_tv_remove_from_list">Remove from %1$s</string>
     <string name="live_tv_choose_playlist_hint">The ticked channels go in it. If they are all in it already, they come out.</string>
     <string name="live_tv_moving_keys">▲▼ moves the channel  ·  OK puts it down</string>
+    <string name="live_tv_add_to">Add %1$s to</string>
+    <string name="live_tv_add_to_description">OK puts the channel in a list, or takes it out when it is ticked.</string>
     <plurals name="live_tv_picked">
         <item quantity="one">%d channel picked</item>
         <item quantity="other">%d channels picked</item>
