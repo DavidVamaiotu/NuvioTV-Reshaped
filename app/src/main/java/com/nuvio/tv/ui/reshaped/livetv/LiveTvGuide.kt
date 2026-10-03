@@ -665,8 +665,8 @@ private fun GuideRow(
 
 /**
  * A row's programmes, each placed by its time: measured once at its width, moved at layout as the
- * timeline glides. Blocks never overlap, so neither do cells; only a short one selected grows
- * over the next (and is drawn over it).
+ * timeline glides. Blocks never overlap, so neither do cells; a short one selected grows to show
+ * its title and pushes the rest of the row along.
  */
 @Composable
 private fun GuideCells(
@@ -737,11 +737,21 @@ private fun GuideCells(
         val cellConstraints = Constraints(minHeight = height, maxHeight = height)
         val placeables = measurables.map { it.measure(cellConstraints) }
         layout(constraints.maxWidth, height) {
+            // A short cell selected grows to show its title: the cells after it move along by as
+            // much (following its grow animation), so it never covers them.
+            val pushPx = if (selectedIndex < 0) {
+                0
+            } else {
+                val cell = cells[selectedIndex]
+                val timePx = (timeline.px(cell.stop) - timeline.px(cell.start) - gapPx).coerceAtLeast(1)
+                (placeables[selectedIndex].width - timePx).coerceAtLeast(0)
+            }
             // Read here: the glide moves the cells without measuring or composing them again.
             for (i in placeables.indices) {
                 val cell = if (i < cells.size) cells[i] else overlay ?: continue
                 val front = i == selectedIndex || i >= cells.size
-                placeables[i].place(timeline.x(cell.start), 0, if (front) 1f else 0f)
+                val push = if (selectedIndex in 0 until i && i < cells.size) pushPx else 0
+                placeables[i].place(timeline.x(cell.start) + push, 0, if (front) 1f else 0f)
             }
         }
     }
@@ -750,7 +760,7 @@ private fun GuideCells(
 private enum class GuideCellState { Past, Now, Future }
 
 /**
- * A cell's width. A short one, selected, grows over its neighbour to show its title (up to
+ * A cell's width. A short one, selected, grows to show its title, pushing its neighbours along (up to
  * [GROW_MAX]) and settles back when the selection moves on; only cells that short can animate.
  */
 private fun Modifier.cellWidth(width: Dp, selected: Boolean): Modifier =
