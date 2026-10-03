@@ -139,6 +139,8 @@ internal fun LiveTvTextField(
     sideFocus: FocusRequester? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // The card itself (not the field inside it, which handles its own arrows).
+    var cardFocused by remember { mutableStateOf(false) }
     val inputFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -151,12 +153,27 @@ internal fun LiveTvTextField(
         modifier = modifier
             .fillMaxWidth()
             .then(
-                if (sideFocus == null) Modifier else Modifier.focusProperties {
-                    left = sideFocus
-                    right = sideFocus
-                },
+                if (sideFocus == null) Modifier else Modifier
+                    .focusProperties {
+                        left = sideFocus
+                        right = sideFocus
+                    }
+                    // Taken here, before anything around the field sees it: the screen may use ▶
+                    // itself (Live TV's categories go back to the guide on it) before focus moves.
+                    .onPreviewKeyEvent { event ->
+                        val native = event.nativeKeyEvent
+                        if (!cardFocused) return@onPreviewKeyEvent false
+                        if (native.keyCode != KeyEvent.KEYCODE_DPAD_LEFT && native.keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) {
+                            return@onPreviewKeyEvent false
+                        }
+                        if (native.action == KeyEvent.ACTION_DOWN) runCatching { sideFocus.requestFocus() }
+                        true
+                    },
             )
-            .onFocusChanged { focused = it.isFocused || it.hasFocus },
+            .onFocusChanged {
+                focused = it.isFocused || it.hasFocus
+                cardFocused = it.isFocused
+            },
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.TextPrimary.copy(alpha = 0.05f),
             focusedContainerColor = NuvioTheme.colors.TextPrimary.copy(alpha = 0.08f),
