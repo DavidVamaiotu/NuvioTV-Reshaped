@@ -143,7 +143,7 @@ internal fun liveTvGuideViewFor(block: LiveTvGuideBlock, viewStart: Long, span: 
             else -> guideFloorSlot(maxOf(block.start, block.stop - span + GUIDE_SLOT))
         }
     }
-    val latest = maxOf(first, last - span)
+    val latest = maxOf(first, guideCeilSlot(last - span))
     return view.coerceIn(first, latest)
 }
 

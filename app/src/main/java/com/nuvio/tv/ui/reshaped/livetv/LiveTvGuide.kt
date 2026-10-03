@@ -346,12 +346,13 @@ internal class LiveTvGuideState(
         val blocks = blocksFor(channel)
         val current = blocks.blockAt(anchorMs)
         val fromPast = current.start <= now
-        var target = if (step > 0) blocks.after(current) else blocks.before(current)
+        val next = if (step > 0) blocks.after(current) else blocks.before(current)
         // Back in time, a stretch the guide has nothing for is passed over to the programme before it.
-        if (step < 0 && fromPast && target.programme == null) blocks.programmeBefore(current.start)?.let { target = it }
+        val target = if (step < 0 && fromPast && next.programme == null) blocks.programmeBefore(current.start) ?: next else next
+        val programme = target.programme
         // Embedded: from now (or the past), ◀ goes on into the past only where it can be played again.
         if (step < 0 && onExitLeft != null && fromPast &&
-            (target.programme == null || !LiveTvCatchupLinks.isPlayable(channel.catchup, target.programme, now))
+            (programme == null || !LiveTvCatchupLinks.isPlayable(channel.catchup, programme, now))
         ) {
             // A held ◀ pauses on what is on now, then goes on to the categories: it never
             // needs letting go and pressing again, which felt stuck.
