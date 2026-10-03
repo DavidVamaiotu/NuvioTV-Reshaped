@@ -3,7 +3,10 @@
 package com.nuvio.tv.ui.reshaped.livetv
 
 import android.view.KeyEvent
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -99,7 +102,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Live TV inside Nuvio's player: CH+/CH- (and ▲▼ while the controls are hidden) switch channel,
- * ◀ opens the channel list and ◀ again its categories, ▶ the player's controls, and a banner shows what is on after each switch. Everything is
+ * ◀ opens the channel list and ◀ again its categories (▶ there lists a channel's programmes), ▶ the player's controls, and a banner shows what is on after each switch. Everything is
  * inert unless the player is playing a Live TV channel.
  */
 @Stable
@@ -129,36 +132,35 @@ internal class LiveTvPlayerState(
 
     private var switchJob: Job? = null
 
-    /** The channel focused in the panel, which ▶ opens the programme guide on. */
+    /** The channel focused in the panel, which ▶ lists the programmes of. */
     internal var panelFocusedUrl: String? = null
-    /** The programme guide over the player (▶ from the channel list), or null. */
-    var guide by mutableStateOf<LiveTvGuideState?>(null)
+    /** The channel whose programmes the panel lists (▶ from the channel list), or null. */
+    var programmesChannel by mutableStateOf<LiveTvChannel?>(null)
+        private set
+    /** The channel the list comes back to from its programmes, instead of the one playing. */
+    internal var panelReturnUrl: String? = null
         private set
 
-    private fun openGuide() {
-        val channels = panelChannels
-        if (channels.isEmpty()) return
-        val start = channels.indexOfFirst { it.streamUrl == (panelFocusedUrl ?: currentListUrl) }.coerceAtLeast(0)
-        guide = LiveTvGuideState(
-            channels = channels,
-            startIndex = start,
-            onPlay = { channel ->
-                guide = null
-                pickFromPanel(channel)
-            },
-            onClose = { guide = null },
-            onCatchup = { channel, programme ->
-                guide = null
-                playCatchup(channel, programme)
-            },
-            // Held OK: what is on now on that channel, from its start.
-            onLongPress = { channel ->
-                startOverProgramme(channel)?.let { programme ->
-                    guide = null
-                    playCatchup(channel, programme)
-                }
-            },
-        )
+    private fun openProgrammes() {
+        val url = panelFocusedUrl ?: currentListUrl
+        programmesChannel = panelChannels.firstOrNull { it.streamUrl == url } ?: return
+    }
+
+    /** Back to the channel list, on the channel whose programmes were shown. */
+    internal fun closeProgrammes() {
+        val channel = programmesChannel ?: return
+        panelReturnUrl = channel.streamUrl
+        programmesChannel = null
+    }
+
+    /** OK on a programme: an ended one plays again where the provider keeps it; anything else plays live. */
+    internal fun playProgramme(channel: LiveTvChannel, programme: LiveTvProgramme) {
+        val now = LiveTvClock.nowEpochMs()
+        if (programme.stopEpochMs <= now && LiveTvCatchupLinks.isPlayable(channel.catchup, programme, now)) {
+            playCatchup(channel, programme)
+        } else {
+            pickFromPanel(channel)
+        }
     }
 
     /** The Now/Next card OK shows over the picture; OK again opens the controls. Never pauses. */
@@ -221,12 +223,20 @@ internal class LiveTvPlayerState(
             uiState.showSpeedDialog || uiState.showSubtitleDelayOverlay || uiState.showSubtitleTimingDialog ||
             uiState.showMoreDialog || uiState.showStreamInfoOverlay
         val down = event.action == KeyEvent.ACTION_DOWN
-        // The guide takes every key while it is open; the player behind it sees none. Volume and
-        // mute still reach the system, for boxes that set the volume themselves.
-        guide?.let { open ->
-            if (event.keyCode in SYSTEM_KEYS) return false
-            open.onKey(event)
-            return true
+        if (panelOpen && programmesChannel != null) {
+            return when (event.keyCode) {
+                // Back to the channels, on the channel whose programmes these are.
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
+                    if (!down) closeProgrammes()
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    if (down && event.repeatCount == 0) closeProgrammes()
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> true
+                else -> false // the list handles the rest
+            }
         }
         if (panelOpen && foldersOpen) {
             return when (event.keyCode) {
@@ -246,7 +256,7 @@ internal class LiveTvPlayerState(
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    if (down && event.repeatCount == 0) openGuide()
+                    if (down && event.repeatCount == 0) openProgrammes()
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -380,7 +390,7 @@ internal class LiveTvPlayerState(
     internal suspend fun refocusPlayer() {
         repeat(5) {
             withFrameNanos { }
-            if (panelOpen || guide != null || controller._uiState.value.showControls) return
+            if (panelOpen || controller._uiState.value.showControls) return
             if (runCatching { containerFocusRequester.requestFocus() }.isSuccess) return
         }
     }
@@ -388,6 +398,8 @@ internal class LiveTvPlayerState(
     private fun openPanel() {
         hideInfo()
         panelFocusedUrl = null
+        panelReturnUrl = null
+        programmesChannel = null
         folderJob?.cancel()
         panelFolderKey = null
         val (channels, folderKey) = zapTarget()
@@ -401,6 +413,7 @@ internal class LiveTvPlayerState(
     internal fun showFolder(key: String) {
         if (key == panelFolderKey) return
         panelFolderKey = key
+        panelReturnUrl = null
         folderJob?.cancel()
         folderJob = scope.launch {
             val state = LiveTvRepository.uiState.value
@@ -538,7 +551,7 @@ internal class LiveTvPlayerState(
 
     internal fun closePanel() {
         if (!panelOpen) return
-        guide = null
+        // The programmes stay as they are while the panel slides away; opening it clears them.
         panelOpen = false
         foldersOpen = false
         runCatching { containerFocusRequester.requestFocus() }
@@ -571,7 +584,6 @@ internal class LiveTvPlayerState(
         const val REPLAY_CAUGHT_UP_MS = 90_000L
         const val INFO_MS = 6_000L
         val OK_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
-        val SYSTEM_KEYS = intArrayOf(KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE)
     }
 }
 
@@ -680,17 +692,6 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         LiveTvChannelPanel(state, liveState.currentProgrammes, clock)
     }
 
-    AnimatedVisibility(
-        visible = state.guide != null,
-        enter = fadeIn(),
-        exit = fadeOut(),
-        modifier = Modifier.fillMaxSize().zIndex(4f),
-    ) {
-        // Keeps the last guide drawn while it fades out.
-        val guide = remember { mutableStateOf<LiveTvGuideState?>(null) }
-        state.guide?.let { guide.value = it }
-        guide.value?.let { LiveTvGuide(it, takeFocus = false) }
-    }
 }
 
 /** Near solid, so the banner and info card read clearly over any picture. */
@@ -917,7 +918,22 @@ private fun LiveTvChannelPanel(state: LiveTvPlayerState, programmes: Map<String,
         ) {
             LiveTvFolderColumn(state, liveState)
         }
-        LiveTvChannelColumn(state, programmes, liveState, clock)
+        // ▶ on a channel: its programmes in place of the channels, ◀ back.
+        AnimatedContent(
+            targetState = state.programmesChannel,
+            contentKey = { it?.streamUrl },
+            transitionSpec = {
+                val step = if (targetState != null) 1 else -1
+                (fadeIn(tween(220)) + slideInHorizontally(tween(220)) { step * it / 10 }) togetherWith fadeOut(tween(120))
+            },
+            label = "panel",
+        ) { channel ->
+            if (channel == null) {
+                LiveTvChannelColumn(state, programmes, liveState, clock)
+            } else {
+                LiveTvProgrammeColumn(state, channel, liveState, clock)
+            }
+        }
     }
 }
 
@@ -1023,7 +1039,11 @@ private fun LiveTvChannelColumn(
     clock: State<Long>,
 ) {
     val channels = state.panelChannels
-    val startIndex = remember(channels) { channels.indexOfFirst { it.streamUrl == state.currentListUrl }.coerceAtLeast(0) }
+    // Back from a channel's programmes: on that channel; otherwise on the one playing.
+    val startIndex = remember(channels) {
+        val back = state.panelReturnUrl?.let { url -> channels.indexOfFirst { it.streamUrl == url } } ?: -1
+        (if (back >= 0) back else channels.indexOfFirst { it.streamUrl == state.currentListUrl }).coerceAtLeast(0)
+    }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 3).coerceAtLeast(0))
     // A new category starts at its top (or at the channel playing, when it has it).
     LaunchedEffect(channels) {
