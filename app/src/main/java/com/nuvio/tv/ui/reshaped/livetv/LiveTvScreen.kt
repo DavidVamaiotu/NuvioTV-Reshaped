@@ -1111,13 +1111,12 @@ private fun LiveTvCategoryColumn(
     val collapsed = viewModel.collapsedSources
     val allLabel = stringResource(R.string.live_tv_all_channels)
     val favoritesLabel = stringResource(R.string.live_tv_favorites)
-    val newListLabel = stringResource(R.string.live_tv_playlist_new)
     val uncategorised = liveTvGroupLabel(LIVE_TV_UNGROUPED)
-    val pickEntries = remember(newListLabel, uiState.customLists, favoritesLabel) {
+    // New playlists are made only in the menu's My playlists.
+    val pickEntries = remember(uiState.customLists, favoritesLabel) {
         buildList {
             add(LiveTvCategoryEntry(FILTER_FAVORITES, favoritesLabel))
             uiState.customLists.forEach { add(LiveTvCategoryEntry(FILTER_LIST_PREFIX + it.id, it.name, count = it.urls.size, listId = it.id)) }
-            add(LiveTvCategoryEntry(NEW_LIST_KEY, newListLabel, action = true))
         }
     }
     val showAll by LiveTvPreferences.showAll.collectAsStateWithLifecycle()
@@ -1126,7 +1125,7 @@ private fun LiveTvCategoryColumn(
         fun label(group: String) = liveTvGroupName(group, uiState.groupNames) ?: if (group == LIVE_TV_UNGROUPED) uncategorised else group
         buildList {
             if (showFavorites) add(LiveTvCategoryEntry(FILTER_FAVORITES, favoritesLabel))
-            // New playlists are made in the menu's My playlists (and while picking channels), not here.
+            // New playlists are made only in the menu's My playlists, not here.
             uiState.customLists.forEach { add(LiveTvCategoryEntry(FILTER_LIST_PREFIX + it.id, it.name, count = it.urls.size, listId = it.id)) }
             if (showAll) add(LiveTvCategoryEntry(FILTER_ALL, allLabel, count = sections?.total))
             val bySource = sections?.sources
