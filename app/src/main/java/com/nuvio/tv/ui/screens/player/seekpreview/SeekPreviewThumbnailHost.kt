@@ -32,7 +32,6 @@ import com.nuvio.tv.ui.screens.player.PlayerViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.collectLatest
 
 /**
  * Frame width as a share of the width available (the progress bar's), clamped for a 10-foot
@@ -88,7 +87,7 @@ fun SeekPreviewThumbnailHost(
     // On-device tracks fill in while playing; a new revision means the frame may have sharpened.
     val revision by (activeTrack?.revision ?: NoRevision).collectAsStateWithLifecycle()
     var frame by remember(activeTrack) { mutableStateOf<SeekPreviewThumbnail?>(null) }
-    // Conflate rapid scrub/nudge changes so only the latest request triggers a lookup.
+    // Conflate rapid scrub/nudge changes: a lookup that finishes takes the latest request next.
     val requestFlow = remember(activeTrack) {
         MutableStateFlow(PreviewRequest(displayTs, offsetMs, revision, lingerVisible))
     }
@@ -110,7 +109,10 @@ fun SeekPreviewThumbnailHost(
         var cachedPrefersSuccessor = false
         var cachedOffsetMs: Long? = null
         var cachedRevision: Int? = null
-        requestFlow.collectLatest { (positionMs, offset, rev, visible) ->
+        // Each lookup runs to the end, then the latest request is taken (the StateFlow conflates
+        // the ones in between). Cancelling on every new request starved a held D-pad scrub: each
+        // repeat cancelled the lookup in flight, so the frame stayed on an old one until release.
+        requestFlow.collect { (positionMs, offset, rev, visible) ->
             val covering = cachedCovering
             if (offset == cachedOffsetMs &&
                 (rev == cachedRevision || !visible) &&
@@ -118,13 +120,13 @@ fun SeekPreviewThumbnailHost(
                 covering.contains(positionMs) &&
                 covering.prefersSuccessorFor(positionMs) == cachedPrefersSuccessor
             ) {
-                return@collectLatest
+                return@collect
             }
             // Single writer for the track's offset: the manual sync correction is pushed in
             // right before the lookup so a nudge is reflected on the very next frame.
             activeTrack.offsetMs = offset
             // Only overwrite on success — keeps the last good frame visible during a fetch.
-            val coveringThumbnail = activeTrack.thumbnailFor(positionMs) ?: return@collectLatest
+            val coveringThumbnail = activeTrack.thumbnailFor(positionMs) ?: return@collect
             // Cue times arrive on the preview timeline; undo the sync offset so they can be
             // compared with, and assigned to, playback positions.
             val coveringCue = SeekPreviewCue(

@@ -154,6 +154,12 @@ internal class LocalPreviewTrack(
     /** Slot the viewer last looked at, so its keyframes are decoded first. */
     @Volatile private var focusSlot = -1
 
+    /**
+     * +1 while the viewer scrubs forward, -1 backward, 0 otherwise (set by the owner from the
+     * scrub position): spooled frames in that direction are decoded first.
+     */
+    @Volatile var scrubDirection = 0
+
     fun start() {
         // Coalesce UI updates: at most a few revisions per second however fast frames land.
         scope.launch {
@@ -420,7 +426,7 @@ internal class LocalPreviewTrack(
         if (closed || !mayDecodeNow()) return
         val next = synchronized(lock) {
             val focus = focusSlot
-            val slot = if (focus >= 0) spooled.keys.minByOrNull { abs(it - focus) } else spooled.keys.minOrNull()
+            val slot = if (focus >= 0) spooled.keys.minByOrNull { drainCost(it, focus) } else spooled.keys.minOrNull()
             slot?.let { it to spooled.remove(it)!! }
         }
         if (next == null) {
@@ -442,6 +448,17 @@ internal class LocalPreviewTrack(
         }.getOrNull()
         if (bytes != null) decodeInto(slot, entry.format, bytes, entry.timeUs) else release(slot)
         scheduleDrain()
+    }
+
+    /**
+     * Order of decoding around the scrub position: the slot itself, then the ones in the direction
+     * of the scrub before those behind it, so the next steps already have their frames.
+     */
+    private fun drainCost(slot: Int, focus: Int): Int {
+        val distance = abs(slot - focus)
+        val direction = scrubDirection
+        val behind = direction != 0 && (slot - focus) * direction < 0
+        return if (behind) distance * 2 else distance * 2 - 1
     }
 
     private fun deleteStaleSpools() {
