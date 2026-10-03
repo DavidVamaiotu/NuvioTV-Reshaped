@@ -32,6 +32,7 @@ internal fun UpdateChannelSettings(
     val channelName = when (state.updateChannel) {
         UpdateChannel.STABLE -> stringResource(R.string.update_channel_stable)
         UpdateChannel.BETA -> stringResource(R.string.update_channel_beta)
+        UpdateChannel.TESTER -> stringResource(R.string.reshaped_update_channel_tester) // Nuvio RS hook
     }
 
     SettingsActionRow(
@@ -77,6 +78,11 @@ internal fun UpdateChannelSettings(
                     value = UpdateChannel.BETA,
                     title = stringResource(R.string.update_channel_beta),
                     description = stringResource(R.string.update_channel_beta_description)
+                ),
+                SettingsPickerOption( // Nuvio RS hook: tester channel
+                    value = UpdateChannel.TESTER,
+                    title = stringResource(R.string.reshaped_update_channel_tester),
+                    description = stringResource(R.string.reshaped_update_channel_tester_description)
                 )
             ),
             selectedValue = state.updateChannel,
@@ -86,7 +92,7 @@ internal fun UpdateChannelSettings(
             },
             onDismiss = { showChannelDialog = false },
             width = 500.dp,
-            maxHeight = 320.dp
+            maxHeight = 420.dp
         )
     }
 }
