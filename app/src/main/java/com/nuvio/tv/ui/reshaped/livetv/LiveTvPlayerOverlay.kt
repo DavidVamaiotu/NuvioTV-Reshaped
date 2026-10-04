@@ -80,6 +80,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvCatchupLinks
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
+import com.nuvio.tv.reshaped.livetv.LiveTvRecorder
 import com.nuvio.tv.reshaped.livetv.LiveTvReplay
 import com.nuvio.tv.reshaped.livetv.LiveTvReplayWindow
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
@@ -355,6 +356,10 @@ internal class LiveTvPlayerState(
                 if (down && event.repeatCount == 0) openPanel()
                 true // also swallows the release, which would commit a seek
             }
+            KeyEvent.KEYCODE_MEDIA_RECORD -> {
+                if (down && event.repeatCount == 0) toggleRecording()
+                true
+            }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 // A live channel has nothing to seek to: ▶ opens the controls (audio, subtitles).
                 if (down && event.repeatCount == 0) {
@@ -431,6 +436,15 @@ internal class LiveTvPlayerState(
 
     /** Whether the player shows a past programme (catch-up) rather than the live channel. */
     internal fun isCatchup(): Boolean = LiveTvPlaybackRegistry.isCatchup(controller.currentStreamUrl)
+
+    /** A remote's REC key: starts recording the channel playing, or saves the recording. */
+    private fun toggleRecording() = controller.toggleLiveTvRecording()
+
+    /** A recording of anything but the channel playing now (switched, or the player left) is saved. */
+    internal fun stopOtherRecording() {
+        val recording = LiveTvRecorder.active.value ?: return
+        if (recording.playbackUrl != controller.currentStreamUrl || !isActive()) LiveTvRecorder.stop()
+    }
 
     /** The list entry of the channel playing (live or catch-up). */
     private fun currentChannel(): LiveTvChannel? =
@@ -618,6 +632,8 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
     }
     LiveTvFrameRateMatch(state, uiState)
     LiveTvReplayFollow(state)
+    LiveTvRecordingFollow(state, uiState)
+    LiveTvRecordingBadge(showControls = uiState.showControls)
     // Only after an error screen: elsewhere the player's own focus handling stands.
     val hasError = uiState.error != null
     var hadError by remember { mutableStateOf(false) }
@@ -663,6 +679,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         }
     }
 
+    val recording by LiveTvRecorder.active.collectAsStateWithLifecycle()
     val details by rememberLiveTvStreamDetails(state.player, state.infoOpen)
     AnimatedVisibility(
         visible = state.infoOpen && current != null && !uiState.showControls && !state.panelOpen,
@@ -679,6 +696,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
                 number = currentIndex + 1,
                 clock = clock,
                 startOver = remember(channel, liveState.currentProgrammes, clock.value / 60_000L) { state.startOverProgramme(channel) != null },
+                recording = recording != null,
             )
         }
     }
@@ -776,6 +794,7 @@ private fun LiveTvInfoCard(
     number: Int,
     clock: State<Long>,
     startOver: Boolean,
+    recording: Boolean,
 ) {
     // Read once per minute tick: the kept guide is a map lookup.
     val next = remember(channel.guideKey, now, clock.value / 60_000L) { LiveTvRepository.nextProgramme(channel.guideKey) }
@@ -873,7 +892,8 @@ private fun LiveTvInfoCard(
                 }
             }
             Text(
-                text = stringResource(if (startOver) R.string.live_tv_info_hint_start_over else R.string.live_tv_info_hint),
+                text = stringResource(if (startOver) R.string.live_tv_info_hint_start_over else R.string.live_tv_info_hint) +
+                    "  ·  " + stringResource(if (recording) R.string.live_tv_info_hint_stop_recording else R.string.live_tv_info_hint_record),
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.62f),
                 modifier = Modifier.padding(top = 10.dp),
