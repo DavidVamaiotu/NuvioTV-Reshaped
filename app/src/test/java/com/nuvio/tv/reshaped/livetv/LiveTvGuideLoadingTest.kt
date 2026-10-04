@@ -136,6 +136,44 @@ class LiveTvGuideLoadingTest {
         assertEquals("Second", guide.schedule.getValue(second.guideKey).single().title)
     }
 
+    @Test fun aNameMatchWithTheChannelsOwnCountryTagWins() {
+        val selected = channel("one", "UK: Discovery", null)
+        val guide = read("""
+            <tv>
+              <channel id="us"><display-name>US: Discovery</display-name></channel>
+              <channel id="uk"><display-name>UK | Discovery</display-name></channel>
+              <programme channel="us" start="20261002080000 +0000" stop="20261002090000 +0000"><title>American</title></programme>
+              <programme channel="uk" start="20261002080000 +0000" stop="20261002090000 +0000"><title>British</title></programme>
+              <programme channel="us" start="20261002090000 +0000" stop="20261002100000 +0000"><title>American later</title></programme>
+            </tv>
+        """.trimIndent(), listOf(selected))
+        assertEquals(listOf("British"), guide.schedule.getValue(selected.guideKey).map { it.title })
+        // With no guide channel of its own country, another's still feeds it, as before.
+        val other = read("""
+            <tv>
+              <channel id="us"><display-name>US: Discovery</display-name></channel>
+              <programme channel="us" start="20261002080000 +0000" stop="20261002090000 +0000"><title>American</title></programme>
+            </tv>
+        """.trimIndent(), listOf(selected))
+        assertEquals("American", other.schedule.getValue(selected.guideKey).single().title)
+        assertEquals("uk", liveTvNameTag("UK: Discovery"))
+        assertEquals(null, liveTvNameTag("VRT 1"))
+    }
+
+    @Test fun channelsWithTheSameLinkShareAGuide() {
+        val provider = channel("one", "VRT 1", "provider.id")
+        val copy = channel("two", "VRT 1", "VRT1.be").copy(streamUrl = provider.streamUrl)
+        val groups = liveTvSameStreamKeys(listOf(provider, copy))
+        assertEquals(listOf(listOf(provider.guideKey, copy.guideKey)), groups)
+        val programmes = read(xml("Shared"), listOf(channel("x"))).schedule.values.single()
+        val filled = mapOf(copy.guideKey to programmes).sharedAcrossStreams(groups)
+        assertEquals(programmes, filled[provider.guideKey])
+        // A channel with a guide of its own keeps it.
+        val own = mapOf(provider.guideKey to programmes, copy.guideKey to emptyList())
+        assertEquals(programmes, own.sharedAcrossStreams(groups)[copy.guideKey])
+        assertTrue(liveTvSameStreamKeys(listOf(provider, channel("two", "VRT 1", "VRT1.be"))).isEmpty())
+    }
+
     @Test fun exactIdWinsOverAnotherChannelsNameMatch() {
         val selected = channel("one")
         val guide = read("""

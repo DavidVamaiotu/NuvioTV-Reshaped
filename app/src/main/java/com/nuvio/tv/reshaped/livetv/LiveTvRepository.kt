@@ -1504,6 +1504,9 @@ object LiveTvRepository {
         val guideFiles = epgUrls.map { File(guideDir(), "guide_${Integer.toHexString(it.hashCode())}.xml.gz") }
         val cacheFile = File(guideDir(), LiveTvGuideCache.FILE_NAME)
         val catchupKeys = channels.mapNotNullTo(HashSet()) { channel -> channel.guideKey.takeIf { channel.catchup != null } }
+        // A channel two sources list with the same link (a provider's and an edited copy of its
+        // playlist) is one channel: the copy whose guide has nothing shows the other's.
+        val sameStream = liveTvSameStreamKeys(channels)
         // Names (and missing logos) decide name matches and guide logos: a list that renames
         // channels keeping their ids must not be served the matches kept for the old names.
         val cacheKey = LiveTvGuideCache.key(epgUrls, guideKeys, window, catchupKeys) * 31 + liveTvGuideMatchingKey(channels)
@@ -1542,15 +1545,19 @@ object LiveTvRepository {
                 guideDir().listFiles()?.filter { it !in guideFiles && it != cacheFile }?.forEach(File::delete)
             }
             var schedule: LiveTvSchedule = keptSchedule
+            // [schedule] with channels sharing a link filled in from each other: what is shown.
+            var shown: LiveTvSchedule = keptSchedule
             var nextReadAtMs = 0L
             var firstRead = true
             // Until then what is on now stays as it is: the minute tick skips working it out again.
             var changeAtMs = 0L
             var lastTickMs = 0L
             val publishGuide = { kept: LiveTvSchedule, logos: Map<String, String>?, nowMs: Long, failedLinks: Set<String>? ->
-                if (epgGeneration == generation) keptSchedule = kept
-                val current = currentProgrammes(kept, guideKeys, nowMs)
-                val guides = failedLinks?.let { guideStates(sourceLinks, it, kept, channels) }
+                val filled = kept.sharedAcrossStreams(sameStream)
+                shown = filled
+                if (epgGeneration == generation) keptSchedule = filled
+                val current = currentProgrammes(filled, guideKeys, nowMs)
+                val guides = failedLinks?.let { guideStates(sourceLinks, it, filled, channels) }
                 _uiState.update { state ->
                     if (epgGeneration != generation) {
                         state
@@ -1669,8 +1676,8 @@ object LiveTvRepository {
                 }
                 // The clock set back also works it out again.
                 if (nowMs >= changeAtMs || nowMs < lastTickMs) {
-                    val current = currentProgrammes(schedule, guideKeys, nowMs)
-                    changeAtMs = nextProgrammeChange(schedule, guideKeys, nowMs)
+                    val current = currentProgrammes(shown, guideKeys, nowMs)
+                    changeAtMs = nextProgrammeChange(shown, guideKeys, nowMs)
                     _uiState.update { state ->
                         when {
                             epgGeneration != generation -> state
