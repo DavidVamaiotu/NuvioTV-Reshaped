@@ -63,6 +63,8 @@ object LiveTvRepository {
     private const val EPG_MIN_READ_GAP_MS = 60L * 60 * 1000
     /** A guide that could not be read is tried again sooner. */
     private const val EPG_RETRY_MS = 30L * 60 * 1000
+    /** Added to a guide's rank for a channel it matched only by name (see startEpg). */
+    private const val NAME_MATCH_RANK = 1_000_000
     /** A held ▲ moving a playlist channel is saved once it pauses this long. */
     private const val LIST_SAVE_DELAY_MS = 600L
     /**
@@ -1609,9 +1611,14 @@ object LiveTvRepository {
                                 }
                                 if (!guide.complete) partial = true
                                 if (guide.refreshFailed) failedLinks += epgUrl
-                                // A channel's own playlist's guides first, in its order; then the others'.
-                                fun rank(key: String): Int = sourceLinks[sourceForKey[key]]?.indexOf(epgUrl)
-                                    ?.takeIf { it >= 0 } ?: (epgUrls.size + index)
+                                // A guide that has the channel's guide id beats one that only found its name, so
+                                // an id the viewer assigned in the playlist is what shows (as in other players);
+                                // then a channel's own playlist's guides first, in its order; then the others'.
+                                fun rank(key: String): Int {
+                                    val order = sourceLinks[sourceForKey[key]]?.indexOf(epgUrl)
+                                        ?.takeIf { it >= 0 } ?: (epgUrls.size + index)
+                                    return if (key in guide.nameMatched) NAME_MATCH_RANK + order else order
+                                }
                                 guide.schedule.forEach { (key, list) ->
                                     val priority = rank(key)
                                     if (priority < (scheduleRanks[key] ?: Int.MAX_VALUE)) {

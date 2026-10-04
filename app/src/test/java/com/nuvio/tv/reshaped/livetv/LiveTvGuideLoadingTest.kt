@@ -67,6 +67,21 @@ class LiveTvGuideLoadingTest {
         assertEquals(setOf(one.guideKey, two.guideKey), guide.schedule.keys)
     }
 
+    @Test fun guidesSayWhichChannelsTheyFoundOnlyByName() {
+        // The playlist assigns "shared"; a guide without that id still finds the channel by name.
+        val selected = channel("one")
+        val byName = read("""
+            <tv>
+              <channel id="news.other"><display-name>News</display-name></channel>
+              <programme channel="news.other" start="20261002080000 +0000" stop="20261002090000 +0000"><title>Name guide</title></programme>
+            </tv>
+        """.trimIndent(), listOf(selected))
+        val byId = read(xml("Assigned guide"), listOf(selected))
+        assertTrue(selected.guideKey in byName.nameMatched)
+        assertFalse(selected.guideKey in byId.nameMatched)
+        assertTrue(selected.guideKey in byName.afterFailedRefresh().nameMatched)
+    }
+
     @Test fun exactIdWinsOverAnotherChannelsNameMatch() {
         val selected = channel("one")
         val guide = read("""

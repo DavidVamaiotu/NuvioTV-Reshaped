@@ -137,6 +137,8 @@ internal class LiveTvGuide(
     val elements: Int = 0,
     /** A refresh failed and this is the last good saved guide; retry sooner without hiding it. */
     val refreshFailed: Boolean = false,
+    /** Keys this guide found only by the channel's name, not by its guide id: another guide's id match wins. */
+    val nameMatched: Set<String> = emptySet(),
 ) {
     val canReplaceSavedGuide: Boolean get() = complete && elements > 0 && !refreshFailed
 
@@ -144,7 +146,7 @@ internal class LiveTvGuide(
     fun hasAhead(nowEpochMs: Long): Boolean =
         schedule.values.any { programmes -> programmes.isNotEmpty() && programmes.last().stopEpochMs > nowEpochMs }
 
-    fun afterFailedRefresh(): LiveTvGuide = LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true)
+    fun afterFailedRefresh(): LiveTvGuide = LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true, nameMatched = nameMatched)
 }
 
 /** Imports finish independently; neither a slow source nor completion order changes EPG priority. */
@@ -420,6 +422,7 @@ internal class LiveTvScheduleBuilder(
         val direct = directKeys(channelId)
         if (direct != null) {
             claimed.addAll(direct)
+            idMatched.addAll(direct)
             if (icon != null) direct.forEach { if (it in request.keysWithoutLogo) logos[it] = icon }
             return
         }
@@ -458,6 +461,8 @@ internal class LiveTvScheduleBuilder(
     /** The guide channel feeding each channel key, and whether it matched by id. */
     private val feeders = HashMap<String, String>()
     private val nameFed = HashSet<String>()
+    /** Keys a guide channel matched by id: by `<channel>` or by programmes. */
+    private val idMatched = HashSet<String>()
 
     /**
      * Of [keys], the ones guide channel [channelId] feeds: one guide channel per channel key. A
@@ -467,6 +472,7 @@ internal class LiveTvScheduleBuilder(
      */
     private fun ownKeys(channelId: String, keys: List<String>, direct: Boolean): List<String>? {
         var all = true
+        if (direct) idMatched.addAll(keys)
         for (key in keys) {
             val feeder = feeders[key]
             when {
@@ -582,11 +588,16 @@ internal class LiveTvScheduleBuilder(
     }
 
     fun build(complete: Boolean = true): LiveTvGuide {
+        // Name matches settle here too when the guide had no programme for them (their logos still count).
+        if (!channelsDone) finishChannels()
+        val nameMatched = HashSet<String>()
+        aliases.values.forEach { keys -> keys.forEach { if (it !in idMatched) nameMatched += it } }
+        nameFed.forEach { if (it !in idMatched) nameMatched += it }
         val schedule = HashMap<String, List<LiveTvProgramme>>(entries.size * 2)
         entries.forEach { (key, list) -> schedule[key] = liveTvWithoutOverlaps(list.sortedBy { it.startEpochMs }) }
         if (window.detailsPerChannel > 0) keepDetails(schedule)
         titles.clear()
-        return LiveTvGuide(schedule = schedule, logos = logos, truncated = truncated, complete = complete, elements = elements)
+        return LiveTvGuide(schedule = schedule, logos = logos, truncated = truncated, complete = complete, elements = elements, nameMatched = nameMatched)
     }
 
     /**
