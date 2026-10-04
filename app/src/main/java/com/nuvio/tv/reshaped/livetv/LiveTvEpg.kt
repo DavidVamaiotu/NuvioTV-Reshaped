@@ -97,7 +97,7 @@ internal class LiveTvGuideRequest(
             channels.forEach { channel ->
                 if (channel.catchup != null) catchup += channel.guideKey
                 if (!keys.add(channel.guideKey)) return@forEach
-                channel.tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase()?.let { id ->
+                channel.tvgId?.let(::liveTvGuideId)?.takeIf(String::isNotEmpty)?.let { id ->
                     byId.getOrPut(id) { ArrayList(1) } += channel.guideKey
                 }
                 val name = liveTvNameKey(channel.name)
@@ -230,7 +230,7 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
             when {
                 parser.name.equals("programme", ignoreCase = true) -> {
                     builder.elements++
-                    val channelId = parser.getAttributeValue(null, "channel")?.trim()?.lowercase()
+                    val channelId = parser.getAttributeValue(null, "channel")?.let(::liveTvGuideId)
                     val keys = channelId?.let(builder::keysFor)
                     if (keys == null || channelId == null) {
                         parser.skipElement()
@@ -252,7 +252,7 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
                 }
                 parser.name.equals("channel", ignoreCase = true) -> {
                     builder.elements++
-                    val channelId = parser.getAttributeValue(null, "id")?.trim()?.lowercase()
+                    val channelId = parser.getAttributeValue(null, "id")?.let(::liveTvGuideId)
                     if (channelId == null) parser.skipElement() else parser.readChannel(channelId, builder)
                 }
             }
@@ -382,9 +382,13 @@ internal class LiveTvScheduleBuilder(
     private val truncated = HashSet<String>()
     /** Guide channels and programmes met, kept or not. */
     var elements = 0
-    /** Guide channel ids that feed channels matched by name, not by id. */
-    private val aliases = HashMap<String, List<String>>()
-    /** Keys some guide channel already feeds: one guide channel per list channel. */
+    /**
+     * Guide channel ids that may feed channels by name, in the guide's order. Several can name
+     * one channel ("VRT 1" and "VRT 1 HD", or an id of its own with no programmes): the first
+     * whose programmes come feeds it, see [ownKeys].
+     */
+    private val aliases = LinkedHashMap<String, List<String>>()
+    /** Keys a guide `<channel>` has by id: their logo is that one's, never a name match's. */
     private val claimed = HashSet<String>()
     private val icons = HashMap<String, String>()
     private val logos = HashMap<String, String>()
@@ -434,19 +438,17 @@ internal class LiveTvScheduleBuilder(
         }
     }
 
-    /** Name matches only feed channels whose own id is not in the guide, each from one guide channel. */
+    /**
+     * Name matches feed a channel only while its own id brings no programmes, each from one guide
+     * channel ([ownKeys]); for a logo, the first guide channel with the name gives it.
+     */
     private fun finishChannels() {
         channelsDone = true
         if (aliases.isEmpty()) return
-        val resolved = HashMap<String, List<String>>(aliases.size)
         aliases.forEach { (channelId, keys) ->
-            val free = keys.filter { claimed.add(it) }
-            if (free.isEmpty()) return@forEach
-            resolved[channelId] = free
-            icons[channelId]?.let { icon -> free.forEach { if (it in request.keysWithoutLogo) logos.putIfAbsent(it, icon) } }
+            val icon = icons[channelId] ?: return@forEach
+            keys.forEach { key -> if (key !in claimed && key in request.keysWithoutLogo) logos.putIfAbsent(key, icon) }
         }
-        aliases.clear()
-        aliases.putAll(resolved)
         icons.clear()
     }
 
@@ -590,9 +592,8 @@ internal class LiveTvScheduleBuilder(
     fun build(complete: Boolean = true): LiveTvGuide {
         // Name matches settle here too when the guide had no programme for them (their logos still count).
         if (!channelsDone) finishChannels()
-        val nameMatched = HashSet<String>()
+        val nameMatched = HashSet<String>(nameFed)
         aliases.values.forEach { keys -> keys.forEach { if (it !in idMatched) nameMatched += it } }
-        nameFed.forEach { if (it !in idMatched) nameMatched += it }
         val schedule = HashMap<String, List<LiveTvProgramme>>(entries.size * 2)
         entries.forEach { (key, list) -> schedule[key] = liveTvWithoutOverlaps(list.sortedBy { it.startEpochMs }) }
         if (window.detailsPerChannel > 0) keepDetails(schedule)
@@ -767,7 +768,8 @@ private val NAME_TAG_ENDS = charArrayOf(':', '|', ']', ')')
  * A channel name reduced for matching a playlist's name with a guide's: lower case, no country
  * tag, no quality words, letters and digits only ("UK: BBC One HD" and "BBC One" are both "bbcone").
  */
-internal fun liveTvNameKey(name: String): String {
+internal fun liveTvNameKey(raw: String): String {
+    val name = raw.composed()
     // Every tag ends in one of these: most names have none and skip the pattern (it runs per channel and per guide name).
     val untagged = if (name.indexOfAny(NAME_TAG_ENDS) < 0) name else NAME_TAG.replaceFirst(name, "")
     val out = StringBuilder(untagged.length)
@@ -790,6 +792,16 @@ internal fun liveTvNameKey(name: String): String {
     flush()
     return out.toString()
 }
+
+/**
+ * An XMLTV id as matched: trimmed, lower case, accents in one form. A playlist and a guide made by
+ * different tools can write "één.be" with the accent as its own mark, which looks the same.
+ */
+internal fun liveTvGuideId(id: String): String = id.trim().composed().lowercase()
+
+/** [this] in Unicode's composed form (NFC); plain ASCII, nearly every id and name, is returned as is. */
+private fun String.composed(): String =
+    if (all { it < '\u0080' }) this else java.text.Normalizer.normalize(this, java.text.Normalizer.Form.NFC)
 
 /** The key a channel's guide is kept under: its guide id in lower case, else its name. */
 internal fun liveTvGuideKey(tvgId: String?, name: String, sourceId: String = ""): String {

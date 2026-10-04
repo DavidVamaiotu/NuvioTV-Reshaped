@@ -82,6 +82,44 @@ class LiveTvGuideLoadingTest {
         assertTrue(selected.guideKey in byName.afterFailedRefresh().nameMatched)
     }
 
+    @Test fun aNameMatchFillsInForAnIdWithoutProgrammes() {
+        // The guide lists the assigned id, but its programmes are under another entry with the name.
+        val selected = channel("one", "VRT 1", "VRT1.be")
+        val guide = read("""
+            <tv>
+              <channel id="VRT1.be"><display-name>VRT 1</display-name></channel>
+              <channel id="Een.be"><display-name>VRT 1</display-name></channel>
+              <programme channel="Een.be" start="20261002080000 +0000" stop="20261002090000 +0000"><title>Named</title></programme>
+            </tv>
+        """.trimIndent(), listOf(selected))
+        assertEquals("Named", guide.schedule.getValue(selected.guideKey).single().title)
+        assertTrue(selected.guideKey in guide.nameMatched)
+    }
+
+    @Test fun theGuideChannelWithProgrammesFeedsANameShownTwice() {
+        val selected = channel("one", "VRT 1", "not.in.guide")
+        val guide = read("""
+            <tv>
+              <channel id="vrt1.hd"><display-name>VRT 1 HD</display-name></channel>
+              <channel id="vrt1.be"><display-name>VRT 1</display-name></channel>
+              <programme channel="vrt1.be" start="20261002080000 +0000" stop="20261002090000 +0000"><title>Listed</title></programme>
+            </tv>
+        """.trimIndent(), listOf(selected))
+        assertEquals("Listed", guide.schedule.getValue(selected.guideKey).single().title)
+    }
+
+    @Test fun idsMatchWhicheverWayTheirAccentsAreWritten() {
+        // "Één.be" with separate accent marks in the playlist, composed letters in the guide.
+        val selected = channel("one", "Een", "E\u0301e\u0301n.be")
+        val guide = read("""
+            <tv>
+              <programme channel="${"\u00c9\u00e9n.be"}" start="20261002080000 +0000" stop="20261002090000 +0000"><title>Accented</title></programme>
+            </tv>
+        """.trimIndent(), listOf(selected))
+        assertEquals("Accented", guide.schedule.getValue(selected.guideKey).single().title)
+        assertEquals(liveTvNameKey("\u00c9\u00e9n"), liveTvNameKey("E\u0301e\u0301n"))
+    }
+
     @Test fun exactIdWinsOverAnotherChannelsNameMatch() {
         val selected = channel("one")
         val guide = read("""
