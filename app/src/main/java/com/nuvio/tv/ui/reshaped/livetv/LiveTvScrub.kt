@@ -51,7 +51,7 @@ import kotlinx.coroutines.delay
 internal class LiveTvScrub(val channel: LiveTvChannel, fromMs: Long, targetMs: Long) {
     /** The start of the bar: the show's start (earlier ones are added by going past it). */
     var fromMs by mutableLongStateOf(fromMs)
-    /** The time OK plays from. */
+    /** The time played from once the keys rest (or OK is pressed). */
     var targetMs by mutableLongStateOf(targetMs)
 }
 
@@ -74,9 +74,6 @@ internal object LiveTvScrubSteps {
         val start = programme?.startEpochMs ?: (atMs - NO_GUIDE_SPAN_MS)
         return start.coerceAtLeast(earliestMs)
     }
-
-    /** A replay starts on a whole minute (Xtream panels only take minutes). */
-    fun replayStart(targetMs: Long): Long = targetMs - Math.floorMod(targetMs, MINUTE_MS)
 }
 
 /**
@@ -103,7 +100,9 @@ internal fun LiveTvScrubBar(scrub: LiveTvScrub) {
         animationSpec = tween(100),
         label = "rewind",
     )
-    val accentBrush = NuvioTheme.palette.accentBrush()
+    // Made once per theme, not on each tick of the clock.
+    val palette = NuvioTheme.palette
+    val accentBrush = remember(palette) { palette.accentBrush() }
     Column(
         modifier = Modifier
             .fillMaxWidth()

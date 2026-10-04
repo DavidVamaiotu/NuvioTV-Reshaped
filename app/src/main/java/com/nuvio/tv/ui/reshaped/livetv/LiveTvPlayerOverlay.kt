@@ -489,10 +489,17 @@ internal class LiveTvPlayerState(
             if (earlier < bar.fromMs) bar.fromMs = earlier
         }
         bar.targetMs = (bar.targetMs + direction * LiveTvScrubSteps.stepMs(repeatCount)).coerceIn(bar.fromMs, now)
+        // A key held down again keeps the bar up.
+        scrubJob?.cancel()
+        scrubJob = null
+    }
+
+    /** As the player's own bar does after ◀▶ are let go: plays from the time picked once the keys rest. */
+    private fun settleScrub() {
         scrubJob?.cancel()
         scrubJob = scope.launch {
-            delay(SCRUB_IDLE_MS)
-            closeScrub()
+            delay(SCRUB_SETTLE_MS)
+            commitScrub()
         }
     }
 
@@ -513,7 +520,7 @@ internal class LiveTvPlayerState(
             if (isCatchup()) switchTo(channel)
             return
         }
-        val start = LiveTvScrubSteps.replayStart(bar.targetMs)
+        val start = bar.targetMs
         switchJob?.cancel()
         switchJob = scope.launch {
             val replay = LiveTvRepository.replayChannel(channel, start)
@@ -529,14 +536,14 @@ internal class LiveTvPlayerState(
         }
     }
 
-    /** Keys while the rewind bar shows: ◀▶ move, OK plays from there, Back leaves it. */
+    /** Keys while the rewind bar shows: ◀▶ move (played from once let go), OK plays at once, Back leaves it. */
     private fun onScrubKey(event: KeyEvent, down: Boolean, uiState: PlayerUiState): Boolean {
         if (panelOpen || uiState.showControls) {
             closeScrub()
             return false
         }
         when (event.keyCode) {
-            in SCRUB_KEYS -> if (down) stepScrub(if (event.keyCode in BACK_SCRUB_KEYS) -1 else 1, event.repeatCount)
+            in SCRUB_KEYS -> if (down) stepScrub(if (event.keyCode in BACK_SCRUB_KEYS) -1 else 1, event.repeatCount) else settleScrub()
             in OK_KEYS -> if (down && event.repeatCount == 0) {
                 scrubOkDown = true
             } else if (!down && scrubOkDown) {
@@ -707,8 +714,8 @@ internal class LiveTvPlayerState(
         /** A replay this near to now goes live rather than asking for a few seconds more. */
         const val REPLAY_CAUGHT_UP_MS = 90_000L
         const val INFO_MS = 6_000L
-        /** The rewind bar goes after this long without a key. */
-        const val SCRUB_IDLE_MS = 10_000L
+        /** After ◀▶ are let go, the rewind bar waits this long for another press before playing from there. */
+        const val SCRUB_SETTLE_MS = 1_200L
         val SCRUB_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)
         val BACK_SCRUB_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND)
         val OK_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)

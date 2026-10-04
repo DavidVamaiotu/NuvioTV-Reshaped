@@ -721,15 +721,19 @@ object LiveTvRepository {
      * programme on at [startMs]), never past now, so the player shows the programme's own length.
      * The player asks for the next part, or goes live, as it gets to the end.
      */
-    suspend fun replayChannel(channel: LiveTvChannel, startMs: Long, programmeEndMs: Long = replayPartEnd(channel, startMs)): LiveTvReplay? {
+    suspend fun replayChannel(channel: LiveTvChannel, fromMs: Long, programmeEndMs: Long = replayPartEnd(channel, fromMs)): LiveTvReplay? {
         val catchup = channel.catchup ?: return null
         val now = LiveTvClock.nowEpochMs()
-        if (!LiveTvCatchupLinks.isPlayableFrom(catchup, startMs, now)) return null
         // Only an Xtream panel answers its /timeshift/ form; other "shift" servers take ?utc=.
         val source = _uiState.value.sources.firstOrNull { it.id == channel.sourceId }
         val xtreamPanel = source == null || source.type == LiveTvSourceType.Xtream ||
             (source.type == LiveTvSourceType.M3u && xtreamGuideUrlFor(source.url) != null)
-        val zone = if (LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup, xtreamPanel)) {
+        val panelLink = LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup, xtreamPanel)
+        // A panel's /timeshift/ link names whole minutes: the replay starts on the minute, and its
+        // window says so, so the position shown (and a rewind from it) matches what plays.
+        val startMs = if (panelLink) fromMs - Math.floorMod(fromMs, 60_000L) else fromMs
+        if (!LiveTvCatchupLinks.isPlayableFrom(catchup, startMs, now)) return null
+        val zone = if (panelLink) {
             LiveTvCatchupLinks.xtreamLogin(channel.streamUrl)?.let { (server, user, pass) -> LiveTvXtream.zone(server, user, pass, source?.userAgent.orEmpty()) }
         } else {
             null
