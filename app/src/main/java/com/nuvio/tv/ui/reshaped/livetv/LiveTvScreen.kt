@@ -99,6 +99,7 @@ import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvCustomList
 import com.nuvio.tv.reshaped.livetv.LiveTvPreferences
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
+import com.nuvio.tv.reshaped.livetv.LiveTvRecorder
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewSoundEnabled
 import com.nuvio.tv.reshaped.livetv.rememberLiveTvPreviewsEnabled
@@ -232,6 +233,7 @@ fun LiveTvScreen(
     var settingsFocused by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var showPlaylists by remember { mutableStateOf(false) }
+    var showRecordings by remember { mutableStateOf(false) }
     // Naming a new playlist (from "+ New playlist" in the categories).
     var naming by remember { mutableStateOf(false) }
     // Categories, search and settings slide in beside the channels on ◀ (or Back), and away again
@@ -503,7 +505,7 @@ fun LiveTvScreen(
                     // The guide keeps six channels; the header (description, preview) takes the rest.
                     modifier = Modifier.weight(1f),
                     playVideo = (gridFocused || settingsFocused || (categoriesOpen && screenFocused)) && started && !launching &&
-                        !showSourceDialog && !showCategoryDialog && !showMenu && !showPlaylists &&
+                        !showSourceDialog && !showCategoryDialog && !showMenu && !showPlaylists && !showRecordings &&
                         !naming && editingList == null,
                 )
                 Spacer(Modifier.height(NuvioTheme.spacing.sm))
@@ -624,6 +626,18 @@ fun LiveTvScreen(
     if (showPlaylists) {
         LiveTvPlaylistsDialog(onDismiss = { showPlaylists = false })
     }
+    if (showRecordings) {
+        LiveTvRecordingsDialog(
+            onPlay = { file ->
+                showRecordings = false
+                // The player needs the decoder the preview holds.
+                preview.release()
+                LiveTvRecorder.prepareFrameRate(file)
+                onPlay(liveTvRecordingRoute(file, viewModel.profileId))
+            },
+            onDismiss = { showRecordings = false },
+        )
+    }
     editingList?.let { id ->
         LiveTvPlaylistsDialog(onDismiss = { editingList = null }, openOnly = id)
     }
@@ -646,7 +660,7 @@ fun LiveTvScreen(
         )
     }
     // A closed dialog gives the focus back where the viewer was, so ◀▶ never find nothing focused.
-    val anyDialog = showSourceDialog || showCategoryDialog || showPlaylists || editingList != null || naming ||
+    val anyDialog = showSourceDialog || showCategoryDialog || showPlaylists || showRecordings || editingList != null || naming ||
         showMenu
     var hadDialog by remember { mutableStateOf(false) }
     LaunchedEffect(anyDialog) {
@@ -681,6 +695,10 @@ fun LiveTvScreen(
             onPlaylists = {
                 showMenu = false
                 showPlaylists = true
+            },
+            onRecordings = {
+                showMenu = false
+                showRecordings = true
             },
             onDismiss = { showMenu = false },
         )
@@ -731,6 +749,7 @@ private fun LiveTvMenuDialog(
     onEditCategories: () -> Unit,
     onSources: () -> Unit,
     onPlaylists: () -> Unit,
+    onRecordings: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -773,6 +792,11 @@ private fun LiveTvMenuDialog(
                 title = stringResource(R.string.live_tv_my_playlists),
                 description = stringResource(R.string.live_tv_menu_playlists_description),
                 onClick = onPlaylists,
+            )
+            LiveTvMenuRow(
+                title = stringResource(R.string.live_tv_recordings),
+                description = stringResource(R.string.live_tv_menu_recordings_description),
+                onClick = onRecordings,
             )
             LiveTvMenuRow(
                 title = stringResource(R.string.live_tv_menu_reload),

@@ -209,7 +209,8 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                 PlayerMemoryReporter.snapshot(context)
         )
         PlayerMemoryReporter.startSampling(context)
-        val useChunkSessionSource = useParallelConnections && !isHls && !isDash
+        val useChunkSessionSource = useParallelConnections && !isHls && !isDash &&
+            !com.nuvio.tv.reshaped.livetv.LiveTvRecorder.isLocalFile(url) // Nuvio RS hook: Live TV recordings play from disk
         parallelStartupPrefetchUnlocked.set(!useChunkSessionSource)
         val networkUpstreamFactory: DataSource.Factory = if (useChunkSessionSource) {
             val okHttpFactory = OkHttpDataSource.Factory(playbackHttpClient).apply {
@@ -288,7 +289,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         val defaultSourceFactory = if (subtitleConfigurations.isNotEmpty()) {
             SubtitleRoutingDataSourceFactory(progressiveFactory, url, headers, subtitleRoutes)
         } else {
-            progressiveFactory
+            com.nuvio.tv.reshaped.livetv.LiveTvRecorder.tee(progressiveFactory, url) // Nuvio RS hook: Live TV recording
         }
         val defaultFactory = DefaultMediaSourceFactory(defaultSourceFactory, extractorsFactory).apply {
             setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
@@ -307,7 +308,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
         }
 
         val mediaSource = when {
-            isHls && !forceDefaultFactory -> HlsMediaSource.Factory(httpDataSourceFactory)
+            isHls && !forceDefaultFactory -> HlsMediaSource.Factory(com.nuvio.tv.reshaped.livetv.LiveTvRecorder.tee(httpDataSourceFactory, url)) // Nuvio RS hook: Live TV recording
                 .setAllowChunklessPreparation(true)
                 .setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
                 .createMediaSource(mediaItem)

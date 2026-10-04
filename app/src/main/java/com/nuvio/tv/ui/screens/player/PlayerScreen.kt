@@ -65,6 +65,9 @@ import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.FiberManualRecord // Nuvio RS hook: Live TV recording
+import androidx.compose.material.icons.filled.Stop // Nuvio RS hook: Live TV recording
+import com.nuvio.tv.ui.reshaped.livetv.toggleLiveTvRecording // Nuvio RS hook: Live TV recording
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -2361,6 +2364,19 @@ private fun PlayerControlsOverlay(
                         onDownKey = onHideControls,
                         onFocused = onResetHideTimer
                     )
+
+                    // Nuvio RS hook: Live TV recording
+                    if (com.nuvio.tv.ui.reshaped.livetv.isRecordableLiveTv(uiState.currentStreamUrl)) {
+                        val recordingThis = com.nuvio.tv.ui.reshaped.livetv.rememberLiveTvRecordingOf(uiState.currentStreamUrl)
+                        ControlButton(
+                            icon = if (recordingThis) Icons.Default.Stop else Icons.Default.FiberManualRecord,
+                            contentDescription = stringResource(if (recordingThis) R.string.live_tv_recording_stop else R.string.live_tv_recording_start),
+                            onClick = { viewModel.controller.toggleLiveTvRecording() },
+                            upFocusRequester = progressUpTarget,
+                            onDownKey = onHideControls,
+                            onFocused = onResetHideTimer
+                        )
+                    }
 
                     if (showNextEpisodeButton) {
                         ControlButton(
