@@ -814,14 +814,15 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
 
     AnimatedVisibility(
         visible = state.scrub != null && !uiState.showControls && !state.panelOpen,
-        enter = slideInVertically { it / 3 } + fadeIn(),
-        exit = slideOutVertically { it / 3 } + fadeOut(),
+        // As the player's own seek bar comes and goes.
+        enter = fadeIn(tween(150)),
+        exit = fadeOut(tween(150)),
         modifier = Modifier.align(Alignment.BottomCenter).zIndex(3f),
     ) {
         // The last bar stays drawn through the exit animation, after it has closed.
         val shown = remember { arrayOfNulls<LiveTvScrub>(1) }
         state.scrub?.let { shown[0] = it }
-        shown[0]?.let { bar -> LiveTvScrubCard(bar, liveState.logoFor(bar.channel)) }
+        shown[0]?.let { bar -> LiveTvScrubBar(bar) }
     }
 
     AnimatedVisibility(

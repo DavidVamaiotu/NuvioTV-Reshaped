@@ -1,21 +1,21 @@
 package com.nuvio.tv.ui.reshaped.livetv
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -25,20 +25,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
-import com.nuvio.tv.R
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.reshaped.livetv.LiveTvRepository
+import com.nuvio.tv.ui.screens.player.PlayerScrubRates
+import com.nuvio.tv.ui.theme.NuvioTheme
+import com.nuvio.tv.ui.theme.accentBrush
+import java.util.Locale
 import kotlinx.coroutines.delay
 
 /**
@@ -61,12 +62,8 @@ internal object LiveTvScrubSteps {
     /** This near to now plays the channel live. */
     const val LIVE_MARGIN_MS = 45_000L
 
-    /** Held ◀▶ repeat about 20 times a second: a minute at a time first, then faster. */
-    fun stepMs(repeatCount: Int): Long = when {
-        repeatCount < 10 -> MINUTE_MS
-        repeatCount < 40 -> 2 * MINUTE_MS
-        else -> 5 * MINUTE_MS
-    }
+    /** The player's own steps for a held ◀▶ (10 s growing to a minute), so rewinding feels the same. */
+    fun stepMs(repeatCount: Int): Long = PlayerScrubRates.stepMsForKeyRepeat(repeatCount)
 
     /**
      * Where the bar starts for a time [atMs]: the start of the programme on then in [schedule],
@@ -82,9 +79,12 @@ internal object LiveTvScrubSteps {
     fun replayStart(targetMs: Long): Long = targetMs - Math.floorMod(targetMs, MINUTE_MS)
 }
 
-/** The rewind bar, over the bottom of the picture like the info card. */
+/**
+ * The rewind bar, drawn as the player's own seek bar is when seeking on the bare picture (same
+ * track, accent fill, size, place and time text), from the bar's start to now.
+ */
 @Composable
-internal fun LiveTvScrubCard(scrub: LiveTvScrub, logo: String?) {
+internal fun LiveTvScrubBar(scrub: LiveTvScrub) {
     // Only while the bar shows: the live edge moves with the clock.
     val now by produceState(LiveTvClock.nowEpochMs()) {
         while (true) {
@@ -94,91 +94,63 @@ internal fun LiveTvScrubCard(scrub: LiveTvScrub, logo: String?) {
     }
     val target = scrub.targetMs
     val from = scrub.fromMs
-    val live = now - target < LiveTvScrubSteps.LIVE_MARGIN_MS
+    val span = (now - from).coerceAtLeast(1L)
     val programme = remember(scrub.channel.guideKey, target / 60_000L) {
         LiveTvRepository.schedule(scrub.channel.guideKey).firstOrNull { target >= it.startEpochMs && target < it.stopEpochMs }
     }
-    val shape = RoundedCornerShape(22.dp)
-    Row(
+    val progress by animateFloatAsState(
+        targetValue = ((target - from).toFloat() / span).coerceIn(0f, 1f),
+        animationSpec = tween(100),
+        label = "rewind",
+    )
+    val accentBrush = NuvioTheme.palette.accentBrush()
+    Column(
         modifier = Modifier
-            .padding(start = 48.dp, end = 48.dp, bottom = 36.dp)
-            .widthIn(max = 880.dp)
             .fillMaxWidth()
-            .clip(shape)
-            .background(LiveTvCardBackground)
-            .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
-            .padding(horizontal = 22.dp, vertical = 18.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = NuvioTheme.spacing.xxl, vertical = NuvioTheme.spacing.xl),
     ) {
-        LiveTvLogo(url = logo, name = scrub.channel.name, width = 104.dp, height = 64.dp)
-        Column(modifier = Modifier.weight(1f).padding(start = 20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(NuvioTheme.spacing.sm)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Color.White.copy(alpha = 0.3f)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(maxWidth * progress)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(accentBrush),
+                )
+            }
+            Spacer(modifier = Modifier.height(NuvioTheme.spacing.md))
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                // What the picked time is in (the player's bar has the film's name at the top instead).
                 Text(
                     text = programme?.title ?: scrub.channel.name,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.9f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).padding(end = NuvioTheme.spacing.md),
                 )
                 Text(
-                    text = if (live) {
-                        stringResource(R.string.live_tv_scrub_live)
-                    } else {
-                        stringResource(R.string.live_tv_scrub_behind, LiveTvClock.formatClock(target), ((now - target) / 60_000L).toInt())
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = Color.White.copy(alpha = if (live) 0.92f else 0.85f),
-                    maxLines = 1,
-                    modifier = Modifier.padding(start = 12.dp),
+                    text = "${formatScrubTime(target - from)} / ${formatScrubTime(now - from)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White.copy(alpha = 0.9f),
                 )
             }
-            ScrubBar(from = from, target = target, now = now, modifier = Modifier.padding(top = 14.dp))
-            Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                Text(
-                    text = LiveTvClock.formatClock(from),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.7f),
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                Text(
-                    text = stringResource(R.string.live_tv_scrub_live),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = Color.White.copy(alpha = 0.7f),
-                )
-            }
-            Text(
-                text = stringResource(R.string.live_tv_scrub_hint),
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.62f),
-                modifier = Modifier.padding(top = 8.dp),
-            )
         }
     }
 }
 
-/** From the bar's start to now, filled up to the picked time, with a knob there. */
-@Composable
-private fun ScrubBar(from: Long, target: Long, now: Long, modifier: Modifier = Modifier) {
-    val fraction = ((target - from).toFloat() / (now - from).coerceAtLeast(1L)).coerceIn(0f, 1f)
-    BoxWithConstraints(modifier = modifier.fillMaxWidth().height(14.dp), contentAlignment = Alignment.CenterStart) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .clip(LiveTvPillShape)
-                .background(Color.White.copy(alpha = 0.18f))
-                .drawBehind { drawRect(Color.White, size = Size(size.width * fraction, size.height)) },
-        )
-        val knob = 14.dp
-        Box(
-            modifier = Modifier
-                .offset(x = (maxWidth - knob) * fraction)
-                .size(knob)
-                .clip(CircleShape)
-                .background(Color.White),
-        )
-    }
+/** As the player writes times: 4:05, 1:02:09. */
+private fun formatScrubTime(millis: Long): String {
+    val seconds = (millis / 1000L).coerceAtLeast(0L)
+    val hours = seconds / 3600
+    val minutes = seconds % 3600 / 60
+    val secs = seconds % 60
+    return if (hours > 0) "%d:%02d:%02d".format(Locale.ROOT, hours, minutes, secs) else "%d:%02d".format(Locale.ROOT, minutes, secs)
 }

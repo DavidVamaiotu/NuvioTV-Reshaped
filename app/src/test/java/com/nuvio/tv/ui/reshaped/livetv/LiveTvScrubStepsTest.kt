@@ -20,9 +20,9 @@ class LiveTvScrubStepsTest {
         assertEquals(120 * minute, LiveTvScrubSteps.rangeStart(listOf(show), 130 * minute, 120 * minute))
     }
 
-    @Test fun heldKeysMoveFasterAndReplaysStartOnAMinute() {
-        assertEquals(minute, LiveTvScrubSteps.stepMs(0))
-        assertEquals(5 * minute, LiveTvScrubSteps.stepMs(100))
+    @Test fun heldKeysMoveLikeThePlayerAndReplaysStartOnAMinute() {
+        assertEquals(10_000L, LiveTvScrubSteps.stepMs(0))
+        assertEquals(minute, LiveTvScrubSteps.stepMs(100))
         assertEquals(130 * minute, LiveTvScrubSteps.replayStart(130 * minute + 59_999L))
     }
 }
