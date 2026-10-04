@@ -120,6 +120,22 @@ class LiveTvGuideLoadingTest {
         assertEquals(liveTvNameKey("\u00c9\u00e9n"), liveTvNameKey("E\u0301e\u0301n"))
     }
 
+    @Test fun channelsListedAmongTheProgrammesStillMatchByName() {
+        // Each <channel> right before its own programmes, as some generators write guides.
+        val first = channel("one", "VRT 1", null)
+        val second = channel("one", "Canvas", null).copy(id = "one/2", streamUrl = "https://one.example/2.ts")
+        val guide = read("""
+            <tv>
+              <channel id="a"><display-name>VRT 1</display-name></channel>
+              <programme channel="a" start="20261002080000 +0000" stop="20261002090000 +0000"><title>First</title></programme>
+              <channel id="b"><display-name>Canvas</display-name></channel>
+              <programme channel="b" start="20261002080000 +0000" stop="20261002090000 +0000"><title>Second</title></programme>
+            </tv>
+        """.trimIndent(), listOf(first, second))
+        assertEquals("First", guide.schedule.getValue(first.guideKey).single().title)
+        assertEquals("Second", guide.schedule.getValue(second.guideKey).single().title)
+    }
+
     @Test fun exactIdWinsOverAnotherChannelsNameMatch() {
         val selected = channel("one")
         val guide = read("""
@@ -186,6 +202,11 @@ class LiveTvGuideLoadingTest {
         assertFalse(truncated.complete)
         assertFalse(truncated.canReplaceSavedGuide)
         assertFalse(read("<html><body>Error</body></html>", listOf(selected)).canReplaceSavedGuide)
+        // Cut after a whole programme, and a second guide joined on and cut.
+        assertFalse(read(full.substringBefore("</tv>").trimEnd(), listOf(selected)).complete)
+        assertFalse(read(full + "\n" + full.substringBefore("</tv>"), listOf(selected)).complete)
+        assertTrue(read(full + "\n" + full, listOf(selected)).complete)
+        assertTrue(read("<tv/>", listOf(selected)).complete)
     }
 
     @Test fun staleFallbackKeepsProgrammesAndRequestsAnotherRefresh() {

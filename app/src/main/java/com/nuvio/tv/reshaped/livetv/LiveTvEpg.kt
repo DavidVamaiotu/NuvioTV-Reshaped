@@ -215,6 +215,12 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
     var events = 0
     var opened = false
     var closed = false
+    // Where the last event ended: relaxed reading closes what a cut file left open with end tags
+    // that take up no text, and a cut guide must not pass as complete.
+    var line = -1
+    var column = -1
+    // `<tv/>`: its end tag takes up no text either.
+    var emptyTv = false
     var event = parser.eventType
     while (event != XmlPullParser.END_DOCUMENT) {
         // Blocking IO thread: a cancelled load stops at the next check.
@@ -226,6 +232,9 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
                 if (closed && !parser.name.equals("tv", ignoreCase = true)) break
                 check(parser.name.equals("tv", ignoreCase = true)) { "Not an XMLTV guide" }
                 opened = true
+                // A further guide joined on must end properly too.
+                closed = false
+                emptyTv = runCatching { parser.isEmptyElementTag }.getOrDefault(false)
             }
             when {
                 parser.name.equals("programme", ignoreCase = true) -> {
@@ -257,7 +266,11 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
                 }
             }
         }
-        if (event == XmlPullParser.END_TAG && parser.depth == 1 && parser.name.equals("tv", ignoreCase = true)) closed = true
+        if (event == XmlPullParser.END_TAG && parser.depth == 1 && parser.name.equals("tv", ignoreCase = true)) {
+            closed = parser.lineNumber != line || parser.columnNumber != column || emptyTv
+        }
+        line = parser.lineNumber
+        column = parser.columnNumber
         event = parser.next()
     }
     check(opened && closed) { "Incomplete XMLTV guide" }
@@ -420,9 +433,11 @@ internal class LiveTvScheduleBuilder(
         }
     }
 
-    /** A `<channel>` of the guide ([channelId] lower case). Guides list these before their programmes. */
+    /**
+     * A `<channel>` of the guide ([channelId] lower case). Most guides list these before their
+     * programmes; some put each before its own programmes, or join guides end to end.
+     */
     fun channel(channelId: String, names: List<String>, icon: String?) {
-        if (channelsDone) return
         val direct = directKeys(channelId)
         if (direct != null) {
             claimed.addAll(direct)
@@ -433,7 +448,10 @@ internal class LiveTvScheduleBuilder(
         for (name in names) {
             val keys = request.keysByName[liveTvNameKey(name)] ?: continue
             aliases[channelId] = keys
-            if (icon != null) icons[channelId] = icon
+            if (icon != null) {
+                // Past the first programme, logos are given as the channels come.
+                if (channelsDone) keys.forEach { if (it !in claimed && it in request.keysWithoutLogo) logos.putIfAbsent(it, icon) } else icons[channelId] = icon
+            }
             return
         }
     }
