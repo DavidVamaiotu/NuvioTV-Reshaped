@@ -1,4 +1,6 @@
-- Live TV rewind: on a channel with catch-up, open the info card (OK) and press ◀ (or the remote's rewind key) to rewind, up to the start of the show and further back into earlier ones. The bar looks and moves like the player's own seek bar; let go and it plays from there. During a replay, ◀ ▶ move the same way, and going all the way right returns to live.
-- Live TV guide: an EPG id you assign in your playlist now wins over another guide that only matches the channel by name, so changing a channel's EPG assignment and pressing Refresh shows the right guide.
-- Live TV: Xtream panels that mark catch-up as "true" or a number of days now offer Start over and replays.
-- Live TV: Xtream replays start exactly where the bar says.
+- Live TV guide: a channel whose EPG id is listed without programmes, or whose name the EPG lists twice ("VRT 1" and "VRT 1 HD"), now shows the entry that has programmes instead of "No guide".
+- Live TV guide: EPG ids and names with accents match whichever way the playlist and the EPG write them.
+- Live TV guide: EPG files that list each channel next to its own programmes (or several guides joined together) now match every channel by name, not just the first.
+- Live TV guide: a guide download that was cut off part way no longer replaces the last good guide.
+- Live TV guide: when two sources list the same stream link (for example your provider and an edited copy of its playlist), a copy without a guide shows the other copy's programmes, in My playlists too.
+- Live TV guide: names with a country tag ("UK: Discovery") prefer the EPG entry of the same country over another country's.
