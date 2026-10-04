@@ -1,4 +1,4 @@
-- Live TV player: shows the programme the guide shows. Channels whose guide has an all-day "To Be Announced" entry no longer show it in fullscreen, replays or the channel's programme list.
-- Live TV guide: each show appears once (no more shows listed twice in a row).
-- Live TV guide: a short show, when selected, expands to show its title and moves the shows after it along instead of covering them.
-- From build 3: with the search bar highlighted, ▶ or ◀ goes straight to the settings button.
+- Live TV rewind: on a channel with catch-up, open the info card (OK) and press ◀ (or the remote's rewind key) to rewind, up to the start of the show and further back into earlier ones. The bar looks and moves like the player's own seek bar; let go and it plays from there. During a replay, ◀ ▶ move the same way, and going all the way right returns to live.
+- Live TV guide: an EPG id you assign in your playlist now wins over another guide that only matches the channel by name, so changing a channel's EPG assignment and pressing Refresh shows the right guide.
+- Live TV: Xtream panels that mark catch-up as "true" or a number of days now offer Start over and replays.
+- Live TV: Xtream replays start exactly where the bar says.
