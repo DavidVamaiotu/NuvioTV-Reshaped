@@ -818,10 +818,10 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
         exit = slideOutVertically { it / 3 } + fadeOut(),
         modifier = Modifier.align(Alignment.BottomCenter).zIndex(3f),
     ) {
-        // Kept through the exit animation, after the bar has closed.
-        var shown by remember { mutableStateOf<LiveTvScrub?>(null) }
-        state.scrub?.let { shown = it }
-        shown?.let { bar -> LiveTvScrubCard(bar, liveState.logoFor(bar.channel)) }
+        // The last bar stays drawn through the exit animation, after it has closed.
+        val shown = remember { arrayOfNulls<LiveTvScrub>(1) }
+        state.scrub?.let { shown[0] = it }
+        shown[0]?.let { bar -> LiveTvScrubCard(bar, liveState.logoFor(bar.channel)) }
     }
 
     AnimatedVisibility(
@@ -836,7 +836,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
 }
 
 /** Near solid, so the banner and info card read clearly over any picture. */
-private val LiveTvCardBackground = Color(0xF0121214)
+internal val LiveTvCardBackground = Color(0xF0121214)
 
 @Composable
 private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {

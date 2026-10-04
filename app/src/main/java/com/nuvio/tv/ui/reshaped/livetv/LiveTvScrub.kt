@@ -105,7 +105,7 @@ internal fun LiveTvScrubCard(scrub: LiveTvScrub, logo: String?) {
             .widthIn(max = 880.dp)
             .fillMaxWidth()
             .clip(shape)
-            .background(Color(0xF0121214))
+            .background(LiveTvCardBackground)
             .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
             .padding(horizontal = 22.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -120,9 +120,8 @@ internal fun LiveTvScrubCard(scrub: LiveTvScrub, logo: String?) {
                     color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
+                    modifier = Modifier.weight(1f),
                 )
-                Spacer(modifier = Modifier.weight(1f))
                 Text(
                     text = if (live) {
                         stringResource(R.string.live_tv_scrub_live)

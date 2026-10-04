@@ -15,7 +15,7 @@ import java.util.zip.GZIPOutputStream
 internal object LiveTvGuideCache {
     const val FILE_NAME = "guide_kept.bin.gz"
     // 5: playlist-scoped channel identities and complete guide imports. 6: no overlapping programmes.
-    private const val VERSION = 6
+    private const val VERSION = 7
     private const val MAX_TITLE = 1_000
 
     class Entry(val schedule: LiveTvSchedule, val logos: Map<String, String>, val nextReadAtMs: Long)
