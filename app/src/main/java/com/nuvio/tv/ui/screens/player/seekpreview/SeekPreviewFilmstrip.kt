@@ -41,7 +41,7 @@ internal class FilmstripFrame(val thumbnail: SeekPreviewThumbnail?)
 
 /**
  * The frames shown while scrubbing, oldest first, centre at [FilmstripSideFrames]. A null entry
- * is still being looked up and draws as an empty tile.
+ * is still being looked up and is not drawn yet.
  */
 internal class Filmstrip(
     val frames: List<FilmstripFrame?>,
@@ -137,8 +137,9 @@ internal fun SeekPreviewFilmstripRow(
     Box(modifier = modifier.fillMaxWidth().height(frameHeight * CenterScale)) {
         strip.frames.forEachIndexed { index, frame ->
             key(index) {
-                // A title's start or end: nothing to show there.
-                if (frame == null || frame.thumbnail != null) {
+                // Nothing is drawn past a title's start or end, nor while a side frame is
+                // still loading, so the strip never shows an empty black tile.
+                if (frame?.thumbnail != null) {
                     val place = index - FilmstripSideFrames
                     val isCenter = place == 0
                     Box(
@@ -153,7 +154,7 @@ internal fun SeekPreviewFilmstripRow(
                                 } else Modifier
                             )
                             .clip(FrameShape)
-                            .background(if (frame == null) Color.Black.copy(alpha = 0.45f) else Color.Black)
+                            .background(Color.Black)
                             .then(if (isCenter) Modifier.border(CenterBorder, Color.White, FrameShape) else Modifier)
                     ) {
                         frame?.thumbnail?.let { thumbnail ->
