@@ -167,6 +167,16 @@ private fun PlayerUiState.returnFocusSeasonEpisode(completed: Boolean): Pair<Int
     }
 }
 
+internal fun playerBackTreatsSkipAsAutoPlay(
+    streamAutoPlayMode: StreamAutoPlayMode,
+    preferBingeGroupForNextEpisode: Boolean
+): Boolean = streamAutoPlayMode != StreamAutoPlayMode.MANUAL || preferBingeGroupForNextEpisode
+
+internal fun playerBackOpensCurrentEpisodeStreams(
+    episodeChangedInPlace: Boolean,
+    autoPlayEnabled: Boolean
+): Boolean = episodeChangedInPlace && !autoPlayEnabled
+
 @Composable
 fun PlayerScreen(
     viewModel: PlayerViewModel = hiltViewModel(),
@@ -204,6 +214,10 @@ fun PlayerScreen(
     var reportCodeVisible by remember { mutableStateOf(false) }
     var exitDispatched by remember { mutableStateOf(false) }
     var externalHandoffInProgress by remember { mutableStateOf(false) }
+    val autoPlayEnabledForBack = playerBackTreatsSkipAsAutoPlay(
+        streamAutoPlayMode = uiState.streamAutoPlayMode,
+        preferBingeGroupForNextEpisode = uiState.streamAutoPlayPreferBingeGroupForNextEpisode
+    )
 
     val exitPlayer: () -> Unit = exitPlayer@{
         if (exitDispatched) return@exitPlayer
@@ -219,7 +233,7 @@ fun PlayerScreen(
             uiState.currentVideoId,
             focusSeason,
             focusEpisode,
-            uiState.streamAutoPlayMode != StreamAutoPlayMode.MANUAL,
+            autoPlayEnabledForBack,
             completed
         )
     }
@@ -383,7 +397,7 @@ fun PlayerScreen(
                         uiState.currentVideoId,
                         focusSeason,
                         focusEpisode,
-                        uiState.streamAutoPlayMode != StreamAutoPlayMode.MANUAL,
+                        autoPlayEnabledForBack,
                         true
                     )
                 }
@@ -403,7 +417,7 @@ fun PlayerScreen(
                         uiState.currentVideoId,
                         focusSeason,
                         focusEpisode,
-                        uiState.streamAutoPlayMode != StreamAutoPlayMode.MANUAL,
+                        autoPlayEnabledForBack,
                         true
                     )
                 }
@@ -1374,7 +1388,7 @@ fun PlayerScreen(
                                     uiState.currentVideoId,
                                     focusSeason,
                                     focusEpisode,
-                                    uiState.streamAutoPlayMode != StreamAutoPlayMode.MANUAL,
+                                    autoPlayEnabledForBack,
                                     completed
                                 )
                             }

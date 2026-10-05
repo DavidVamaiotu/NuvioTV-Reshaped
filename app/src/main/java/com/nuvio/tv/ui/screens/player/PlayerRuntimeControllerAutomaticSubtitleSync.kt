@@ -141,7 +141,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
     showAutoSyncToast(AutoSyncBubbleKind.Working, context.getString(R.string.autosync_toast_analyzing))
 
     if (!canAttachAddonSubtitleViaSidecar(selectedSubtitle)) {
-        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed_unsupported))
+        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed_unsupported))
         return
     }
 
@@ -168,7 +168,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
         },
     )
     if (!started) {
-        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed))
+        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
         return
     }
 
@@ -397,7 +397,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     context,
                     "REJECT V2 - sidecar changed or apply failed",
                 )
-                showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed))
+                showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
                 return@launch
             }
 
@@ -461,7 +461,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
             if (activeSidecarSubtitleKey == null) {
                 startSidecarAddonSubtitle(selectedSubtitle)
             }
-            showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed))
+            showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
         }
     }.also { job ->
         job.invokeOnCompletion { selectedBodyDeferred.complete(null) }
@@ -495,9 +495,9 @@ private fun Context.buildAutoSyncFailureToast(analysisOutcome: AutoSyncAnalysisO
         when (analysisOutcome) {
             AutoSyncAnalysisOutcome.NO_SUBTITLE_TRACKS,
             AutoSyncAnalysisOutcome.NO_USABLE_REFERENCE,
-            -> R.string.autosync_toast_failed_no_reference
+            -> R.string.reshaped_autosync_toast_failed_no_reference
             AutoSyncAnalysisOutcome.SUBTITLE_UNAVAILABLE,
             null,
-            -> R.string.autosync_toast_failed
+            -> R.string.reshaped_autosync_toast_failed
         },
     )

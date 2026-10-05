@@ -217,8 +217,9 @@ class StreamScreenViewModel @Inject constructor(
                             updatedAllStreams.filter { it.addonName == currentFilter }
                         }
                         streamFilterFullList = fullFiltered
-                        val pageEnd = state.filteredStreams.size.coerceAtMost(fullFiltered.size)
+                        val pageEnd = state.filteredStreams.size
                             .coerceAtLeast(STREAM_FILTER_PAGE_SIZE.coerceAtMost(fullFiltered.size))
+                            .coerceAtMost(fullFiltered.size)
                         state.copy(
                             addonStreams = updatedAddonStreams,
                             allStreams = updatedAllStreams,
@@ -544,7 +545,9 @@ class StreamScreenViewModel @Inject constructor(
                     allStreams.filter { it.addonName == currentFilter }
                 }
                 streamFilterFullList = fullFiltered
-                val paginatedStreams = if (fullFiltered.size > STREAM_FILTER_PAGE_SIZE) {
+                val currentPageSize = _uiState.value.filteredStreams.size
+                val isFirstLoad = currentPageSize == 0
+                val paginatedStreams = if (isFirstLoad && fullFiltered.size > STREAM_FILTER_PAGE_SIZE) {
                     fullFiltered.subList(0, STREAM_FILTER_PAGE_SIZE)
                 } else {
                     fullFiltered
@@ -649,8 +652,9 @@ class StreamScreenViewModel @Inject constructor(
                                     updatedAllStreams.filter { it.addonName == currentFilter }
                                 }
                                 streamFilterFullList = fullFiltered
-                                val pageEnd = state.filteredStreams.size.coerceAtMost(fullFiltered.size)
+                                val pageEnd = state.filteredStreams.size
                                     .coerceAtLeast(STREAM_FILTER_PAGE_SIZE.coerceAtMost(fullFiltered.size))
+                                    .coerceAtMost(fullFiltered.size)
                                 state.copy(
                                     addonStreams = updatedGroups,
                                     allStreams = updatedAllStreams,
