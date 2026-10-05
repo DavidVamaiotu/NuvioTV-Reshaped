@@ -37,6 +37,12 @@ interface SeekPreviewTrack {
     suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail?
 
     /**
+     * Like [thumbnailFor], for a frame shown beside the one being scrubbed to: it does not steer
+     * background work (the on-device track decodes nearest the last [thumbnailFor] first).
+     */
+    suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? = thumbnailFor(positionMs)
+
+    /**
      * The playing file's keyframe nearest [positionMs] (playback timeline) when one is within
      * [toleranceMs], read from the file's own index; null when unknown. Seeking onto a keyframe
      * is both exact and the fastest seek a player can make.
@@ -90,9 +96,15 @@ internal class HybridSeekPreviewTrack(
 
     override val revision: StateFlow<Int> get() = local.revision
 
-    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? {
+    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
+        pick(positionMs, local.thumbnailFor(positionMs))
+
+    override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
+        pick(positionMs, local.sideThumbnailFor(positionMs))
+
+    private suspend fun pick(positionMs: Long, localThumbnail: SeekPreviewThumbnail?): SeekPreviewThumbnail? {
         val shift = seekr.offsetMs
-        val own = local.thumbnailFor(positionMs)?.let { thumbnail ->
+        val own = localThumbnail?.let { thumbnail ->
             if (shift == 0L) thumbnail else thumbnail.copy(
                 cueStartMs = thumbnail.cueStartMs + shift,
                 cueEndMs = thumbnail.cueEndMs + shift,

@@ -1,37 +1,30 @@
 package com.nuvio.tv.ui.screens.player.seekpreview
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.tv.ui.screens.player.PlayerViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Frame width as a share of the width available (the progress bar's), clamped for a 10-foot
@@ -41,18 +34,18 @@ import kotlinx.coroutines.flow.StateFlow
 private const val FrameWidthFraction = 0.30f
 private val MinFrameWidth = 240.dp
 private val MaxFrameWidth = 400.dp
-private const val FrameAspect = 16f / 9f
-private val FrameCorner = 8.dp
 private val FrameGapAboveBar = 10.dp
 private const val LingerAfterScrubMs = 1500L
+private const val SlideMs = 220
 
 /**
- * The scrub-time preview: only the frame of the cue the scrub lands on, above the scrub
- * position on the progress bar.
+ * The scrub-time preview, Netflix style, above the progress bar: the frame of the cue the scrub
+ * lands on in the middle, outlined, with the frames before and after it either side (see
+ * [SeekPreviewFilmstripRow]).
  *
- * Grid-locked scrubbing (see [SeekPreviewCueStepper]) parks the playhead on this frame's own
- * timestamp, so the frame shown is the frame playback resumes on, and the controls' own time
- * readout stays the single, honest position label.
+ * Grid-locked scrubbing (see [SeekPreviewCueStepper]) parks the playhead on the centre frame's
+ * own timestamp, so the frame outlined is the frame playback resumes on, and the controls' own
+ * time readout stays the single, honest position label.
  */
 @Composable
 fun SeekPreviewThumbnailHost(
@@ -81,12 +74,13 @@ fun SeekPreviewThumbnailHost(
     }
 
     val displayTs = previewTs ?: timeline.currentPosition
-    val duration = timeline.duration.coerceAtLeast(1L)
-    val fraction = (displayTs.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
     val offsetMs = offsetState.toLong()
     // On-device tracks fill in while playing; a new revision means the frame may have sharpened.
     val revision by (activeTrack?.revision ?: NoRevision).collectAsStateWithLifecycle()
-    var frame by remember(activeTrack) { mutableStateOf<SeekPreviewThumbnail?>(null) }
+    var strip by remember(activeTrack) { mutableStateOf<Filmstrip?>(null) }
+    // In frames: how far the strip still has to slide to settle on its centre.
+    val slide = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
     // Conflate rapid scrub/nudge changes: a lookup that finishes takes the latest request next.
     val requestFlow = remember(activeTrack) {
         MutableStateFlow(PreviewRequest(displayTs, offsetMs, revision, lingerVisible))
@@ -109,6 +103,8 @@ fun SeekPreviewThumbnailHost(
         var cachedPrefersSuccessor = false
         var cachedOffsetMs: Long? = null
         var cachedRevision: Int? = null
+        // Neighbours load on their own, so the next scrub step never waits for them.
+        var fillJob: Job? = null
         // Each lookup runs to the end, then the latest request is taken (the StateFlow conflates
         // the ones in between). Cancelling on every new request starved a held D-pad scrub: each
         // repeat cancelled the lookup in flight, so the frame stayed on an old one until release.
@@ -120,6 +116,14 @@ fun SeekPreviewThumbnailHost(
                 covering.contains(positionMs) &&
                 covering.prefersSuccessorFor(positionMs) == cachedPrefersSuccessor
             ) {
+                // Shown again on the same frame: load the neighbours skipped while hidden.
+                val current = strip
+                if (visible && current != null && fillJob?.isActive != true && current.frames.any { it == null }) {
+                    fillJob = scope.launch {
+                        val filled = activeTrack.fillFilmstrip(current, refreshAll = false)
+                        if (strip === current) strip = filled
+                    }
+                }
                 return@collect
             }
             // Single writer for the track's offset: the manual sync correction is pushed in
@@ -149,10 +153,37 @@ fun SeekPreviewThumbnailHost(
             cachedRevision = rev
 
             val center = successor ?: coveringThumbnail
-            frame = center
+            val previous = strip
+            val steps = previous?.stepsTo(center.cueStartMs)
+            val reusable = previous != null && previous.matches(rev, offset)
+            val seeded = Filmstrip.around(center, previous, steps, rev, offset)
+            strip = seeded
             seekPreview.onPreviewCueResolved(
                 SeekPreviewCue(center.cueStartMs - offset, center.cueEndMs - offset)
             )
+            if (!visible) {
+                scope.launch { slide.snapTo(0f) }
+            } else if (steps != null && steps != 0) {
+                scope.launch {
+                    val start = (slide.value + steps)
+                        .coerceIn(-FilmstripSideFrames.toFloat(), FilmstripSideFrames.toFloat())
+                    slide.snapTo(start)
+                    slide.animateTo(0f, tween(SlideMs, easing = FastOutSlowInEasing))
+                }
+            } else if (steps == null) {
+                scope.launch { slide.snapTo(0f) }
+            }
+            // Neighbours only matter while the strip is on screen; hidden, only the centre's
+            // cue is kept current for grid-locked seeking.
+            fillJob?.cancel()
+            fillJob = if (visible) {
+                scope.launch {
+                    val filled = activeTrack.fillFilmstrip(seeded, refreshAll = !reusable)
+                    if (strip === seeded) strip = filled
+                }
+            } else {
+                null
+            }
         }
     }
 
@@ -166,24 +197,13 @@ fun SeekPreviewThumbnailHost(
             val frameWidth = (maxWidth * FrameWidthFraction)
                 .coerceIn(MinFrameWidth, MaxFrameWidth)
                 .coerceAtMost(maxWidth)
-            val frameHeight = frameWidth / FrameAspect
-            Box(
-                modifier = Modifier
-                    .offset(x = previewOffset(maxWidth, frameWidth, fraction))
-                    .padding(bottom = FrameGapAboveBar)
-                    .size(frameWidth, frameHeight)
-                    .clip(RoundedCornerShape(FrameCorner))
-                    .background(Color.Black)
-            ) {
-                frame?.let { thumbnail ->
-                    val image = remember(thumbnail.bitmap) { thumbnail.bitmap.asImageBitmap() }
-                    Image(
-                        bitmap = image,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+            strip?.let { current ->
+                SeekPreviewFilmstripRow(
+                    strip = current,
+                    slide = slide,
+                    frameWidth = frameWidth,
+                    modifier = Modifier.padding(bottom = FrameGapAboveBar)
+                )
             }
         }
     }
@@ -197,10 +217,3 @@ private data class PreviewRequest(
 )
 
 private val NoRevision: StateFlow<Int> = MutableStateFlow(0)
-
-private fun previewOffset(trackWidth: Dp, thumbWidth: Dp, fraction: Float): Dp {
-    val centerX = trackWidth * fraction
-    val leftUnclamped = centerX - thumbWidth / 2
-    val maxLeft = (trackWidth - thumbWidth).coerceAtLeast(0.dp)
-    return leftUnclamped.coerceIn(0.dp, maxLeft)
-}
