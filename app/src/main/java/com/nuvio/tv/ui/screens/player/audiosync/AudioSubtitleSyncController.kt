@@ -229,13 +229,6 @@ internal class AudioSubtitleSyncController(
             if (!value) model = null
         }
 
-    /**
-     * Whether a better-fitting subtitle in the same language may replace the chosen one. Off when
-     * the user picked the subtitle: the others then only help time it, as AutoSync does.
-     */
-    @Volatile
-    var mayReplaceSubtitle: Boolean = true
-
     @Volatile
     private var playbackPositionMs = 0L
 
@@ -747,12 +740,6 @@ internal class AudioSubtitleSyncController(
                     rateCorrected = winner.model.segments.first().scale != 1.0,
                 ),
             )
-            return
-        }
-        if (!mayReplaceSubtitle) {
-            // The user chose this subtitle: keep it, and keep syncing it on its own evidence.
-            SyncLog.i("${winner.key} fits the audio better, but the chosen subtitle was picked by the user; keeping it")
-            stopPool()
             return
         }
         val label = candidates.firstOrNull { it.url == winner.key }?.label?.takeIf { it.isNotBlank() } ?: "another file"
