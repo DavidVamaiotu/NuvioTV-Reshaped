@@ -35,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -177,6 +178,11 @@ fun HeroContentSection(
         animationSpec = tween(600),
         label = "logoWidth"
     )
+    val heroActionsAlpha by animateFloatAsState(
+        targetValue = if (isTrailerPlaying && hideLogoDuringTrailer) 0f else 1f,
+        animationSpec = tween(NuvioMotion.tokens.durations.overlay),
+        label = "heroActionsTrailerAlpha"
+    )
 
     Column(
         modifier = Modifier
@@ -238,9 +244,10 @@ fun HeroContentSection(
 
             // Everything below the logo fades out during trailer
             AnimatedVisibility(
-                visible = !isTrailerPlaying,
+                visible = !isTrailerPlaying || hideLogoDuringTrailer,
                 enter = fadeIn(tween(NuvioMotion.tokens.durations.overlay)),
-                exit = fadeOut(tween(NuvioMotion.tokens.durations.overlay))
+                exit = fadeOut(tween(NuvioMotion.tokens.durations.overlay)),
+                modifier = Modifier.alpha(heroActionsAlpha)
             ) {
                 Column {
                     Row(

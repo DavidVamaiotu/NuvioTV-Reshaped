@@ -1,4 +1,8 @@
-- **Updated to official NuvioTV 1.1.0-beta.3.** Includes the upstream playback, settings, and service updates.
-- **Reshaped functionality preserved.** Keeps Reshaped AutoSync and AudioSync, Live TV, seek previews, disk read-ahead, sync, fonts, and pill navigation.
-- **Settings adapted to the new layout.** The Nuvio Reshaped section remains available with the existing controls and behavior.
-- **Validation:** APK build and Reshaped feature tests passed. The 18 failures in the full unit-test suite also reproduce on the original fork; the merge introduced no new failures. Physical TV playback has not been tested.
+- **Tester update channel.** Settings > About > Update channel now has Tester next to Stable and Beta. Tester builds get Live TV and player fixes first, so pick it if you want to help find bugs; switch back to Beta any time and you move over at the next beta release.
+- **Rebuilt Live TV guide.** Programmes never overlap, ◀▶ always move to the next or previous show, each show appears once, and a short show you select pushes the rest of its row along so its title fits. The player shows the same programmes as the guide (no more "To Be Announced").
+- **Better guide matching.** The EPG id assigned in a playlist beats another guide's name match, so re-assigning a guide works after Refresh. Channels whose EPG id has no programmes, duplicate names ("VRT 1" and "VRT 1 HD"), accented names, guides that list channels between programmes, and sources sharing the same stream links all find their programmes. A guide download that was cut off no longer replaces the last good guide.
+- **Rewind on live channels.** On a channel with catch-up, ◀ (or the rewind key) opens a rewind bar that looks and steps like the player's seek bar; let go and the replay starts from there.
+- **Search bar.** ▶ on the Live TV search field reaches the settings button.
+- **AutoSync audio sync, like the phone.** Audio sync may now swap a subtitle you picked when it never fits the audio and another file in the same language does, uses the full add-on subtitle list, skips a slow wait for sparse tracks, and loads the speech model early on TVs with more than 2 GB RAM.
+- **Netflix-style scrub previews.** While scrubbing, previews show as a filmstrip of frames with the current one outlined, sliding as you move. Dark keyframes get replaced by a brighter one, and missing frames are left out instead of showing empty tiles.
+- **Nuvio 1.1.0-beta.4.** Includes everything in the official NuvioTV 1.1.0-beta.4 release.

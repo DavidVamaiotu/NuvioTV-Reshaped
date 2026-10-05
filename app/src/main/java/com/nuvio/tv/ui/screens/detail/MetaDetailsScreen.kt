@@ -960,6 +960,8 @@ fun MetaDetailsScreen(
                     trailerUrl = uiState.trailerUrl,
                     trailerAudioUrl = uiState.trailerAudioUrl,
                     isTrailerPlaying = uiState.isTrailerPlaying,
+                    isBackgroundTrailerPlaying = uiState.isBackgroundTrailerPlaying,
+                    pauseBackgroundTrailerOnScroll = uiState.pauseBackgroundTrailerOnScroll,
                     isTrailerPaused = isTrailerPaused,
                     showTrailerControls = uiState.showTrailerControls,
                     hideLogoDuringTrailer = uiState.hideLogoDuringTrailer,
@@ -1230,6 +1232,8 @@ private fun MetaDetailsContent(
     trailerUrl: String?,
     trailerAudioUrl: String?,
     isTrailerPlaying: Boolean,
+    isBackgroundTrailerPlaying: Boolean,
+    pauseBackgroundTrailerOnScroll: Boolean,
     isTrailerPaused: Boolean = false,
     showTrailerControls: Boolean,
     hideLogoDuringTrailer: Boolean,
@@ -2265,6 +2269,8 @@ private fun MetaDetailsContent(
             trailerUrl = trailerUrl,
             trailerAudioUrl = trailerAudioUrl,
             isTrailerPlaying = isTrailerPlaying,
+            isBackgroundTrailerPlaying = isBackgroundTrailerPlaying,
+            pauseBackgroundTrailerOnScroll = pauseBackgroundTrailerOnScroll,
             isTrailerPaused = isTrailerPaused,
             showTrailerControls = showTrailerControls,
             trailerSeekToken = trailerSeekToken,
@@ -3166,6 +3172,8 @@ private fun BackdropLayer(
     trailerUrl: String?,
     trailerAudioUrl: String?,
     isTrailerPlaying: Boolean,
+    isBackgroundTrailerPlaying: Boolean,
+    pauseBackgroundTrailerOnScroll: Boolean,
     isTrailerPaused: Boolean = false,
     showTrailerControls: Boolean,
     trailerSeekToken: Int,
@@ -3180,10 +3188,28 @@ private fun BackdropLayer(
     var showHeroBackdropUnderlay by remember(heroBackdropRequest, backdropRequest) {
         mutableStateOf(heroBackdropRequest != null)
     }
+    val isBackgroundTrailerPaused =
+        isBackgroundTrailerPlaying && pauseBackgroundTrailerOnScroll && isScrolledPastHero
+    val isBackgroundTrailerVisible = isBackgroundTrailerPlaying && !isBackgroundTrailerPaused
+    var isBackgroundTrailerRendered by remember(isBackgroundTrailerPlaying) { mutableStateOf(false) }
     val backdropAlphaState = animateFloatAsState(
-        targetValue = if (isTrailerPlaying) 0f else if (isScrolledPastHero) 0.15f else 1f,
+        targetValue = when {
+            isTrailerPlaying -> 0f
+            isBackgroundTrailerVisible && isBackgroundTrailerRendered -> 0f
+            isScrolledPastHero -> 0.15f
+            else -> 1f
+        },
         animationSpec = tween(durationMillis = if (isScrolledPastHero) 300 else 800),
         label = "backdropFade"
+    )
+    val backgroundTrailerAlphaState = animateFloatAsState(
+        targetValue = when {
+            !isBackgroundTrailerVisible -> 0f
+            isScrolledPastHero -> 0.15f
+            else -> 1f
+        },
+        animationSpec = tween(durationMillis = if (isScrolledPastHero) 300 else 800),
+        label = "backgroundTrailerFade"
     )
     val gradientAlphaState = animateFloatAsState(
         targetValue = if (isTrailerPlaying || isScrolledPastHero) 0f else 1f,
@@ -3215,14 +3241,21 @@ private fun BackdropLayer(
         TrailerPlayer(
             trailerUrl = trailerUrl,
             trailerAudioUrl = trailerAudioUrl,
-            isPlaying = isTrailerPlaying,
-            isPaused = isTrailerPaused,
+            isPlaying = isTrailerPlaying || isBackgroundTrailerPlaying,
+            isPaused = isTrailerPaused || isBackgroundTrailerPaused,
             seekRequestToken = if (showTrailerControls) trailerSeekToken else 0,
             seekDeltaMs = if (showTrailerControls) trailerSeekDeltaMs else 0L,
             onRemoteKey = onTrailerControlKey,
             onProgressChanged = onTrailerProgressChanged,
             onEnded = onTrailerEnded,
-            modifier = Modifier.fillMaxSize()
+            onFirstFrameRendered = { isBackgroundTrailerRendered = true },
+            cropToFill = isBackgroundTrailerPlaying,
+            autoCropLetterbox = isBackgroundTrailerPlaying,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    alpha = if (isBackgroundTrailerPlaying) backgroundTrailerAlphaState.value else 1f
+                }
         )
         Box(
             modifier = Modifier

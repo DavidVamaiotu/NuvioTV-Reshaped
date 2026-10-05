@@ -1,0 +1,352 @@
+name: AutoSync TV Tester Release
+
+# Builds the Tester channel (TesterChannel.kt) from subtitle-autosync-tester. Runs only when started
+# by hand (Actions > AutoSync TV Tester Release > Run workflow): no file edit or push starts it, so
+# it can never be set off by accident and it never touches the beta or stable releases.
+#
+# Tags are <nuvio version>-tester.N, always pre-releases and never "latest". Stable and Beta apps
+# only follow tags ending in -autosync.N, so they never see these. Builds use the same app id,
+# signing key and versionCode scheme as beta (build time + 100000000), so a tester build installs
+# over any older beta or tester build, and the app offers Beta <-> Tester moves by publish time.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Same queue as the beta release (mirror-nuviotv-release.yml): beta and tester builds never run at
+# the same time, so a release published later always carries a higher versionCode. GitHub keeps
+# only one waiting run per queue; if this run shows as cancelled, start it again.
+concurrency:
+  group: autosync-tv-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tester branch
+        uses: actions/checkout@v6
+        with:
+          ref: subtitle-autosync-tester
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Choose next tester revision
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # A tester build without the Tester channel would fall back to Beta updates.
+          if ! grep -q 'TESTER("tester")' app/src/main/java/com/nuvio/tv/updater/UpdateChannel.kt; then
+            echo "subtitle-autosync-tester has no Tester update channel; refusing to release." >&2
+            exit 1
+          fi
+
+          # The Nuvio version this branch is on: its newest "Sync NuvioTV <tag>" merge.
+          SYNC_SUBJECT="$(git log -n 1 --format=%s --grep='^Sync NuvioTV ')"
+          BASE_TAG="${SYNC_SUBJECT#Sync NuvioTV }"
+          BASE_TAG="${BASE_TAG#v}"
+          if [[ ! "$BASE_TAG" =~ ^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Could not read the Nuvio version from '$SYNC_SUBJECT'." >&2
+            exit 1
+          fi
+          BASE_PATTERN="${BASE_TAG//./[.]}"
+
+          RELEASE_TAGS="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name')"
+
+          MAX_REVISION=0
+          while IFS= read -r TAG; do
+            if [[ "$TAG" =~ ^${BASE_PATTERN}-tester[.]([0-9]+)$ ]]; then
+              REVISION="${BASH_REMATCH[1]}"
+              if (( REVISION > MAX_REVISION )); then
+                MAX_REVISION="$REVISION"
+              fi
+            fi
+          done <<< "$RELEASE_TAGS"
+
+          NEXT_REVISION=$(( MAX_REVISION + 1 ))
+          TESTER_TAG="${BASE_TAG}-tester.${NEXT_REVISION}"
+
+          # Previous tester release (any Nuvio version): changelog start and in-place update check.
+          PREVIOUS_TAG="$(printf '%s\n' "$RELEASE_TAGS" | grep -E -- '-tester[.][0-9]+$' | sort -V | tail -n 1 || true)"
+          # Newest beta release: the tester build must also install over it.
+          BETA_TAG="$(
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '[.[] | select(.draft == false and .prerelease == true and (.tag_name | test("-autosync[.][0-9]+$")))][0].tag_name // ""'
+          )"
+          # Where a first tester release starts its changelog: the newest beta it contains.
+          BRANCH_BETA_TAG="$(git tag --merged HEAD --sort=-creatordate --list '*-autosync.*' | awk 'NR == 1')"
+
+          if git rev-parse --verify --quiet "refs/tags/$TESTER_TAG" >/dev/null; then
+            echo "Tag $TESTER_TAG already exists." >&2
+            exit 1
+          fi
+
+          echo "base_tag=$BASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "revision=$NEXT_REVISION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TESTER_TAG" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+          echo "beta_tag=$BETA_TAG" >> "$GITHUB_OUTPUT"
+          echo "branch_beta_tag=$BRANCH_BETA_TAG" >> "$GITHUB_OUTPUT"
+          echo "Tester release: $TESTER_TAG (previous tester: ${PREVIOUS_TAG:-none}, newest beta: ${BETA_TAG:-none})"
+
+      - name: Generate tester changelog
+        env:
+          BASE_TAG: ${{ steps.version.outputs.base_tag }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
+          BRANCH_BETA_TAG: ${{ steps.version.outputs.branch_beta_tag }}
+        run: |
+          set -euo pipefail
+
+          SINCE="$PREVIOUS_TAG"
+          if [[ -z "$SINCE" ]] || ! git rev-parse --verify --quiet "$SINCE^{commit}" >/dev/null; then
+            SINCE="$BRANCH_BETA_TAG"
+          fi
+
+          {
+            echo "## Nuvio Reshaped TV tester build"
+            echo
+            echo "A test build for people helping to find bugs before changes reach Beta. Expect things to break."
+            echo
+            # Hand-written highlights, shown only when the notes file changed since the last tester
+            # release so old notes never repeat.
+            NOTES_FILE=".github/tester-release-notes.md"
+            if [[ -s "$NOTES_FILE" ]] && {
+              [[ -z "$PREVIOUS_TAG" ]] ||
+                ! git rev-parse --verify --quiet "$PREVIOUS_TAG^{commit}" >/dev/null ||
+                ! git diff --quiet "$PREVIOUS_TAG" HEAD -- "$NOTES_FILE"
+            }; then
+              echo "### Highlights"
+              echo
+              cat "$NOTES_FILE"
+              echo
+              echo "### Commits"
+              echo
+            fi
+            if [[ -n "$SINCE" ]] && git rev-parse --verify --quiet "$SINCE^{commit}" >/dev/null; then
+              CHANGES="$(
+                git log --reverse --no-merges --pretty=format:'%s' "$SINCE..HEAD" -- . ':(exclude).github/workflows/**' ':(exclude).github/*-release-notes.md' |
+                  grep -Ev '^(Trigger AutoSync release|Release .*(autosync|tester)|Sync NuvioTV )' || true
+              )"
+            else
+              CHANGES=""
+            fi
+
+            if [[ -n "$CHANGES" ]]; then
+              while IFS= read -r line; do
+                printf -- '- %s\n' "$line"
+              done <<< "$CHANGES"
+            else
+              echo "- Rebuilt from the current subtitle-autosync-tester branch."
+            fi
+
+            echo
+            echo "Based on official NuvioTV $BASE_TAG."
+          } > autosync-tv-tester-notes.md
+
+          cat autosync-tv-tester-notes.md
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Configure Nuvio services
+        env:
+          SUPABASE_URL: ${{ secrets.NUVIO_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.NUVIO_SUPABASE_ANON_KEY }}
+          SUPABASE_FALLBACK: ${{ secrets.NUVIO_SUPABASE_FALLBACK_URL }}
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: |
+          set -e
+          test -n "$SUPABASE_URL"
+          test -n "$SUPABASE_KEY"
+
+          cat > local.properties <<EOF2
+          NUVIO_SUPABASE_URL=$SUPABASE_URL
+          NUVIO_SUPABASE_ANON_KEY=$SUPABASE_KEY
+          NUVIO_SUPABASE_FALLBACK_URL=$SUPABASE_FALLBACK
+          TMDB_API_KEY=$TMDB_API_KEY
+          TV_LOGIN_WEB_BASE_URL=https://nuvio.tv/tv-login
+          DEVICE_LOGIN_WEB_BASE_URL=https://nuvio.tv/link
+          AVATAR_PUBLIC_BASE_URL=${SUPABASE_URL%/}/storage/v1/object/public/avatars
+          NUVIO_UPDATE_GITHUB_OWNER=${GITHUB_REPOSITORY_OWNER}
+          NUVIO_UPDATE_GITHUB_REPO=${GITHUB_REPOSITORY#*/}
+          AUTOSYNC_FORK=true
+          SIMKL_CLIENT_ID=dc20e0db975583b15096267cee79cd23b1f56d4bd301ce3c51e4a96a49c834a6
+          SIMKL_APP_NAME=nuvio
+          INTRODB_API_URL=https://api.introdb.app/
+          IMDB_RATINGS_API_BASE_URL=https://seriesgraph.com/
+          IMDB_TAPFRAME_API_BASE_URL=https://imdb.tapframe.space/
+          EOF2
+
+          cp local.properties local.dev.properties
+
+      - name: Add Seekr API key
+        env:
+          SEEKR_API_KEY: ${{ secrets.SEEKR_API_KEY }}
+        run: |
+          # Seek-preview thumbnails stay off in builds without the secret.
+          if [[ -n "$SEEKR_API_KEY" ]]; then
+            printf '\nSEEKR_API_KEY=%s\n' "$SEEKR_API_KEY" >> local.properties
+          else
+            echo "::warning::SEEKR_API_KEY secret is not set; seek previews are disabled in this build"
+          fi
+
+      - name: Add Google sign-in for Reshaped sync
+        env:
+          RESHAPED_GOOGLE_TV_CLIENT_ID: ${{ secrets.RESHAPED_GOOGLE_TV_CLIENT_ID }}
+          RESHAPED_GOOGLE_TV_CLIENT_SECRET: ${{ secrets.RESHAPED_GOOGLE_TV_CLIENT_SECRET }}
+        run: |
+          # "Sync with Google" shows as not set up in builds without both secrets.
+          if [[ -n "$RESHAPED_GOOGLE_TV_CLIENT_ID" && -n "$RESHAPED_GOOGLE_TV_CLIENT_SECRET" ]]; then
+            printf '\nRESHAPED_GOOGLE_TV_CLIENT_ID=%s\nRESHAPED_GOOGLE_TV_CLIENT_SECRET=%s\n' "$RESHAPED_GOOGLE_TV_CLIENT_ID" "$RESHAPED_GOOGLE_TV_CLIENT_SECRET" >> local.properties
+          else
+            echo "::warning::RESHAPED_GOOGLE_TV_CLIENT_ID/SECRET secrets are not set; Google sync is unavailable in this build"
+          fi
+
+      - name: Add Trakt credentials
+        env:
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+        run: |
+          # Trakt login stays unavailable in builds without both secrets.
+          if [[ -n "$TRAKT_CLIENT_ID" && -n "$TRAKT_CLIENT_SECRET" ]]; then
+            printf '\nTRAKT_CLIENT_ID=%s\nTRAKT_CLIENT_SECRET=%s\n' "$TRAKT_CLIENT_ID" "$TRAKT_CLIENT_SECRET" >> local.properties
+          else
+            echo "::warning::TRAKT_CLIENT_ID or TRAKT_CLIENT_SECRET secret is not set; Trakt login is disabled in this build"
+          fi
+
+      - name: Add MDBList client ID
+        env:
+          MDBLIST_CLIENT_ID: ${{ secrets.MDBLIST_CLIENT_ID }}
+        run: |
+          # MDBList sign-in and tracking stay unavailable in builds without the secret.
+          if [[ -n "$MDBLIST_CLIENT_ID" ]]; then
+            printf '\nMDBLIST_CLIENT_ID=%s\n' "$MDBLIST_CLIENT_ID" >> local.properties
+          else
+            echo "::warning::MDBLIST_CLIENT_ID secret is not set; MDBList sign-in is disabled in this build"
+          fi
+
+      - name: Configure persistent signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.AUTOSYNC_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.AUTOSYNC_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.AUTOSYNC_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.AUTOSYNC_KEY_PASSWORD }}
+        run: |
+          set -e
+          KEYSTORE_PATH="$RUNNER_TEMP/autosync-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          keytool -list -keystore "$KEYSTORE_PATH" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null
+
+          {
+            echo "NUVIO_RELEASE_STORE_FILE=$KEYSTORE_PATH"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+            echo "NUVIO_RELEASE_KEY_ALIAS=$KEY_ALIAS"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Stamp tester version
+        env:
+          TESTER_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Same versionCode scheme as the beta release: build time plus the lead over stable.
+          TESTER_VERSION_CODE="$(( $(date +%s) + 100000000 ))"
+          export TESTER_VERSION_CODE TESTER_TAG
+
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("app/build.gradle.kts")
+          text = path.read_text()
+          version_name = os.environ["TESTER_TAG"]
+          version_code = os.environ["TESTER_VERSION_CODE"]
+
+          text, code_count = re.subn(
+              r'versionCode[ 	]*=[ 	]*[0-9]+',
+              f'versionCode = {version_code}',
+              text,
+              count=1,
+          )
+          text, name_count = re.subn(
+              r'versionName[ 	]*=[ 	]*"[^"]+"',
+              f'versionName = "{version_name}"',
+              text,
+              count=1,
+          )
+
+          if code_count != 1 or name_count != 1:
+              raise SystemExit("Could not stamp tester version")
+
+          path.write_text(text)
+          PY
+
+          grep -nE 'version(Code|Name)[[:space:]]*=' app/build.gradle.kts | head -n 2
+
+      - name: Test updater and build Nuvio RS APKs
+        env:
+          TESTER_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ./gradlew :app:testFullReleaseUnitTest --tests 'com.nuvio.tv.updater.*' --build-cache --stacktrace
+          .github/scripts/reshaped-tv-apks.sh build "$TESTER_TAG"
+
+      - name: Verify in-place update compatibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTER_TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
+          BETA_TAG: ${{ steps.version.outputs.beta_tag }}
+        run: |
+          set -euo pipefail
+          # Must install over the previous tester build and over the newest beta build.
+          for PREVIOUS in "$PREVIOUS_TAG" "$BETA_TAG"; do
+            [[ -n "$PREVIOUS" ]] || continue
+            rm -rf previous-reshaped
+            .github/scripts/reshaped-tv-apks.sh verify "$TESTER_TAG" "$PREVIOUS"
+          done
+
+      - name: Commit tester release anchor
+        env:
+          TESTER_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # The APKs were built with the stamped version. Restore the source file so release
+          # metadata stays ephemeral, then tag a unique empty commit.
+          git restore --staged --worktree app/build.gradle.kts
+          git commit --allow-empty -m "Release $TESTER_TAG"
+          git push origin HEAD:subtitle-autosync-tester
+
+      - name: Create tester release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_TAG: ${{ steps.version.outputs.base_tag }}
+          REVISION: ${{ steps.version.outputs.revision }}
+          TESTER_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t APKS < <(.github/scripts/reshaped-tv-apks.sh list "$TESTER_TAG")
+          gh release create "$TESTER_TAG" "${APKS[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$(git rev-parse HEAD)" \
+            --title "Nuvio Reshaped Tester $BASE_TAG (build $REVISION)" \
+            --notes-file autosync-tv-tester-notes.md \
+            --prerelease \
+            --latest=false

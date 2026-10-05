@@ -211,6 +211,8 @@ internal fun PlayerRuntimeController.startProgressUpdates() {
                                 (pos > 0L || (playingNow && !cacheBuffering && playerDuration > 0L))
                             if (firstFrameReady) {
                                 hasRenderedFirstFrame = true
+                                resetMpvStartupWatchdog()
+                                scheduleMpvStableProgressReset()
                                 val clickToFirstFrameMs = launchStartedAtElapsedMs
                                     ?.let { (android.os.SystemClock.elapsedRealtime() - it).coerceAtLeast(0L) }
                                     ?: -1L
@@ -228,6 +230,7 @@ internal fun PlayerRuntimeController.startProgressUpdates() {
                                 }
                             }
                         }
+                    maybeRunMpvStartupWatchdog(view)
                     if (playerDuration > lastKnownDuration) {
                         lastKnownDuration = playerDuration
                     }
@@ -296,12 +299,12 @@ internal fun PlayerRuntimeController.startProgressUpdates() {
                 publishPlaybackTimeline(
                     currentPosition = displayPosition,
                     duration = playerDuration.coerceAtLeast(0L),
-                    bufferedPosition = com.nuvio.tv.ui.screens.player.seekbuffer.SeekReadAhead.bufferedPositionMs(player.bufferedPosition, playerDuration).coerceAtLeast(displayPosition), // Nuvio RS hook: read-ahead on the seek bar
+                    bufferedPosition = player.bufferedPosition.coerceAtLeast(displayPosition),
                     playerReportsLive = player.isCurrentMediaItemLive,
                     isPlaying = player.isPlaying
                 )
                 // Nuvio RS hook: read-ahead's connection; a live stream only arrives at its own bitrate, so it says nothing about the network.
-                PlaybackThroughput.onExoTick(context, currentStreamUrl, !player.isCurrentMediaItemLive && playerDuration != androidx.media3.common.C.TIME_UNSET && (com.nuvio.tv.ui.screens.player.seekbuffer.SeekReadAhead.isDownloading() ?: player.isLoading))
+                PlaybackThroughput.onExoTick(context, currentStreamUrl, !player.isCurrentMediaItemLive && playerDuration != androidx.media3.common.C.TIME_UNSET && player.isLoading)
                 playbackAnalyticsDiagnostics.recordProgressSnapshot(
                     player = player,
                     hasRenderedFirstFrame = hasRenderedFirstFrame,

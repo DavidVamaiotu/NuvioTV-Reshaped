@@ -85,7 +85,10 @@ class UpdateViewModel @Inject constructor(
 
             result
                 .onSuccess { update ->
-                    val remoteNewer = VersionUtils.isRemoteNewer(update.tag, BuildConfig.VERSION_NAME) ||
+                    val remoteNewer = TesterChannel.isRemoteNewer( // Nuvio RS hook: tester channel
+                        update.tag, update.publishedAt, update.prerelease,
+                        BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE.toLong()
+                    ) ||
                         ReshapedBridge.offersReshaped(context, update) // Nuvio RS hook
                     val shouldShow = UpdateBannerPolicy.shouldShow(
                         isRemoteNewer = remoteNewer,
@@ -144,7 +147,9 @@ class UpdateViewModel @Inject constructor(
     }
 
     private fun noUpdateFeedback(channel: UpdateChannel): String =
-        if (channel == UpdateChannel.STABLE && VersionUtils.isPrerelease(BuildConfig.VERSION_NAME)) {
+        if (TesterChannel.isSwitching(channel, BuildConfig.VERSION_NAME)) { // Nuvio RS hook
+            context.getString(R.string.reshaped_update_waiting_for_channel)
+        } else if (channel == UpdateChannel.STABLE && VersionUtils.isPrerelease(BuildConfig.VERSION_NAME)) {
             context.getString(R.string.update_waiting_for_stable)
         } else {
             context.getString(R.string.update_latest_version)

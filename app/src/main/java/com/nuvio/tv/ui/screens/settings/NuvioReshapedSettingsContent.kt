@@ -51,7 +51,6 @@ internal fun NuvioReshapedSettingsContent(
         connectionSpeedSettingsItems()
         pillNavSettingsItems()
         liveTvSettingsItems()
-        seekBufferSettingsItems()
         reshapedSyncSettingsItems()
     }
 }

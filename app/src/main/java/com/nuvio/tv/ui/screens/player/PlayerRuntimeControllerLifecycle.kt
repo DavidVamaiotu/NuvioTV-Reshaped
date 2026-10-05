@@ -58,6 +58,7 @@ internal fun PlayerRuntimeController.releasePlayer(flushPlaybackState: Boolean) 
     mpvMediaLoadPrepared = false
     nextEpisodeAutoPlayJob?.cancel()
     nextEpisodeAutoPlayJob = null
+    cancelNextEpisodePreload()
     debridResolveJob?.cancel()
     debridResolveJob = null
     stillWatchingPromptJob?.cancel()
@@ -66,6 +67,8 @@ internal fun PlayerRuntimeController.releasePlayer(flushPlaybackState: Boolean) 
     errorRetryJob = null
     stableProgressResetJob?.cancel()
     stableProgressResetJob = null
+    mpvStableProgressResetJob?.cancel()
+    mpvStableProgressResetJob = null
     releaseMpvPlayer()
     _exoPlayer?.let { player ->
         runCatching { player.playWhenReady = false }
@@ -76,7 +79,6 @@ internal fun PlayerRuntimeController.releasePlayer(flushPlaybackState: Boolean) 
         runCatching { player.release() }
     }
     _exoPlayer = null
-    com.nuvio.tv.ui.screens.player.seekbuffer.SeekReadAhead.release() // Nuvio RS hook: delete the read-ahead file
     _loadControl = null
     currentBitrateAwareLoadControl = null
     currentParallelChunkOverheadMb = 0

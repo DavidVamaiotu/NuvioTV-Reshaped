@@ -29,18 +29,38 @@ internal fun LiveTvXtreamSettings.normalized(): LiveTvXtreamSettings = copy(
     password = password.trim(),
 )
 
+/** A provider's channels and its categories in the provider's own order. */
+internal class ProviderChannels(val channels: List<LiveTvChannel>, val groupOrder: List<String>, val incomplete: Boolean = false)
+
 internal object LiveTvXtream {
-    suspend fun channels(settings: LiveTvXtreamSettings): List<LiveTvChannel> {
-        val categories = LiveTvHttp.stream(apiUrl(settings, "get_live_categories"), LIVE_TV_PLAYLIST_HEADERS) { input ->
-            readObjects(input) { fields ->
-                val id = fields["category_id"] ?: fields["id"] ?: return@readObjects null
-                val name = fields["category_name"] ?: fields["name"] ?: return@readObjects null
-                id to name
-            }
-        }.toMap()
-        val extension = liveExtension(settings)
+    /** Each panel's time zone (by server URL): catch-up start times are given in it. */
+    private val zones = java.util.concurrent.ConcurrentHashMap<String, java.time.ZoneId>()
+
+    /** [userAgent]: the source's own ([LiveTvSource.userAgent]); blank for the default. */
+    suspend fun channels(settings: LiveTvXtreamSettings, userAgent: String = ""): ProviderChannels {
+        val apiHeaders = withLiveTvUserAgent(LIVE_TV_PLAYLIST_HEADERS, userAgent)
+        val streamHeaders = withLiveTvUserAgent(LIVE_TV_STREAM_HEADERS, userAgent)
+        // A busy panel that fails the categories still lists its channels (Uncategorised).
+        val categories = try {
+            LiveTvHttp.stream(apiUrl(settings, "get_live_categories"), apiHeaders) { input ->
+                readObjects(input) { fields ->
+                    val id = fields["category_id"] ?: fields["id"] ?: return@readObjects null
+                    val name = fields["category_name"] ?: fields["name"] ?: return@readObjects null
+                    id to name
+                }
+            }.toMap()
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (error: Exception) {
+            Log.w("LiveTvXtream", "Could not read the categories", error)
+            emptyMap()
+        }
+        val extension = liveExtension(settings, apiHeaders)
+        // One catch-up instance per archive length, shared by the channels that have it.
+        val catchups = HashMap<Int, LiveTvCatchup>()
         val seen = HashSet<String>()
-        val channels = LiveTvHttp.stream(apiUrl(settings, "get_live_streams"), LIVE_TV_PLAYLIST_HEADERS) { input ->
+        // Big panels build the whole list before the first byte, as get.php does: the same long wait.
+        val channels = LiveTvHttp.stream(apiUrl(settings, "get_live_streams"), apiHeaders, LiveTvHttp.LIST_READ_TIMEOUT_S) { input ->
             var index = 0
             readObjects(input) { fields ->
                 val position = index++
@@ -57,20 +77,54 @@ internal object LiveTvXtream {
                     tvgId = fields["epg_channel_id"] ?: fields["tvg_id"],
                     logoUrl = fields["stream_icon"] ?: fields["logo"],
                     group = fields["category_id"]?.let(categories::get).orEmpty(),
-                    headers = LIVE_TV_STREAM_HEADERS,
+                    headers = streamHeaders,
+                    // Panels write it as 1, "1", true or a count of days.
+                    catchup = if (fields["tv_archive"].let { it == "true" || (it?.toDoubleOrNull() ?: 0.0) > 0.0 }) {
+                        val days = fields["tv_archive_duration"]?.toIntOrNull()?.coerceIn(1, 30) ?: 1
+                        catchups.getOrPut(days) { LiveTvCatchup(LiveTvCatchup.Kind.Xtream, days) }
+                    } else {
+                        null
+                    },
                 )
             }
         }
-        return channels
+        return ProviderChannels(channels, categories.values.map(String::trim).distinct())
     }
+
+    /**
+     * The panel's time zone, which catch-up links give their start time in: from the login's
+     * `server_info.timezone`, read with the channel list (or now, once, when it was not), else the TV's.
+     */
+    suspend fun zone(serverUrl: String, username: String, password: String, userAgent: String = ""): java.time.ZoneId {
+        zones[serverUrl]?.let { return it }
+        // A login that failed (panel busy, timeout) is asked again, at most once a minute.
+        zoneFailedAt[serverUrl]?.let { if (System.currentTimeMillis() - it < 60_000L) return java.time.ZoneId.systemDefault() }
+        val settings = LiveTvXtreamSettings(serverUrl, username, password)
+        val login = runCatching { JSONObject(LiveTvHttp.text(loginUrl(settings), withLiveTvUserAgent(LIVE_TV_PLAYLIST_HEADERS, userAgent))) }
+            .onFailure { if (it is CancellationException) throw it }
+            .getOrNull()
+        if (login == null) {
+            zoneFailedAt[serverUrl] = System.currentTimeMillis()
+            return java.time.ZoneId.systemDefault()
+        }
+        // A panel that gives no zone answers in the TV's own, as players assume.
+        return (zoneOf(login) ?: java.time.ZoneId.systemDefault()).also { zones[serverUrl] = it }
+    }
+
+    private val zoneFailedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun zoneOf(login: JSONObject): java.time.ZoneId? =
+        login.optJSONObject("server_info")?.optString("timezone")?.trim()?.takeIf(String::isNotEmpty)
+            ?.let { runCatching { java.time.ZoneId.of(it) }.getOrNull() }
 
     /**
      * The live format this account may use: MPEG-TS, as IPTV players prefer, unless the account only
      * allows HLS ("allowed_output_formats" in the login reply); a TS link then fails on every channel.
      */
-    private suspend fun liveExtension(settings: LiveTvXtreamSettings): String {
+    private suspend fun liveExtension(settings: LiveTvXtreamSettings, headers: Map<String, String>): String {
         val formats = try {
-            val login = JSONObject(LiveTvHttp.text(loginUrl(settings), LIVE_TV_PLAYLIST_HEADERS))
+            val login = JSONObject(LiveTvHttp.text(loginUrl(settings), headers))
+            zoneOf(login)?.let { zones[settings.serverUrl] = it }
             val allowed = login.optJSONObject("user_info")?.optJSONArray("allowed_output_formats")
             if (allowed == null) emptyList() else List(allowed.length()) { allowed.optString(it).trim().lowercase() }
         } catch (cancel: CancellationException) {
@@ -100,12 +154,16 @@ internal object LiveTvXtream {
 
 internal fun LiveTvStalkerSettings.normalized(): LiveTvStalkerSettings = copy(
     portalUrl = portalUrl.trim().trimEnd('/'),
-    macAddress = macAddress.trim().uppercase(),
+    macAddress = macAddress.trim().uppercase().let { mac ->
+        // "001A79ABCDEF" or "00-1A-79-…" as the portal knows it: 00:1A:79:AB:CD:EF.
+        val hex = mac.filter { it in '0'..'9' || it in 'A'..'F' }
+        if (hex.length == 12 && mac.none { it in 'G'..'Z' }) hex.chunked(2).joinToString(":") else mac
+    },
     username = username.trim(),
     password = password.trim(),
 )
 
-internal data class StalkerChannels(val channels: List<LiveTvChannel>, val incomplete: Boolean)
+internal data class StalkerChannels(val channels: List<LiveTvChannel>, val incomplete: Boolean, val groupOrder: List<String> = emptyList())
 
 private class StalkerSession(val settings: LiveTvStalkerSettings, val token: String) {
     /** Built once per session and shared by every channel, not copied into each. */
@@ -113,7 +171,8 @@ private class StalkerSession(val settings: LiveTvStalkerSettings, val token: Str
 }
 
 internal object LiveTvStalker {
-    private const val MAX_PAGES = 500
+    /** 14 channels a page on most portals: about 28,000 channels. */
+    private const val MAX_PAGES = 2_000
     private const val PARALLEL_PAGES = 4
 
     /** One session per portal login, so several Stalker sources do not keep renewing each other's. */
@@ -124,7 +183,11 @@ internal object LiveTvStalker {
     }
 
     /** The portal's channels; [StalkerChannels.incomplete] when some pages still failed after a retry. */
-    suspend fun channels(settings: LiveTvStalkerSettings): StalkerChannels = withSession(settings) { session ->
+    suspend fun channels(settings: LiveTvStalkerSettings): StalkerChannels = withSession(
+        settings,
+        // An expired session lists nothing (or "Authorization failed"): ask once more with a new one.
+        retryIf = { it.channels.isEmpty() },
+    ) { session ->
         val genres = genres(session)
         var index = 0
         val toChannel: (Map<String, String>) -> LiveTvChannel? = { fields -> fields.toChannel(session, genres, index++) }
@@ -133,7 +196,39 @@ internal object LiveTvStalker {
             .getOrElse { if (it is CancellationException) throw it else emptyList() }
         val seen = HashSet<String>()
         val result = if (all.isNotEmpty()) StalkerChannels(all, incomplete = false) else orderedPages(session, toChannel)
-        result.copy(channels = ArrayList(result.channels.filter { seen.add(it.id.ifBlank { it.streamUrl }) }))
+        result.copy(
+            channels = ArrayList(result.channels.filter { seen.add(it.id.ifBlank { it.streamUrl }) }),
+            groupOrder = genres.values.map(String::trim).distinct(),
+        )
+    }
+
+    /**
+     * The portal's own guide for the next [hours] hours, saved to [target] as a small gzipped
+     * XMLTV file so it is read like any other guide. [channels] maps the portal's channel ids to
+     * the ids the list keeps their guide under. Portals send it as one JSON answer, which is read
+     * one programme at a time.
+     */
+    suspend fun downloadGuide(settings: LiveTvStalkerSettings, channels: Map<String, String>, hours: Int, target: java.io.File) {
+        withSession(settings.normalized()) { session ->
+            val programmes = LiveTvHttp.stream(
+                url(session.settings, session.token, "itv", "get_epg_info", mapOf("period" to hours.toString())),
+                baseHeaders(session.settings) + tokenHeader(session.token),
+                LiveTvHttp.GUIDE_READ_TIMEOUT_S,
+            ) { input ->
+                var count = 0
+                LiveTvHttp.writeGzip(target) { out ->
+                    java.io.BufferedWriter(java.io.OutputStreamWriter(out, Charsets.UTF_8), 64 * 1024).let { writer ->
+                        count = writeStalkerGuide(input, channels, writer)
+                        writer.flush()
+                    }
+                    // An empty answer keeps the guide saved before.
+                    count > 0
+                }
+                count
+            }
+            // An expired session answers with no programmes: withSession renews it and asks once more.
+            if (programmes == 0) throw java.io.IOException("Portal sent no guide")
+        }
     }
 
     /** A playable link for a list entry: Stalker links are created per play and expire. */
@@ -154,11 +249,17 @@ internal object LiveTvStalker {
      * Runs [block] with a portal session. Portals expire sessions without notice, so a failure
      * with a cached session is retried once after a fresh handshake.
      */
-    private suspend fun <T> withSession(settings: LiveTvStalkerSettings, block: suspend (StalkerSession) -> T): T {
+    private suspend fun <T> withSession(
+        settings: LiveTvStalkerSettings,
+        retryIf: (T) -> Boolean = { false },
+        block: suspend (StalkerSession) -> T,
+    ): T {
         val cached = sessions[settings]
         if (cached != null) {
             try {
-                return block(cached)
+                val result = block(cached)
+                if (!retryIf(result)) return result
+                sessions.remove(settings, cached)
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (_: Exception) {
@@ -169,8 +270,28 @@ internal object LiveTvStalker {
     }
 
     private suspend fun handshake(settings: LiveTvStalkerSettings): StalkerSession {
-        val js = JSONObject(request(settings, null, "stb", "handshake")).let { it.optJSONObject("js") ?: it }
-        val token = js.optNonBlank("token") ?: throw LiveTvException(LiveTvError.StalkerToken)
+        val token = settings.portalEndpoints().let { candidates ->
+            var failure: Exception? = null
+            // Each link is tried as given and kept only once it answers, so a parallel request
+            // never borrows a link that is still being tried.
+            candidates.firstNotNullOfOrNull { endpoint ->
+                try {
+                    JSONObject(request(settings, null, "stb", "handshake", endpoint = endpoint))
+                        .let { it.optJSONObject("js") ?: it }
+                        .optNonBlank("token")
+                        ?.also { endpoints[settings] = endpoint }
+                        // The portal answered but gave no token (MAC not allowed): that is the error to show.
+                        ?: run { failure = LiveTvException(LiveTvError.StalkerToken); null }
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (error: Exception) {
+                    if (failure !is LiveTvException) failure = error
+                    null
+                }
+            } ?: run {
+                throw failure ?: LiveTvException(LiveTvError.StalkerToken)
+            }
+        }
         // Many portals only list channels after the device profile was requested with the token.
         runCatching { request(settings, token, "stb", "get_profile") }
             .onFailure { if (it is CancellationException) throw it }
@@ -199,11 +320,15 @@ internal object LiveTvStalker {
         val first = page(1)
         if (first.entries.isEmpty()) return StalkerChannels(emptyList(), incomplete = false)
         var failedPages = 0
+        // More pages than are read: the list is shown, but said to be incomplete.
+        var capped = false
         val entries = ArrayList(first.entries)
         val perPage = first.maxPageItems?.takeIf { it > 0 } ?: first.entries.size
         val total = first.totalItems
         if (total != null && perPage > 0) {
-            val lastPage = ((total + perPage - 1) / perPage).coerceAtMost(MAX_PAGES)
+            val pages = (total + perPage - 1) / perPage
+            capped = pages > MAX_PAGES
+            val lastPage = pages.coerceAtMost(MAX_PAGES)
             (2..lastPage).chunked(PARALLEL_PAGES).forEach { numbers ->
                 coroutineScope {
                     numbers.map { number ->
@@ -221,14 +346,22 @@ internal object LiveTvStalker {
                 }.forEach(entries::addAll)
             }
         } else {
-            for (number in 2..MAX_PAGES) {
+            var number = 2
+            while (true) {
                 val data = page(number).entries
                 if (data.isEmpty()) break
                 entries += data
+                if (number == MAX_PAGES) {
+                    capped = runCatching { page(number + 1).entries.isNotEmpty() }
+                        .onFailure { if (it is CancellationException) throw it }.getOrDefault(false)
+                    break
+                }
+                number++
             }
         }
         if (failedPages > 0) Log.w("LiveTv", "Stalker: $failedPages pages could not be loaded")
-        return StalkerChannels(entries, incomplete = failedPages > 0)
+        if (capped) Log.w("LiveTv", "Stalker: only the first $MAX_PAGES pages were read")
+        return StalkerChannels(entries, incomplete = failedPages > 0 || capped)
     }
 
     private fun Map<String, String>.toChannel(
@@ -269,7 +402,8 @@ internal object LiveTvStalker {
         type: String,
         action: String,
         extra: Map<String, String> = emptyMap(),
-    ): String = LiveTvHttp.text(url(settings, token, type, action, extra), baseHeaders(settings) + tokenHeader(token))
+        endpoint: String = settings.portalEndpoint(),
+    ): String = LiveTvHttp.text(url(settings, token, type, action, extra, endpoint), baseHeaders(settings) + tokenHeader(token))
 
     private fun url(
         settings: LiveTvStalkerSettings,
@@ -277,6 +411,7 @@ internal object LiveTvStalker {
         type: String,
         action: String,
         extra: Map<String, String> = emptyMap(),
+        endpoint: String = settings.portalEndpoint(),
     ): String {
         val parameters = buildMap {
             put("type", type)
@@ -287,7 +422,6 @@ internal object LiveTvStalker {
             if (settings.password.isNotBlank()) put("password", settings.password)
             putAll(extra)
         }
-        val endpoint = settings.portalEndpoint()
         return endpoint + parameters.entries.joinToString("&", prefix = if ('?' in endpoint) "&" else "?") { (key, value) ->
             "${key.urlEncoded()}=${value.urlEncoded()}"
         }
@@ -299,22 +433,50 @@ internal object LiveTvStalker {
     private fun baseHeaders(settings: LiveTvStalkerSettings): Map<String, String> = mapOf(
         "User-Agent" to "Mozilla/5.0 (QtEmbedded; U; Linux; MAG254; en) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 4 rev: 2721 Mobile Safari/533.3",
         "X-User-Agent" to "Model: MAG254; Link: Ethernet",
-        "Referer" to settings.portalUrl.trim().substringBefore("/portal.php").trimEnd('/') + "/c/",
+        "Referer" to settings.portalReferer(),
         "Cookie" to "mac=${settings.macAddress}; stb_lang=en; timezone=${java.util.TimeZone.getDefault().id.urlEncoded()}",
     )
 
     private fun tokenHeader(token: String?): Map<String, String> =
         if (token.isNullOrBlank()) emptyMap() else mapOf("Authorization" to "Bearer $token")
 
-    private fun LiveTvStalkerSettings.portalEndpoint(): String {
+    /** The API link that answered the handshake, per portal (see [portalEndpoints]). */
+    private val endpoints = java.util.concurrent.ConcurrentHashMap<LiveTvStalkerSettings, String>()
+
+    private fun LiveTvStalkerSettings.portalEndpoint(): String = endpoints[this] ?: portalEndpoints().first()
+
+    /**
+     * Where the portal's API may be, most likely first: portal.php next to the client page, then
+     * Ministra's …/stalker_portal/server/load.php. A link to either file is used as given.
+     */
+    private fun LiveTvStalkerSettings.portalEndpoints(): List<String> {
         val normalized = portalUrl.trim().trimEnd('/')
-        return when {
-            normalized.endsWith("portal.php", ignoreCase = true) -> normalized
-            normalized.contains("portal.php?", ignoreCase = true) -> normalized
-            normalized.endsWith("/c", ignoreCase = true) -> normalized.dropLast(2) + "/portal.php"
-            else -> "$normalized/portal.php"
+        val path = normalized.substringBefore('?')
+        if (path.endsWith("portal.php", ignoreCase = true) || path.endsWith("load.php", ignoreCase = true)) return listOf(normalized)
+        val portalPhp = if (path.endsWith("/c", ignoreCase = true)) path.dropLast(2) + "/portal.php" else "$path/portal.php"
+        val ministra = path.indexOf("/stalker_portal", ignoreCase = true)
+        val loadPhp = if (ministra >= 0) {
+            path.substring(0, ministra + "/stalker_portal".length) + "/server/load.php"
+        } else {
+            (if (path.endsWith("/c", ignoreCase = true)) path.dropLast(2) else path) + "/server/load.php"
         }
+        return listOf(portalPhp, loadPhp).distinct()
     }
+
+    /** The portal's client page ("…/c/"), which real boxes send as their Referer. */
+    private fun LiveTvStalkerSettings.portalReferer(): String {
+        val path = portalUrl.trim().substringBefore('?').trimEnd('/')
+        val ministra = path.indexOf("/stalker_portal", ignoreCase = true)
+        val base = when {
+            ministra >= 0 -> path.substring(0, ministra + "/stalker_portal".length)
+            path.endsWith("/portal.php", ignoreCase = true) -> path.dropLast("/portal.php".length)
+            path.endsWith("/load.php", ignoreCase = true) -> path.dropLast("/load.php".length)
+            path.endsWith("/c", ignoreCase = true) -> path.dropLast(2)
+            else -> path
+        }
+        return "$base/c/"
+    }
+
 
     /**
      * A channel logo as a link. Many portals give only the file name ("1234.png"), served from
@@ -348,11 +510,141 @@ internal object LiveTvStalker {
         return portalOrigin()?.let { "$it/stalker_portal" }
     }
 
-    private fun String.toStalkerPlayableUrl(): String =
-        trim().removePrefix("ffmpeg ").removePrefix("auto ").substringBefore(' ').trim()
+    /** "ffmpeg http://…", "ffrt2 http://…", "auto  http://…": the link part. */
+    private fun String.toStalkerPlayableUrl(): String {
+        val parts = trim().split(' ', '\t').filter(String::isNotBlank)
+        return (parts.firstOrNull { "://" in it } ?: parts.lastOrNull()).orEmpty()
+    }
 
     private fun JSONObject.optNonBlank(name: String): String? =
         if (isNull(name)) null else optString(name).trim().takeIf(String::isNotBlank)
+}
+
+/**
+ * Copies a Stalker `get_epg_info` answer (`{"js":{"data":{"<ch_id>":[{..},..]}}}`, or `data` as
+ * one array of programmes with their `ch_id`) to [out] as XMLTV, keeping the channels in
+ * [channels]. Returns how many programmes were written.
+ */
+private fun writeStalkerGuide(input: InputStream, channels: Map<String, String>, out: java.io.Writer): Int {
+    var count = 0
+    out.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv>\n")
+    JsonReader(InputStreamReader(input.withoutBom(), Charsets.UTF_8)).use { reader ->
+        reader.isLenient = true
+        fun programme(channelId: String?) {
+            var chId = channelId
+            var title: String? = null
+            var description: String? = null
+            var start: Long? = null
+            var stop: Long? = null
+            var startText: String? = null
+            var stopText: String? = null
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "ch_id" -> reader.nextScalar()?.let { if (chId == null) chId = it }
+                    "name" -> title = reader.nextScalar()
+                    "descr" -> description = reader.nextScalar()?.trim()?.takeIf(String::isNotEmpty)
+                    "start_timestamp" -> start = reader.nextScalar()?.toLongOrNull()
+                    "stop_timestamp" -> stop = reader.nextScalar()?.toLongOrNull()
+                    "time" -> startText = reader.nextScalar()
+                    "time_to" -> stopText = reader.nextScalar()
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+            val guideId = chId?.let(channels::get) ?: return
+            // Timestamps are seconds; the text times are in the time zone the portal was sent (the TV's).
+            val startSeconds = start ?: startText?.let(::stalkerLocalSeconds) ?: return
+            val stopSeconds = stop ?: stopText?.let(::stalkerLocalSeconds) ?: return
+            val name = title ?: return
+            if (stopSeconds <= startSeconds) return
+            out.write("<programme start=\"")
+            out.write(xmlTvTime(startSeconds))
+            out.write("\" stop=\"")
+            out.write(xmlTvTime(stopSeconds))
+            out.write("\" channel=\"")
+            out.write(xmlEscaped(guideId))
+            out.write("\"><title>")
+            out.write(xmlEscaped(name))
+            out.write("</title>")
+            description?.let {
+                out.write("<desc>")
+                out.write(xmlEscaped(it))
+                out.write("</desc>")
+            }
+            out.write("</programme>\n")
+            count++
+        }
+        fun programmes(channelId: String?) {
+            reader.beginArray()
+            while (reader.hasNext()) {
+                if (reader.peek() == JsonToken.BEGIN_OBJECT) programme(channelId) else reader.skipValue()
+            }
+            reader.endArray()
+        }
+        fun data() {
+            when (reader.peek()) {
+                JsonToken.BEGIN_OBJECT -> {
+                    reader.beginObject()
+                    while (reader.hasNext()) {
+                        val channelId = reader.nextName()
+                        if (channelId in channels && reader.peek() == JsonToken.BEGIN_ARRAY) programmes(channelId) else reader.skipValue()
+                    }
+                    reader.endObject()
+                }
+                JsonToken.BEGIN_ARRAY -> programmes(null)
+                else -> reader.skipValue()
+            }
+        }
+        fun body() {
+            reader.beginObject()
+            while (reader.hasNext()) {
+                when (reader.nextName()) {
+                    "js" -> if (reader.peek() == JsonToken.BEGIN_OBJECT) body() else reader.skipValue()
+                    "data" -> data()
+                    else -> reader.skipValue()
+                }
+            }
+            reader.endObject()
+        }
+        if (reader.peek() == JsonToken.BEGIN_OBJECT) body()
+    }
+    out.write("</tv>\n")
+    return count
+}
+
+/** `2026-09-29 21:00:00` in the TV's time zone, as epoch seconds. */
+private fun stalkerLocalSeconds(text: String): Long? = runCatching {
+    java.time.LocalDateTime.parse(text.trim().replace(' ', 'T'))
+        .atZone(java.time.ZoneId.systemDefault()).toEpochSecond()
+}.getOrNull()
+
+/** Epoch seconds as XMLTV `yyyyMMddHHmmss +0000`. */
+private fun xmlTvTime(epochSeconds: Long): String {
+    val time = java.time.LocalDateTime.ofEpochSecond(epochSeconds, 0, java.time.ZoneOffset.UTC)
+    return buildString(20) {
+        append(time.year.toString().padStart(4, '0'))
+        fun two(value: Int) { if (value < 10) append('0'); append(value) }
+        two(time.monthValue); two(time.dayOfMonth); two(time.hour); two(time.minute); two(time.second)
+        append(" +0000")
+    }
+}
+
+/** Text safe inside XML: markup characters escaped, characters XML does not allow left out. */
+private fun xmlEscaped(text: String): String {
+    if (text.none { it == '&' || it == '<' || it == '>' || it == '"' || it < ' ' }) return text
+    return buildString(text.length + 16) {
+        text.forEach { char ->
+            when {
+                char == '&' -> append("&amp;")
+                char == '<' -> append("&lt;")
+                char == '>' -> append("&gt;")
+                char == '"' -> append("&quot;")
+                char < ' ' && char != '\t' && char != '\n' && char != '\r' -> Unit
+                else -> append(char)
+            }
+        }
+    }
 }
 
 private class StalkerPage<T>(val entries: List<T>, val totalItems: Int?, val maxPageItems: Int?)
@@ -362,13 +654,18 @@ private fun <T : Any> readStalkerPage(input: InputStream, map: (Map<String, Stri
     var entries: List<T> = emptyList()
     var total: Int? = null
     var perPage: Int? = null
-    JsonReader(InputStreamReader(input, Charsets.UTF_8)).use { reader ->
+    JsonReader(InputStreamReader(input.withoutBom(), Charsets.UTF_8)).use { reader ->
         reader.isLenient = true
         fun readBody() {
             reader.beginObject()
             while (reader.hasNext()) {
                 when (reader.nextName()) {
-                    "js" -> if (reader.peek() == JsonToken.BEGIN_OBJECT) readBody() else reader.skipValue()
+                    "js" -> when (reader.peek()) {
+                        JsonToken.BEGIN_OBJECT -> readBody()
+                        // get_genres answers {"js":[{..},..]}.
+                        JsonToken.BEGIN_ARRAY -> entries = reader.readObjectArray(map)
+                        else -> reader.skipValue()
+                    }
                     "data" -> entries = if (reader.peek() == JsonToken.BEGIN_ARRAY) reader.readObjectArray(map) else {
                         reader.skipValue(); emptyList()
                     }
@@ -388,9 +685,17 @@ private fun <T : Any> readStalkerPage(input: InputStream, map: (Map<String, Stri
 
 // region Streaming JSON helpers
 
+/** Some PHP panels start their answers with a UTF-8 byte-order mark, which JSON readers reject. */
+private fun InputStream.withoutBom(): InputStream {
+    val buffered = this as? java.io.BufferedInputStream ?: java.io.BufferedInputStream(this, 8 * 1024)
+    buffered.mark(3)
+    if (!(buffered.read() == 0xEF && buffered.read() == 0xBB && buffered.read() == 0xBF)) buffered.reset()
+    return buffered
+}
+
 /** Reads a top-level array of objects (or `{"data":[...]}`), mapping each object's plain fields. */
 private fun <T : Any> readObjects(input: InputStream, map: (Map<String, String>) -> T?): List<T> =
-    JsonReader(InputStreamReader(input, Charsets.UTF_8)).use { reader ->
+    JsonReader(InputStreamReader(input.withoutBom(), Charsets.UTF_8)).use { reader ->
         reader.isLenient = true
         when (reader.peek()) {
             JsonToken.BEGIN_ARRAY -> reader.readObjectArray(map)
@@ -453,6 +758,8 @@ enum class LiveTvError {
     /** The list loaded, but some of the portal's pages did not: a notice, not a failed load. */
     StalkerIncomplete,
     XtreamRequired, XtreamInvalidUrl, XtreamNoChannels, XtreamFailed,
+    /** The guide link given with a source is not a web link. */
+    GuideInvalidUrl,
 }
 
 internal class LiveTvException(val error: LiveTvError) : Exception(error.name)

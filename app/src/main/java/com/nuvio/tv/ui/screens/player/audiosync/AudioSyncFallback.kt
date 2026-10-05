@@ -14,6 +14,7 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.text.CuesWithTiming
 import com.nuvio.tv.R
+import com.nuvio.tv.domain.model.Subtitle
 import com.nuvio.tv.ui.screens.player.PlayerPlaybackNetworking
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
 import com.nuvio.tv.ui.screens.player.autosync.AutomaticSubtitleSync
@@ -29,6 +30,8 @@ import com.nuvio.tv.ui.screens.player.audiosync.asr.AsrModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -71,6 +74,7 @@ internal class AudioSyncFallback private constructor(
     private var ticker: Job? = null
     private var takeOverJob: Job? = null
     private var settingsJob: Job? = null
+    private var candidatesJob: Job? = null
 
     private val trackListener = object : Player.Listener {
         override fun onTracksChanged(tracks: Tracks) {
@@ -99,14 +103,10 @@ internal class AudioSyncFallback private constructor(
         }
     }
 
-    /**
-     * AutoSync started analysing a subtitle: listen meanwhile, so a takeover starts with audio.
-     * [mayReplaceSubtitle] is false when the user picked it, so the audio never swaps it for another.
-     */
-    fun arm(mayReplaceSubtitle: Boolean) {
+    /** AutoSync started analysing a subtitle: listen meanwhile, so a takeover starts with audio. */
+    fun arm() {
         stop()
         if (!AudioSyncSettings.fallbackEnabled.value) return
-        controller.mayReplaceSubtitle = mayReplaceSubtitle
         controller.enabled = true
         controller.samplingOnMobileData = AudioSyncSettings.samplingOnMobileData.value
         controller.listensBeforeSession = true
@@ -118,17 +118,32 @@ internal class AudioSyncFallback private constructor(
             val videoId = runtime.videoId
             if (!type.isNullOrBlank() && !videoId.isNullOrBlank()) controller.setContent(type, videoId)
         }
-        controller.setReferenceSubtitles(
-            runtime._uiState.value.addonSubtitles.distinctBy { it.url }.map { subtitle ->
-                AudioSubtitleSyncController.ReferenceCandidate(
-                    url = subtitle.url,
-                    language = subtitle.lang,
-                    headers = subtitle.headers.orEmpty(),
-                    label = subtitle.addonName,
-                )
-            },
-        )
+        // As on the phone, subtitles listed after AutoSync started join the search too.
+        candidatesJob = scope.launch {
+            runtime._uiState.map { it.addonSubtitles }.distinctUntilChanged().collect {
+                controller.setReferenceSubtitles(referenceCandidates())
+            }
+        }
         startTicker()
+    }
+
+    /**
+     * Every subtitle the add-ons returned for this title, not only the languages the menu shows:
+     * English ones are the speech recognition's references, as on the phone.
+     */
+    private fun referenceCandidates(): List<AudioSubtitleSyncController.ReferenceCandidate> {
+        val all = synchronized(allSubtitles) { allSubtitles[runtime] }
+            ?.takeIf { (videoId, _) -> videoId == runtime.currentVideoId }
+            ?.second
+            .orEmpty()
+        return (runtime._uiState.value.addonSubtitles + all).distinctBy { it.url }.map { subtitle ->
+            AudioSubtitleSyncController.ReferenceCandidate(
+                url = subtitle.url,
+                language = subtitle.lang,
+                headers = subtitle.headers.orEmpty(),
+                label = subtitle.addonName,
+            )
+        }
     }
 
     /** AutoSync applied its own result: nothing is left for the audio to do. */
@@ -169,6 +184,8 @@ internal class AudioSyncFallback private constructor(
     fun stop() {
         takeOverJob?.cancel()
         takeOverJob = null
+        candidatesJob?.cancel()
+        candidatesJob = null
         ticker?.cancel()
         ticker = null
         target.getAndSet(null)?.let { previous ->
@@ -283,6 +300,15 @@ internal class AudioSyncFallback private constructor(
         private const val CUES_POLL_MS = 50L
         private val initialized = AtomicBoolean(false)
         private val fallbacks = WeakHashMap<PlayerRuntimeController, AudioSyncFallback>()
+        private val allSubtitles = WeakHashMap<PlayerRuntimeController, Pair<String?, List<Subtitle>>>()
+
+        /**
+         * The add-on subtitles found for [runtime]'s current title before Nuvio hides languages
+         * the user didn't ask for; the audio sync still uses those as references.
+         */
+        fun offerSubtitles(runtime: PlayerRuntimeController, subtitles: List<Subtitle>) {
+            synchronized(allSubtitles) { allSubtitles[runtime] = runtime.currentVideoId to subtitles }
+        }
 
         /** Settings persistence, the speech model and the log. Safe to call more than once. */
         fun initialize(context: Context) {

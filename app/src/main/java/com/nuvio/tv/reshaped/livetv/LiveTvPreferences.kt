@@ -14,6 +14,13 @@ object LiveTvPreferences {
     private const val KEY_ENABLED = "live_tv_enabled"
     private const val KEY_PREVIEWS = "live_tv_previews"
     private const val KEY_PREVIEW_SOUND = "live_tv_preview_sound"
+    private const val KEY_SHOW_FAVORITES = "live_tv_show_favorites"
+    private const val KEY_SHOW_ALL = "live_tv_show_all"
+    private const val KEY_PREFER_HLS = "live_tv_prefer_hls"
+    private const val KEY_GUIDE_REFRESH_HOURS = "live_tv_guide_refresh_hours"
+
+    /** How often a saved guide is downloaded again; the first is the default. */
+    val guideRefreshOptionsHours = listOf(12, 24, 48)
 
     private val _enabled = MutableStateFlow(false)
     val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
@@ -26,6 +33,21 @@ object LiveTvPreferences {
     /** Whether the preview plays the channel's sound. */
     val previewSound: StateFlow<Boolean> = _previewSound.asStateFlow()
 
+    private val _showFavorites = MutableStateFlow(true)
+    /** Whether the categories list Favorites. */
+    val showFavorites: StateFlow<Boolean> = _showFavorites.asStateFlow()
+
+    private val _showAll = MutableStateFlow(true)
+    /** Whether the categories list All channels. */
+    val showAll: StateFlow<Boolean> = _showAll.asStateFlow()
+
+    private val _preferHls = MutableStateFlow(false)
+    /** Replays (catch-up) ask an Xtream panel for HLS first, which has a length and seeks; TS when it has none. */
+    val preferHls: StateFlow<Boolean> = _preferHls.asStateFlow()
+
+    private val _guideRefreshHours = MutableStateFlow(guideRefreshOptionsHours.first())
+    val guideRefreshHours: StateFlow<Int> = _guideRefreshHours.asStateFlow()
+
     @Volatile
     private var loaded = false
 
@@ -37,6 +59,11 @@ object LiveTvPreferences {
             _enabled.value = prefs.getBoolean(KEY_ENABLED, false)
             _previews.value = prefs.getBoolean(KEY_PREVIEWS, true)
             _previewSound.value = prefs.getBoolean(KEY_PREVIEW_SOUND, true)
+            _showFavorites.value = prefs.getBoolean(KEY_SHOW_FAVORITES, true)
+            _showAll.value = prefs.getBoolean(KEY_SHOW_ALL, true)
+            _preferHls.value = prefs.getBoolean(KEY_PREFER_HLS, false)
+            _guideRefreshHours.value = prefs.getInt(KEY_GUIDE_REFRESH_HOURS, guideRefreshOptionsHours.first())
+                .takeIf { it in guideRefreshOptionsHours } ?: guideRefreshOptionsHours.first()
             loaded = true
         }
     }
@@ -57,6 +84,31 @@ object LiveTvPreferences {
         ensureLoaded(context)
         _previewSound.value = enabled
         prefs(context).edit().putBoolean(KEY_PREVIEW_SOUND, enabled).apply()
+    }
+
+    fun setShowFavorites(context: Context, shown: Boolean) {
+        ensureLoaded(context)
+        _showFavorites.value = shown
+        prefs(context).edit().putBoolean(KEY_SHOW_FAVORITES, shown).apply()
+    }
+
+    fun setShowAll(context: Context, shown: Boolean) {
+        ensureLoaded(context)
+        _showAll.value = shown
+        prefs(context).edit().putBoolean(KEY_SHOW_ALL, shown).apply()
+    }
+
+    fun setPreferHls(context: Context, enabled: Boolean) {
+        ensureLoaded(context)
+        _preferHls.value = enabled
+        prefs(context).edit().putBoolean(KEY_PREFER_HLS, enabled).apply()
+    }
+
+    fun setGuideRefreshHours(context: Context, hours: Int) {
+        if (hours !in guideRefreshOptionsHours) return
+        ensureLoaded(context)
+        _guideRefreshHours.value = hours
+        prefs(context).edit().putInt(KEY_GUIDE_REFRESH_HOURS, hours).apply()
     }
 
     // Its own tiny file: this is read on the main thread when the menu is built.

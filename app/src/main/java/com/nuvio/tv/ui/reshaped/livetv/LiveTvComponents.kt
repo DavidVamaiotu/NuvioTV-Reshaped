@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Size
@@ -64,11 +65,14 @@ import coil3.network.NetworkHeaders
 import coil3.network.httpHeaders
 import coil3.request.ImageRequest
 import com.nuvio.tv.R
+import com.nuvio.tv.reshaped.livetv.LiveTvHttp
 import com.nuvio.tv.reshaped.livetv.LIVE_TV_UNGROUPED
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
 import com.nuvio.tv.reshaped.livetv.LiveTvProgramme
 import com.nuvio.tv.ui.theme.NuvioTheme
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
+import coil3.request.crossfade
 
 internal val LiveTvPillShape = RoundedCornerShape(100.dp)
 
@@ -131,8 +135,12 @@ internal fun LiveTvTextField(
     keyboardType: KeyboardType = KeyboardType.Uri,
     password: Boolean = false,
     onDone: () -> Unit = {},
+    /** Where ◀ and ▶ go from the field (a button beside it), rather than looking for something that way. */
+    sideFocus: FocusRequester? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // The card itself (not the field inside it, which handles its own arrows).
+    var cardFocused by remember { mutableStateOf(false) }
     val inputFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -144,7 +152,28 @@ internal fun LiveTvTextField(
         onClick = { inputFocusRequester.requestFocus(); keyboardController?.show() },
         modifier = modifier
             .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused || it.hasFocus },
+            .then(
+                if (sideFocus == null) Modifier else Modifier
+                    .focusProperties {
+                        left = sideFocus
+                        right = sideFocus
+                    }
+                    // Taken here, before anything around the field sees it: the screen may use ▶
+                    // itself (Live TV's categories go back to the guide on it) before focus moves.
+                    .onPreviewKeyEvent { event ->
+                        val native = event.nativeKeyEvent
+                        if (!cardFocused) return@onPreviewKeyEvent false
+                        if (native.keyCode != KeyEvent.KEYCODE_DPAD_LEFT && native.keyCode != KeyEvent.KEYCODE_DPAD_RIGHT) {
+                            return@onPreviewKeyEvent false
+                        }
+                        if (native.action == KeyEvent.ACTION_DOWN) runCatching { sideFocus.requestFocus() }
+                        true
+                    },
+            )
+            .onFocusChanged {
+                focused = it.isFocused || it.hasFocus
+                cardFocused = it.isFocused
+            },
         colors = CardDefaults.colors(
             containerColor = NuvioTheme.colors.TextPrimary.copy(alpha = 0.05f),
             focusedContainerColor = NuvioTheme.colors.TextPrimary.copy(alpha = 0.08f),
@@ -186,6 +215,10 @@ internal fun LiveTvTextField(
                             else -> return@onPreviewKeyEvent false
                         } ?: return@onPreviewKeyEvent false
                         keyboardController?.hide()
+                        if (sideFocus != null && (direction == FocusDirection.Left || direction == FocusDirection.Right)) {
+                            runCatching { sideFocus.requestFocus() }
+                            return@onPreviewKeyEvent true
+                        }
                         // Nothing that way (the top of the screen): stay, rather than typing an arrow.
                         focusManager.moveFocus(direction)
                         true
@@ -257,6 +290,7 @@ internal fun LiveTvLogo(
                         .size(width.roundToPx(), height.roundToPx())
                         // IPTV panels often serve logos only to player-like clients, as they do streams.
                         .httpHeaders(LOGO_HEADERS)
+                        .fetcherFactory<coil3.Uri>(LOGO_FETCHER)
                         .build()
                 }
             }
@@ -273,7 +307,46 @@ internal fun LiveTvLogo(
     }
 }
 
+/** A programme's picture from the guide, cropped to fill; nothing shows when there is none or it fails. */
+@Composable
+internal fun LiveTvPoster(url: String?, width: Dp, height: Dp, modifier: Modifier = Modifier) {
+    var failed by remember(url) { mutableStateOf(false) }
+    if (url.isNullOrBlank() || failed) return
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val request = remember(url, width, height) {
+        with(density) {
+            ImageRequest.Builder(context)
+                .data(url)
+                // Decoded to fill a box half again as large: a fit-inside decode was then
+                // upscaled by the crop, which made the picture soft.
+                .size((width.toPx() * POSTER_OVERSAMPLE).roundToInt(), (height.toPx() * POSTER_OVERSAMPLE).roundToInt())
+                .scale(coil3.size.Scale.FILL)
+                .crossfade(200)
+                .httpHeaders(LOGO_HEADERS)
+                .fetcherFactory<coil3.Uri>(LOGO_FETCHER)
+                .build()
+        }
+    }
+    AsyncImage(
+        model = request,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
+        onError = { failed = true },
+        modifier = modifier
+            .size(width, height)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color.White.copy(alpha = 0.06f)),
+    )
+}
+
+private const val POSTER_OVERSAMPLE = 1.5f
+
 private val LOGO_HEADERS = NetworkHeaders.Builder().set("User-Agent", "VLC/3.0.0 LibVLC/3.0.0").build()
+
+/** Logos load through Live TV's own client ([LiveTvHttp.logoClient]), still into Nuvio's image caches. */
+private val LOGO_FETCHER = coil3.network.okhttp.OkHttpNetworkFetcherFactory(callFactory = { LiveTvHttp.logoClient })
 
 private fun String.initials(): String =
     split(' ', '-', '_', '.').filter { it.isNotBlank() && it.first().isLetterOrDigit() }

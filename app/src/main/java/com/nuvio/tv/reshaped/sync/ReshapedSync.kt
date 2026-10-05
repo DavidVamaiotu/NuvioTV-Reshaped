@@ -53,6 +53,8 @@ internal object ReshapedSync {
     private const val KEY_SETTINGS = "sync_settings"
     private const val KEY_LIVE_TV = "sync_live_tv"
     private const val KEY_LAST_SYNC = "last_sync_ms"
+    /** Per Live TV profile: where in the file it synced last (an earlier version moved some profiles). */
+    private const val KEY_SECTION = "live_tv_section_"
     private const val FOREGROUND_MIN_GAP_MS = 60_000L
     private const val CHANGE_DEBOUNCE_MS = 5_000L
     /** The first sync waits until the app has finished starting (lighter on 2 GB TVs). */
@@ -150,6 +152,18 @@ internal object ReshapedSync {
         }
     }
 
+    /**
+     * Live TV opened (or came back from the player): fetch what other devices changed, so a TV
+     * left open for hours shows them. At most once a minute, shared with the foreground sync.
+     */
+    fun onLiveTvOpened() {
+        if (!::appContext.isInitialized || !_syncLiveTv.value) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastForegroundSyncMs != 0L && now - lastForegroundSyncMs < FOREGROUND_MIN_GAP_MS) return
+        lastForegroundSyncMs = now
+        scope.launch { sync(appContext, onlyIfChanged = false) }
+    }
+
     fun syncNow(context: Context) {
         scope.launch { sync(context.applicationContext, onlyIfChanged = false) }
     }
@@ -182,34 +196,77 @@ internal object ReshapedSync {
         if (!GoogleAccount.isConfigured || !GoogleAccount.isSignedIn(context)) return
         mutex.withLock {
             val profileId = if (liveTvOn) activeProfileId(context) else null
-            val base = withContext(Dispatchers.IO) { readBase(context) }
+            // Each TV profile syncs its own place: two profiles of one TV keep their own Live TV
+            // and must never share a place, where each would remove what only the other has.
+            val sectionId = profileId
+            val lastSection = profileId?.let { prefs(context).getInt(KEY_SECTION + it, it) }
+            val savedBase = withContext(Dispatchers.IO) { readBase(context) }
+            // A profile syncing into another place than before (it now shares the main profile's)
+            // joins what is there: nothing it lacks counts as deleted, what it has is added.
+            val base = if (sectionId != null && lastSection != sectionId) {
+                savedBase.filterKeys { !it.startsWith(LiveTvSections.prefix(sectionId)) }
+            } else {
+                savedBase
+            }
             // Settings are read and set on the main thread, as their screens do.
             val settings = if (settingsOn) withContext(Dispatchers.Main) { ReshapedSyncedSettings.current(context) } else emptyMap()
             val liveTv = profileId?.let { LiveTvRepository.syncSnapshot(context, it) }
-            val current = settings + (if (profileId != null && liveTv != null) LiveTvSections.toSections(profileId, liveTv, base) else emptyMap())
+            val removed = profileId?.let { LiveTvRepository.syncRemovedSources(context, it) }.orEmpty()
+            // Imported playlists changed here go up first, so the file can name their copies.
+            val uploads = if (profileId != null && liveTv != null) SyncedPlaylists.uploaded(context, profileId, liveTv.sources) else null
+            val playlists = uploads?.refs.orEmpty()
+            val current = settings + (
+                if (sectionId != null && liveTv != null) LiveTvSections.toSections(sectionId, liveTv, base, playlists, removed) else emptyMap()
+            )
             if (onlyIfChanged && SyncDoc.stamp(base, current, 0L) == base) return
             _status.update { it.copy(running = true) }
             try {
                 val remoteFile = DriveAppFolder.read(context)
                 val remote = remoteFile.others.fold(SyncDoc.decode(remoteFile.text)) { doc, (_, text) -> SyncDoc.merge(SyncDoc.decode(text), doc) }
                 val now = SyncDoc.stampTime(System.currentTimeMillis(), base, remote)
-                val local = SyncDoc.stamp(base, current, now)
-                val merged = SyncDoc.prune(SyncDoc.merge(local, remote), now)
+                val local = withRemovals(SyncDoc.stamp(base, current, now), sectionId, removed, now)
+                val merged = SyncDoc.prune(
+                    keepLocalSources(SyncDoc.merge(local, remote), sectionId, liveTv, base, local, removed),
+                    now,
+                )
 
                 if (settingsOn) {
                     withContext(Dispatchers.Main) { ReshapedSyncedSettings.apply(context, settings, merged) }
                 }
-                if (profileId != null && liveTv != null) {
+                if (profileId != null && sectionId != null && liveTv != null) {
                     // Sources this device has keep its own ids (the file may give another device's).
                     val localIds = liveTv.sources.associate { it.identity to it.id }
-                    val fromFile = LiveTvSections.fromSections(profileId, merged)
+                    val fromFile = LiveTvSections.fromSections(sectionId, merged)
                     val order = liveTv.sources.withIndex().associate { it.value.identity to it.index }
                     val after = fromFile.copy(
                         sources = fromFile.sources
                             .map { source -> localIds[source.identity]?.let { source.copy(id = it) } ?: source }
                             .sortedBy { order[it.identity] ?: Int.MAX_VALUE },
+                        // A file without an order (older versions only) leaves this device's as it is.
+                        sourceOrder = fromFile.sourceOrder.ifEmpty { liveTv.sourceOrder },
                     )
+                    // Imported playlists another device sent or changed are fetched before they load.
+                    val refs = LiveTvSections.playlistRefs(sectionId, merged)
+                    val reload = ArrayList<String>()
+                    val fetched = HashSet<String>()
+                    after.sources.forEach { source ->
+                        val ref = refs[source.identity] ?: return@forEach
+                        if (SyncedPlaylists.fetch(context, profileId, source.id, ref)) {
+                            fetched += source.identity
+                            if (source.identity in localIds) reload += source.id
+                        }
+                    }
                     LiveTvRepository.applySync(context, profileId, liveTv, after)
+                    reload.forEach { LiveTvRepository.reloadSource(profileId, it) }
+                    // A new source given another id here (its id was taken) fetches under that one.
+                    after.sources.filter { it.identity in fetched && it.identity !in localIds }.forEach { source ->
+                        val id = LiveTvRepository.sourceIdFor(context, profileId, source.identity) ?: return@forEach
+                        if (id != source.id && SyncedPlaylists.fetch(context, profileId, id, refs.getValue(source.identity))) {
+                            LiveTvRepository.reloadSource(profileId, id)
+                        }
+                    }
+                    // Every profile's copies stay, not only this one's.
+                    SyncedPlaylists.deleteUnused(context, LiveTvSections.playlistDriveIds(merged) + playlists.values.map { it.driveId })
                 }
                 if (merged != remote || remoteFile.id == null || remoteFile.others.isNotEmpty()) {
                     driveFileId = DriveAppFolder.write(context, remoteFile.id ?: driveFileId, SyncDoc.encode(merged))
@@ -217,9 +274,31 @@ internal object ReshapedSync {
                     driveFileId = remoteFile.id
                 }
                 remoteFile.others.forEach { (id, _) -> runCatching { DriveAppFolder.delete(context, id) } }
-                withContext(Dispatchers.IO) { writeBase(context, merged) }
+                uploads?.let { SyncedPlaylists.commit(context, it.sent) }
+                // Only what this device took in moves its base on: another profile's Live TV (or
+                // settings, or Live TV, while their sync is off) stays as this device last had it,
+                // so changes it never applied are never taken for deletions here later.
+                val nextBase = HashMap<String, Map<String, SyncEntry>>()
+                (merged.keys + savedBase.keys).forEach { name ->
+                    val applied = if (name.startsWith("live_tv/")) {
+                        sectionId != null && liveTv != null && name.startsWith(LiveTvSections.prefix(sectionId))
+                    } else {
+                        settingsOn
+                    }
+                    (if (applied) merged[name] else savedBase[name])?.let { nextBase[name] = it }
+                }
+                withContext(Dispatchers.IO) { writeBase(context, nextBase) }
                 val syncedAt = System.currentTimeMillis()
-                prefs(context).edit().putLong(KEY_LAST_SYNC, syncedAt).apply()
+                val edit = prefs(context).edit().putLong(KEY_LAST_SYNC, syncedAt)
+                if (profileId != null && sectionId != null) edit.putInt(KEY_SECTION + profileId, sectionId)
+                edit.apply()
+                // Removals the file now has (no source section lists them any more) are done.
+                if (profileId != null && sectionId != null) {
+                    val sent = removed.filter { identity ->
+                        LiveTvSections.sourceSections(sectionId).none { merged[it]?.get(identity)?.value != null }
+                    }
+                    LiveTvRepository.clearSyncRemoved(context, profileId, sent)
+                }
                 _status.value = ReshapedSyncStatus(lastSyncedAtMs = syncedAt)
             } catch (cancel: CancellationException) {
                 _status.update { it.copy(running = false) }
@@ -234,6 +313,58 @@ internal object ReshapedSync {
                 _status.update { it.copy(running = false, failed = failure, failedDetail = error.message.orEmpty()) }
             }
         }
+    }
+
+    /**
+     * A deletion in the file removes a source here only when this device had already synced
+     * that source ([base] has it): a source this device has that the account never had (or had
+     * once, deleted long ago) is kept, and goes up as new, rather than being wiped by an old
+     * deletion. Sources removed here ([removed]) stay removed.
+     */
+    private fun keepLocalSources(
+        merged: SyncSections,
+        sectionId: Int?,
+        liveTv: com.nuvio.tv.reshaped.livetv.LiveTvSyncData?,
+        base: SyncSections,
+        local: SyncSections,
+        removed: Set<String>,
+    ): SyncSections {
+        if (sectionId == null || liveTv == null) return merged
+        var result = merged
+        LiveTvSections.sourceSections(sectionId).forEach { name ->
+            val entries = result[name] ?: return@forEach
+            val mine = local[name].orEmpty()
+            var kept: MutableMap<String, SyncEntry>? = null
+            liveTv.sources.forEach { source ->
+                val key = source.identity
+                if (key in removed || entries[key]?.value != null) return@forEach
+                // Known when the base has it in either section (imported playlists moved section).
+                if (LiveTvSections.sourceSections(sectionId).any { base[it]?.get(key)?.value != null }) return@forEach
+                val own = mine[key]?.value ?: return@forEach
+                val time = maxOf(entries[key]?.time ?: 0L, mine[key]?.time ?: 0L) + 1
+                (kept ?: entries.toMutableMap().also { kept = it })[key] = SyncEntry(own, time)
+            }
+            kept?.let { result = result + (name to it) }
+        }
+        return result
+    }
+
+    /**
+     * [local] with a deletion of each source removed here in both source sections, also when the
+     * base never had it (the stamp only marks what the base had), unless it is back here.
+     */
+    private fun withRemovals(local: SyncSections, sectionId: Int?, removed: Set<String>, now: Long): SyncSections {
+        if (sectionId == null || removed.isEmpty()) return local
+        val result = local.toMutableMap()
+        LiveTvSections.sourceSections(sectionId).forEach { name ->
+            val entries = result[name].orEmpty().toMutableMap()
+            removed.forEach { identity ->
+                val entry = entries[identity]
+                if (entry == null || (entry.value != null && entry.time < now)) entries[identity] = SyncEntry(null, now)
+            }
+            result[name] = entries
+        }
+        return result
     }
 
     private fun activeProfileId(context: Context): Int =

@@ -24,6 +24,7 @@ import com.nuvio.tv.ui.screens.player.autosync.maxAlignmentShiftMs
 import com.nuvio.tv.ui.screens.player.autosync.replaceAutoSyncSidecarSubtitle
 import com.nuvio.tv.ui.screens.player.autosync.secondaryLanguageSearchSeed
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncFallback
+import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncSettings
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncTaps
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSources
 import kotlinx.coroutines.CancellationException
@@ -140,7 +141,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
     showAutoSyncToast(AutoSyncBubbleKind.Working, context.getString(R.string.autosync_toast_analyzing))
 
     if (!canAttachAddonSubtitleViaSidecar(selectedSubtitle)) {
-        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed_unsupported))
+        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed_unsupported))
         return
     }
 
@@ -167,7 +168,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
         },
     )
     if (!started) {
-        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed))
+        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
         return
     }
 
@@ -176,8 +177,10 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         .build()
     val audioFallback = AudioSyncFallback.of(this)
-    // Like AutoSync itself: a subtitle the user picked is only synced, never swapped.
-    audioFallback?.arm(mayReplaceSubtitle = candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH)
+    val audioSyncTakesOver = audioFallback != null && AudioSyncSettings.fallbackEnabled.value
+    // As on the phone, a subtitle file that never fits the audio may give way to one in the same
+    // language that does, even when the user picked it.
+    audioFallback?.arm()
 
     automaticSubtitleSyncJob = scope.launch {
         launch {
@@ -243,6 +246,9 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                 onReferenceReady = {},
                 onAnalysisOutcome = { outcome -> analysisOutcome = outcome },
                 streamHasTextTracks = ::streamHasTextTracks,
+                // With the audio sync on, an index without subtitle cues hands over to it at once,
+                // as on the phone, instead of waiting up to a minute for a delay-only sample.
+                sparseLiveReferenceAllowed = !audioSyncTakesOver,
             )
 
             // No match in the first language: search the secondary subtitle language before the
@@ -282,6 +288,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     },
                     continueDebugSession = true,
                     onAnalysisOutcome = { outcome -> analysisOutcome = outcome },
+                    sparseLiveReferenceAllowed = !audioSyncTakesOver,
                 )
                 val matched = searchResult != null
                 AutoSyncDebugLog.info {
@@ -390,7 +397,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     context,
                     "REJECT V2 - sidecar changed or apply failed",
                 )
-                showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed))
+                showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
                 return@launch
             }
 
@@ -454,7 +461,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
             if (activeSidecarSubtitleKey == null) {
                 startSidecarAddonSubtitle(selectedSubtitle)
             }
-            showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.autosync_toast_failed))
+            showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
         }
     }.also { job ->
         job.invokeOnCompletion { selectedBodyDeferred.complete(null) }
@@ -488,9 +495,9 @@ private fun Context.buildAutoSyncFailureToast(analysisOutcome: AutoSyncAnalysisO
         when (analysisOutcome) {
             AutoSyncAnalysisOutcome.NO_SUBTITLE_TRACKS,
             AutoSyncAnalysisOutcome.NO_USABLE_REFERENCE,
-            -> R.string.autosync_toast_failed_no_reference
+            -> R.string.reshaped_autosync_toast_failed_no_reference
             AutoSyncAnalysisOutcome.SUBTITLE_UNAVAILABLE,
             null,
-            -> R.string.autosync_toast_failed
+            -> R.string.reshaped_autosync_toast_failed
         },
     )

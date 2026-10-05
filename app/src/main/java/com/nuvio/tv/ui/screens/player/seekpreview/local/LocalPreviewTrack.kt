@@ -86,6 +86,12 @@ internal class LocalPreviewTrack(
     private val frameMs = LongArray(slotCount) { -1L }
     private val slotState = ByteArray(slotCount)
     private var filledCount = 0
+    /**
+     * Slots holding a nearly black frame (a fade or a cut to black). Such a frame stays on show
+     * but its slot stays open, so a brighter keyframe of the same slot replaces it. Guarded by [lock].
+     */
+    private val darkSlots = BooleanArray(slotCount)
+    private var darkCount = 0
     /** Keyframe time (ms) → slot holding its thumbnail, so a keyframe is never fetched twice. */
     private val keyframeSlots = HashMap<Long, Int>()
     private val decoded = object : LinkedHashMap<Int, Bitmap>(64, 0.75f, true) {
@@ -154,6 +160,12 @@ internal class LocalPreviewTrack(
     /** Slot the viewer last looked at, so its keyframes are decoded first. */
     @Volatile private var focusSlot = -1
 
+    /**
+     * +1 while the viewer scrubs forward, -1 backward, 0 otherwise (set by the owner from the
+     * scrub position): spooled frames in that direction are decoded first.
+     */
+    @Volatile var scrubDirection = 0
+
     fun start() {
         // Coalesce UI updates: at most a few revisions per second however fast frames land.
         scope.launch {
@@ -187,11 +199,17 @@ internal class LocalPreviewTrack(
 
     // ---- Lookups -------------------------------------------------------------------------
 
-    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? {
+    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? = lookup(positionMs, focus = true)
+
+    override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? = lookup(positionMs, focus = false)
+
+    private suspend fun lookup(positionMs: Long, focus: Boolean): SeekPreviewThumbnail? {
         val corrected = (positionMs + offsetMs).coerceIn(0L, (durationMs - 1).coerceAtLeast(0L))
         val slot = (corrected / SLOT_MS).toInt().coerceIn(0, slotCount - 1)
-        focusSlot = slot
-        if (synchronized(lock) { spooled.isNotEmpty() }) scheduleDrain()
+        if (focus) {
+            focusSlot = slot
+            if (synchronized(lock) { spooled.isNotEmpty() }) scheduleDrain()
+        }
         val exact = synchronized(lock) { exactFrameFor(corrected) }
         val found = exact ?: synchronized(lock) { nearestFilled(slot) } ?: return null
         val approximate = exact == null
@@ -280,7 +298,7 @@ internal class LocalPreviewTrack(
 
     fun wantsKeyframes(): Boolean =
         !closed && !unsupported && !decoder.gaveUp && !(spoolFull && playbackActive) &&
-            synchronized(lock) { filledCount < slotCount }
+            synchronized(lock) { filledCount < slotCount || darkCount > 0 }
 
     fun wantsKeyframe(timeUs: Long): Boolean {
         if (closed) return false
@@ -288,7 +306,24 @@ internal class LocalPreviewTrack(
         val slot = slotFor(keyMs) ?: return false
         return synchronized(lock) {
             // Any keyframe settles a waiting candidate, so it is wanted while one waits.
-            candidate != null || (slotState[slot] == EMPTY && keyMs !in keyframeSlots)
+            candidate != null || (isOpen(slot) && keyMs !in keyframeSlots)
+        }
+    }
+
+    /**
+     * Whether a keyframe from just before to [KEYFRAME_LOOKAHEAD_MS] after [timeUs] could still be
+     * wanted ([wantsKeyframe]). False lets the tap skip copying the video until the next slot that
+     * still needs a frame comes within reach. Only ever false where [wantsKeyframe] would be too.
+     */
+    fun mayWantKeyframesNear(timeUs: Long): Boolean {
+        if (closed) return false
+        val fromMs = timeUs / 1_000L - KEYFRAME_LOOKBEHIND_MS
+        val toMs = timeUs / 1_000L + KEYFRAME_LOOKAHEAD_MS
+        if (toMs < 0L || fromMs > durationMs + SLOT_MS) return false
+        val first = ((fromMs.coerceAtLeast(0L) + SLOT_MS / 2) / SLOT_MS).toInt().coerceIn(0, slotCount - 1)
+        val last = ((toMs.coerceAtLeast(0L) + SLOT_MS / 2) / SLOT_MS).toInt().coerceIn(0, slotCount - 1)
+        return synchronized(lock) {
+            candidate != null || (first..last).any { isOpen(it) }
         }
     }
 
@@ -306,7 +341,7 @@ internal class LocalPreviewTrack(
         }
         val keyMs = timeUs / 1_000L
         val slot = slotFor(keyMs) ?: return
-        val wanted = synchronized(lock) { slotState[slot] == EMPTY && keyMs !in keyframeSlots }
+        val wanted = synchronized(lock) { isOpen(slot) && keyMs !in keyframeSlots }
         val incoming = if (wanted) Candidate(slot, format, timeUs, data.copyOfRange(offset, offset + size)) else null
         val settled = ArrayList<Candidate>(2)
         synchronized(lock) {
@@ -354,7 +389,7 @@ internal class LocalPreviewTrack(
             decoder.decode(MediaFormatUtil.createMediaFormatFromFormat(format), bytes, 0, bytes.size, timeUs)
         }.getOrNull()
         if (frame != null) {
-            store(slot, frame.jpeg, timeUs / 1_000L)
+            store(slot, frame.jpeg, timeUs / 1_000L, frame.dark)
         } else {
             release(slot)
         }
@@ -403,7 +438,7 @@ internal class LocalPreviewTrack(
         if (closed || !mayDecodeNow()) return
         val next = synchronized(lock) {
             val focus = focusSlot
-            val slot = if (focus >= 0) spooled.keys.minByOrNull { abs(it - focus) } else spooled.keys.minOrNull()
+            val slot = if (focus >= 0) spooled.keys.minByOrNull { drainCost(it, focus) } else spooled.keys.minOrNull()
             slot?.let { it to spooled.remove(it)!! }
         }
         if (next == null) {
@@ -427,6 +462,17 @@ internal class LocalPreviewTrack(
         scheduleDrain()
     }
 
+    /**
+     * Order of decoding around the scrub position: the slot itself, then the ones in the direction
+     * of the scrub before those behind it, so the next steps already have their frames.
+     */
+    private fun drainCost(slot: Int, focus: Int): Int {
+        val distance = abs(slot - focus)
+        val direction = scrubDirection
+        val behind = direction != 0 && (slot - focus) * direction < 0
+        return if (behind) distance * 2 else distance * 2 - 1
+    }
+
     private fun deleteStaleSpools() {
         val now = System.currentTimeMillis()
         spoolFile.parentFile?.listFiles { file ->
@@ -442,22 +488,47 @@ internal class LocalPreviewTrack(
 
     // ---- Slot bookkeeping ----------------------------------------------------------------
 
+    /** No frame yet, or only a dark one that a brighter keyframe may replace. Guarded by [lock]. */
+    private fun isOpen(slot: Int): Boolean =
+        slotState[slot] == EMPTY || (slotState[slot] == FILLED && darkSlots[slot])
+
     private fun claim(slot: Int): Boolean = synchronized(lock) {
-        if (slotState[slot] != EMPTY) return@synchronized false
+        if (!isOpen(slot)) return@synchronized false
+        if (slotState[slot] == FILLED) {
+            // Replacing a dark frame: it stays on show until the new one is stored.
+            filledCount--
+            setDark(slot, false)
+        }
         slotState[slot] = CLAIMED
         true
     }
 
+    /** Guarded by [lock]. */
+    private fun setDark(slot: Int, dark: Boolean) {
+        if (darkSlots[slot] == dark) return
+        darkSlots[slot] = dark
+        darkCount += if (dark) 1 else -1
+    }
+
     private fun release(slot: Int) {
         synchronized(lock) {
-            if (slotState[slot] == CLAIMED) slotState[slot] = EMPTY
+            if (slotState[slot] != CLAIMED) return
+            if (jpegs[slot] != null) {
+                // The dark frame a replacement was tried for stays, still replaceable.
+                filledCount++
+                slotState[slot] = FILLED
+                setDark(slot, true)
+            } else {
+                slotState[slot] = EMPTY
+            }
         }
     }
 
-    private fun store(slot: Int, jpeg: ByteArray, keyMs: Long) {
+    private fun store(slot: Int, jpeg: ByteArray, keyMs: Long, dark: Boolean) {
         synchronized(lock) {
             if (slotState[slot] != FILLED) filledCount++
             slotState[slot] = FILLED
+            setDark(slot, dark)
             jpegs[slot] = jpeg
             frameMs[slot] = keyMs
             keyframeSlots.putIfAbsent(keyMs, slot)
@@ -481,17 +552,21 @@ internal class LocalPreviewTrack(
         if (!cacheFile.exists()) return
         runCatching {
             DataInputStream(cacheFile.inputStream().buffered()).use { input ->
-                if (input.readInt() != CACHE_MAGIC || input.readInt().toLong() != SLOT_MS) return
+                val magic = input.readInt()
+                if ((magic != CACHE_MAGIC && magic != CACHE_MAGIC_V1) || input.readInt().toLong() != SLOT_MS) return
                 val count = input.readInt()
                 repeat(count) {
                     val slot = input.readInt()
                     val keyMs = input.readLong()
                     val bytes = ByteArray(input.readInt())
                     input.readFully(bytes)
+                    // Caches from before dark frames were marked count every frame as bright.
+                    val dark = magic == CACHE_MAGIC && input.readBoolean()
                     if (slot in 0 until slotCount && claim(slot)) {
                         synchronized(lock) {
                             filledCount++
                             slotState[slot] = FILLED
+                            setDark(slot, dark)
                             jpegs[slot] = bytes
                             frameMs[slot] = keyMs
                             keyframeSlots.putIfAbsent(keyMs, slot)
@@ -508,7 +583,7 @@ internal class LocalPreviewTrack(
         val entries = synchronized(lock) {
             (0 until slotCount).mapNotNull { slot ->
                 val bytes = jpegs[slot]
-                if (slotState[slot] == FILLED && bytes != null) Triple(slot, frameMs[slot], bytes) else null
+                if (slotState[slot] == FILLED && bytes != null) CachedFrame(slot, frameMs[slot], bytes, darkSlots[slot]) else null
             }
         }
         if (entries.isEmpty()) return
@@ -519,11 +594,12 @@ internal class LocalPreviewTrack(
                 output.writeInt(CACHE_MAGIC)
                 output.writeInt(SLOT_MS.toInt())
                 output.writeInt(entries.size)
-                for ((slot, keyMs, bytes) in entries) {
+                for ((slot, keyMs, bytes, dark) in entries) {
                     output.writeInt(slot)
                     output.writeLong(keyMs)
                     output.writeInt(bytes.size)
                     output.write(bytes)
+                    output.writeBoolean(dark)
                 }
             }
             temp.renameTo(cacheFile)
@@ -543,6 +619,13 @@ internal class LocalPreviewTrack(
     companion object {
         private const val TAG = "NuvioLocalPreviews"
         const val SLOT_MS = 10_000L
+        /**
+         * How far past the latest sample time the next keyframe is looked for. In decode order a
+         * keyframe's time is later than every sample before it, by at most the B-frame reorder span
+         * (well under a second); the margins leave room for that and for timestamps' jitter.
+         */
+        private const val KEYFRAME_LOOKAHEAD_MS = 3_000L
+        private const val KEYFRAME_LOOKBEHIND_MS = 1_000L
         private const val MAX_DECODED = 48
         private const val STAND_IN_SAMPLE_SIZE = 4
         private const val LOW_MEMORY_BYTES = 3L * 1024L * 1024L * 1024L
@@ -551,7 +634,8 @@ internal class LocalPreviewTrack(
         private const val UI_UPDATE_INTERVAL_MS = 250L
         private const val SAVE_EVERY = 60
         private const val CACHE_DIR = "seek_previews"
-        private const val CACHE_MAGIC = 0x4E535031 // "NSP1"
+        private const val CACHE_MAGIC = 0x4E535032 // "NSP2": each frame ends with its dark flag
+        private const val CACHE_MAGIC_V1 = 0x4E535031 // "NSP1"
         private const val CACHE_LIMIT_BYTES = 200L * 1_000_000L
         private const val SPOOL_SUFFIX = ".spool"
         /** About an hour of 1080p keyframes. */
@@ -567,3 +651,5 @@ internal class LocalPreviewTrack(
             MessageDigest.getInstance("SHA-1").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 }
+
+private data class CachedFrame(val slot: Int, val keyMs: Long, val bytes: ByteArray, val dark: Boolean)

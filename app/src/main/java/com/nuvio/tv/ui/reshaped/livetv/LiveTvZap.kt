@@ -12,6 +12,8 @@ import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
 internal fun PlayerRuntimeController.keepPlayerForLiveTvZap(newUrl: String): Boolean {
     val player = _exoPlayer ?: return false
     if (!LiveTvPlaybackRegistry.isLiveTv(currentStreamUrl) || !LiveTvPlaybackRegistry.isLiveTv(newUrl)) return false
+    // Between a live channel and a past programme, the seek bar comes and goes: start its state over.
+    if (LiveTvPlaybackRegistry.isCatchup(currentStreamUrl) || LiveTvPlaybackRegistry.isCatchup(newUrl)) resetPlaybackTimeline()
     errorRetryJob?.cancel()
     errorRetryJob = null
     playbackPreparationJob?.cancel()
