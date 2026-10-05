@@ -1,6 +1,2 @@
-- Live TV guide: a channel whose EPG id is listed without programmes, or whose name the EPG lists twice ("VRT 1" and "VRT 1 HD"), now shows the entry that has programmes instead of "No guide".
-- Live TV guide: EPG ids and names with accents match whichever way the playlist and the EPG write them.
-- Live TV guide: EPG files that list each channel next to its own programmes (or several guides joined together) now match every channel by name, not just the first.
-- Live TV guide: a guide download that was cut off part way no longer replaces the last good guide.
-- Live TV guide: when two sources list the same stream link (for example your provider and an edited copy of its playlist), a copy without a guide shows the other copy's programmes, in My playlists too.
-- Live TV guide: names with a country tag ("UK: Discovery") prefer the EPG entry of the same country over another country's.
+- Same app as Nuvio Reshaped beta 1.1.0-beta.4 (build 1): Nuvio 1.1.0-beta.4, Tester channel in the update picker, the rebuilt Live TV guide and guide-matching fixes, rewind on catch-up channels, AutoSync audio sync like the phone, and Netflix-style scrub previews.
+- From here on, Live TV and player fixes reach Tester first.
