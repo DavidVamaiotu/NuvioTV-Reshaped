@@ -6,6 +6,7 @@
     <string name="autosync_tolerance_title">Tolerância do Auto Sync</string>
     <string name="autosync_tolerance_description">Mantém o tempo original quando a correção necessária é deste tamanho ou menor.</string>
     <string name="autosync_tolerance_off">Desativado</string>
+    <string name="autosync_tolerance_value">%1$d ms</string>
     <string name="autosync_thorough_title">Busca completa do Auto Sync</string>
     <string name="autosync_thorough_description">Continua comparando outras legendas e faixas embutidas em busca de uma correspondência mais precisa antes de sincronizar. Desativado, a primeira correspondência forte é usada mais cedo. Só correspondências confiáveis são aplicadas.</string>
     <string name="autosync_debug_logs_title">Logs de depuração do Auto Sync</string>

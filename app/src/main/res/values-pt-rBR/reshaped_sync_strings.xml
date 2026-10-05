@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="reshaped_sync_sign_in_title">Sincronizar com o Google</string>
+    <string name="reshaped_sync_sign_in_description">Mantenha as configurações do Reshaped e a TV ao Vivo iguais nas suas TVs e no celular</string>
+    <string name="reshaped_sync_not_configured">O login com o Google não está configurado nesta versão</string>
+    <string name="reshaped_sync_sign_in_starting">Obtendo um código de login…</string>
+    <string name="reshaped_sync_sign_in_instruction">Escaneie com o celular e aprove com a sua conta Google. Ou abra %1$s e digite:</string>
+    <string name="reshaped_sync_phone_instruction">Toque no botão: o código é copiado e o Google abre. Cole-o se o Google pedir e depois escolha sua conta.</string>
+    <string name="reshaped_sync_phone_button">Copiar código e abrir o Google</string>
+    <string name="reshaped_sync_phone_copied">Código copiado</string>
+    <string name="reshaped_sync_sign_in_waiting">Aguardando você aprovar no celular…</string>
+    <string name="reshaped_sync_sign_in_declined">O login foi recusado ou o acesso ao Google Drive foi desmarcado. Tente novamente e permita o acesso.</string>
+    <string name="reshaped_sync_sign_in_expired">O código expirou. Tente novamente para obter um novo.</string>
+    <string name="reshaped_sync_sign_in_failed">Não foi possível conectar ao Google. Verifique a conexão e tente novamente.</string>
+    <string name="reshaped_sync_sign_in_refused">O Google recusou este login. Isso geralmente significa que o cliente do Google Cloud ou a tela de consentimento precisa de ajustes.</string>
+    <string name="reshaped_sync_sign_in_detail">Detalhes: %1$s</string>
+    <string name="reshaped_sync_try_again">Tentar novamente</string>
+    <string name="reshaped_sync_account_title">Conta Google</string>
+    <string name="reshaped_sync_signed_in_as">Conectado como %1$s</string>
+    <string name="reshaped_sync_signed_in">Conectado</string>
+    <string name="reshaped_sync_settings_title">Sincronizar configurações do Reshaped</string>
+    <string name="reshaped_sync_settings_description">AutoSync, prévias ao avançar e outras opções do Reshaped. Tamanhos de buffer e prévias de canais ficam por dispositivo</string>
+    <string name="reshaped_sync_live_tv_title">Sincronizar TV ao Vivo</string>
+    <string name="reshaped_sync_live_tv_description">Fontes com seus logins, favoritos, categorias e o último canal</string>
+    <string name="reshaped_sync_now_title">Sincronizar agora</string>
+    <string name="reshaped_sync_never">Ainda não sincronizado</string>
+    <string name="reshaped_sync_last">Última sincronização %1$s</string>
+    <string name="reshaped_sync_running">Sincronizando…</string>
+    <string name="reshaped_sync_failed_network">Não foi possível conectar ao Google. Uma nova tentativa será feita mais tarde</string>
+    <string name="reshaped_sync_failed_signed_out">O acesso ao Google foi encerrado. Entre novamente</string>
+    <string name="reshaped_sync_failed_newer">Atualize o Nuvio Reshaped neste dispositivo para continuar sincronizando</string>
+    <string name="reshaped_sync_sign_out_title">Sair do Google?</string>
+    <string name="reshaped_sync_sign_out_description">Esta TV deixa de sincronizar. O que já foi sincronizado permanece na sua conta Google.</string>
+    <string name="reshaped_sync_sign_out">Sair</string>
+</resources>

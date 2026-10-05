@@ -6,4 +6,10 @@
     <string name="settings_seekr_api_key_custom">Sua própria chave</string>
     <string name="settings_seekr_api_key_description">As miniaturas de prévia vêm do seekr.tv. A chave integrada é compartilhada por todos e permite só 40 títulos diferentes por dia, então as prévias podem parar de funcionar. Obtenha uma chave gratuita em seekr.tv e cole aqui. Deixe vazio para usar a chave integrada.</string>
     <string name="settings_seekr_api_key_invalid">O Seekr não aceitou esta chave.</string>
+    <string name="settings_seekr_phone_instruction">Escaneie com o celular para colar sua chave por lá.</string>
+    <string name="settings_seekr_phone_subtitle">Cole sua chave do seekr.tv. A TV a verifica e a salva.</string>
+    <string name="settings_seekr_phone_send">Enviar para a TV</string>
+    <string name="settings_seekr_phone_sending">Enviando…</string>
+    <string name="settings_seekr_phone_sent">Enviado. Confira na TV se a chave foi aceita.</string>
+    <string name="settings_seekr_phone_failed">Não foi possível alcançar a TV. A tela da chave do Seekr ainda está aberta?</string>
 </resources>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="subtitle_font_title">Fonte das legendas</string>
+    <string name="subtitle_font_default">Padrão (fonte do sistema)</string>
+    <string name="subtitle_font_dialog_description">Use sua própria fonte .ttf ou .otf nas legendas dos dois players (até 20 MB). Legendas ASS estilizadas mantêm as próprias fontes.</string>
+    <string name="subtitle_font_current">Fonte atual: %1$s</string>
+    <string name="subtitle_font_phone_instruction">Escaneie com o celular, ou abra este endereço em um computador na mesma rede, para enviar um arquivo de fonte para a TV.</string>
+    <string name="subtitle_font_choose_file">Escolher arquivo</string>
+    <string name="subtitle_font_from_url">Por URL</string>
+    <string name="subtitle_font_reset">Restaurar padrão</string>
+    <string name="subtitle_font_done">Concluído</string>
+    <string name="subtitle_font_importing">Importando fonte…</string>
+    <string name="subtitle_font_imported">Fonte importada: %1$s</string>
+    <string name="subtitle_font_invalid">Esse arquivo não é uma fonte TTF ou OTF utilizável.</string>
+    <string name="subtitle_font_too_large">Essa fonte tem mais de 20 MB.</string>
+    <string name="subtitle_font_download_failed">Não foi possível baixar a fonte.</string>
+    <string name="subtitle_font_no_picker">Esta TV não tem seletor de arquivos. Envie a fonte pelo celular.</string>
+    <string name="subtitle_font_url_title">Importar fonte por URL</string>
+    <string name="subtitle_font_url_description">Link direto para um arquivo .ttf ou .otf, de até 20 MB.</string>
+    <string name="subtitle_font_url_import">Importar</string>
+    <string name="subtitle_font_web_title">Enviar uma fonte de legendas</string>
+    <string name="subtitle_font_web_subtitle">Escolha um arquivo .ttf ou .otf (até 20 MB). Sua TV o usa nas legendas dos dois players.</string>
+    <string name="subtitle_font_web_choose">Escolha primeiro um arquivo de fonte</string>
+    <string name="subtitle_font_web_upload">Enviar para a TV</string>
+    <string name="subtitle_font_web_uploading">Enviando…</string>
+    <string name="subtitle_font_web_current">Fonte atual:</string>
+    <string name="subtitle_font_web_imported">Fonte importada</string>
+    <string name="subtitle_font_web_connection_error">Erro de conexão</string>
+</resources>

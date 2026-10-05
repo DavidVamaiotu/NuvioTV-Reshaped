@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_seek_buffer_title">Buffer de avanço: %1$s</string>
+    <string name="settings_seek_buffer_default">Padrão do Nuvio</string>
+    <string name="settings_seek_buffer_value_mb">%1$d MB</string>
+    <string name="settings_seek_buffer_value_gb">%1$d GB</string>
+    <string name="settings_seek_buffer_description">Carrega o que vem a seguir antes da reprodução, para que saltos dentro dele sejam instantâneos. O ExoPlayer usa um arquivo temporário e o libmpv usa memória, limitados ao que o dispositivo tem livre; nada do que já foi assistido é mantido. Selecione para alterar; vale a partir da próxima reprodução.</string>
+</resources>
