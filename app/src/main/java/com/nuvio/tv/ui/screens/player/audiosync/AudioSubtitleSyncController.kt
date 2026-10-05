@@ -53,6 +53,7 @@ internal class AudioSubtitleSyncController(
     private val requestSwitch: (url: String) -> Unit = SubtitleSyncStatus::requestSubtitleSwitch,
 ) : AudioSampleSink, PlaybackPcmListener {
     private val appContext = context.applicationContext
+    private val lowMemoryTv by lazy { SpotConnections.isLowMemoryTv(appContext) }
     private val timeline = SpeechTimeline()
     private val aligner: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread({
@@ -228,13 +229,6 @@ internal class AudioSubtitleSyncController(
             field = value
             if (!value) model = null
         }
-
-    /**
-     * Whether a better-fitting subtitle in the same language may replace the chosen one. Off when
-     * the user picked the subtitle: the others then only help time it, as AutoSync does.
-     */
-    @Volatile
-    var mayReplaceSubtitle: Boolean = true
 
     @Volatile
     private var playbackPositionMs = 0L
@@ -665,12 +659,13 @@ internal class AudioSubtitleSyncController(
     /** Subtitles the user could pick; English ones become recognition references. */
     fun setReferenceSubtitles(list: List<ReferenceCandidate>) {
         candidates = list
-        // Load the speech model while the viewer is still choosing, so it is ready for the pick.
-        // Not while AutoSync is still deciding (listening before a session): most of those runs
-        // never need it, and on 2 GB TVs it would compete with AutoSync for memory. The session
-        // loads it on takeover; speech heard meanwhile waits in the recognition queue.
+        // Load the speech model while the viewer is still choosing, so it is ready for the pick,
+        // as the phone does. On 2 GB TVs not while AutoSync is still deciding (listening before a
+        // session): most of those runs never need it, and it would compete with AutoSync for
+        // memory. The session loads it on takeover; speech heard meanwhile waits in the
+        // recognition queue.
         if (enabled && list.isNotEmpty() && AsrModel.isReady(appContext) && !audioIsForeign() &&
-            (session != null || !listensBeforeSession)
+            (session != null || !listensBeforeSession || !lowMemoryTv)
         ) {
             ensureRecognizer()
         }
@@ -747,12 +742,6 @@ internal class AudioSubtitleSyncController(
                     rateCorrected = winner.model.segments.first().scale != 1.0,
                 ),
             )
-            return
-        }
-        if (!mayReplaceSubtitle) {
-            // The user chose this subtitle: keep it, and keep syncing it on its own evidence.
-            SyncLog.i("${winner.key} fits the audio better, but the chosen subtitle was picked by the user; keeping it")
-            stopPool()
             return
         }
         val label = candidates.firstOrNull { it.url == winner.key }?.label?.takeIf { it.isNotBlank() } ?: "another file"
