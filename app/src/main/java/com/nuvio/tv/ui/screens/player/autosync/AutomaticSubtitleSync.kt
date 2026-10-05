@@ -178,6 +178,12 @@ internal object AutomaticSubtitleSync {
          * for embedded cues at once, since none can arrive.
          */
         streamHasTextTracks: (suspend () -> Boolean?)? = null,
+        /**
+         * Whether an MKV whose index lists no subtitle cues may wait for embedded cues to play and
+         * sync to that sample (delay only). False skips that wait, as on the phone, so the audio
+         * sync takes over at once.
+         */
+        sparseLiveReferenceAllowed: Boolean = true,
     ): AutoSyncResolvedTimeline? {
         Unit
         val aggressiveMode = AutoSyncPreferences.aggressiveMode.value
@@ -597,7 +603,7 @@ internal object AutomaticSubtitleSync {
             }
 
             if (referenceTracks.isEmpty()) {
-                val useSparseLiveReference =
+                val useSparseLiveReference = sparseLiveReferenceAllowed &&
                     indexedTimeline?.source == "matroska-cues-no-subtitle-entries"
                 val liveSelection = awaitNearCompleteLiveReferences(
                     sourceKey = sourceKey,
