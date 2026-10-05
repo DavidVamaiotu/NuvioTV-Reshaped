@@ -11,6 +11,7 @@ data class GitHubReleaseDto(
     val draft: Boolean = false,
     val prerelease: Boolean = false,
     @Json(name = "html_url") val htmlUrl: String? = null,
+    @Json(name = "published_at") val publishedAt: String? = null, // Nuvio RS hook: tester channel
     val assets: List<GitHubAssetDto> = emptyList()
 )
 

@@ -223,6 +223,7 @@ internal class LiveTvPlayerState(
             uiState.showSpeedDialog || uiState.showSubtitleDelayOverlay || uiState.showSubtitleTimingDialog ||
             uiState.showMoreDialog || uiState.showStreamInfoOverlay
         val down = event.action == KeyEvent.ACTION_DOWN
+        if (scrub != null) return onScrubKey(event, down, uiState)
         if (panelOpen && programmesChannel != null) {
             return when (event.keyCode) {
                 // Back to the channels, on the channel whose programmes these are.
@@ -299,6 +300,14 @@ internal class LiveTvPlayerState(
                     if (down) zap(if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
                     true
                 }
+                // A replay the player cannot seek in (TS, most providers' kind) moves by asking for
+                // another replay instead; one that seeks (HLS) seeks like a film.
+                in SCRUB_KEYS -> {
+                    if (replaySeeks()) return false
+                    val channel = currentChannel() ?: return false
+                    if (down && event.repeatCount == 0) openScrub(channel, if (event.keyCode in BACK_SCRUB_KEYS) -1 else 1)
+                    channel.catchup != null
+                }
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
                     if (uiState.showPauseOverlay) return false
                     // A channel gone since (removed, or its source edited) leaves Back to the player.
@@ -352,8 +361,18 @@ internal class LiveTvPlayerState(
                 true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                if (down && event.repeatCount == 0) openPanel()
+                // With the info card up, ◀ rewinds a channel the provider keeps (catch-up).
+                val rewind = infoOpen && currentChannel()?.catchup != null
+                if (down && event.repeatCount == 0) {
+                    val channel = currentChannel()
+                    if (rewind && channel != null) openScrub(channel, -1) else openPanel()
+                }
                 true // also swallows the release, which would commit a seek
+            }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> {
+                val channel = currentChannel()?.takeIf { it.catchup != null } ?: return false
+                if (down && event.repeatCount == 0) openScrub(channel, -1)
+                true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 // A live channel has nothing to seek to: ▶ opens the controls (audio, subtitles).
@@ -427,6 +446,118 @@ internal class LiveTvPlayerState(
     internal fun pickFromPanel(channel: LiveTvChannel) {
         panelFolderKey?.let { LiveTvRepository.setZapList(panelChannels, it) }
         switchTo(channel)
+    }
+
+    /** The rewind bar, while it shows (see [LiveTvScrub]). */
+    var scrub by mutableStateOf<LiveTvScrub?>(null)
+        private set
+    private var scrubJob: Job? = null
+    /** OK went down while the rewind bar showed: its release plays the time picked. */
+    private var scrubOkDown = false
+
+    /** Whether the replay playing can be sought in by the player itself (HLS with a length). */
+    private fun replaySeeks(): Boolean =
+        controller._exoPlayer?.let { it.isCurrentMediaItemSeekable && it.duration != androidx.media3.common.C.TIME_UNSET } == true
+
+    /** Where the picture is in the channel's time: now when live, else the replay's position. */
+    private fun playheadMs(now: Long): Long {
+        val window = LiveTvPlaybackRegistry.replayWindow(controller.currentStreamUrl) ?: return now
+        return (window.startMs + controller.playbackTimeline.value.currentPosition.coerceAtLeast(0L)).coerceAtMost(now)
+    }
+
+    /** The earliest time [channel]'s provider keeps, with a minute to spare. */
+    private fun earliestMs(channel: LiveTvChannel, now: Long): Long =
+        now - (channel.catchup?.days ?: 0) * 24L * 60 * 60 * 1000 + 60_000L
+
+    /** Shows the rewind bar on where the picture is, moved one [direction] step. */
+    private fun openScrub(channel: LiveTvChannel, direction: Int) {
+        if (channel.catchup == null) return
+        hideInfo()
+        val now = LiveTvClock.nowEpochMs()
+        val at = playheadMs(now)
+        val from = LiveTvScrubSteps.rangeStart(LiveTvRepository.schedule(channel.guideKey), at, earliestMs(channel, now))
+        scrub = LiveTvScrub(channel, from.coerceAtMost(at), at)
+        stepScrub(direction, 0)
+    }
+
+    /** Moves the picked time; ◀ at the bar's start reaches back to the show before. */
+    private fun stepScrub(direction: Int, repeatCount: Int) {
+        val bar = scrub ?: return
+        val now = LiveTvClock.nowEpochMs()
+        if (direction < 0 && bar.targetMs <= bar.fromMs) {
+            val earlier = LiveTvScrubSteps.rangeStart(LiveTvRepository.schedule(bar.channel.guideKey), bar.fromMs - 1, earliestMs(bar.channel, now))
+            if (earlier < bar.fromMs) bar.fromMs = earlier
+        }
+        bar.targetMs = (bar.targetMs + direction * LiveTvScrubSteps.stepMs(repeatCount)).coerceIn(bar.fromMs, now)
+        // A key held down again keeps the bar up.
+        scrubJob?.cancel()
+        scrubJob = null
+    }
+
+    /** As the player's own bar does after ◀▶ are let go: plays from the time picked once the keys rest. */
+    private fun settleScrub() {
+        scrubJob?.cancel()
+        scrubJob = scope.launch {
+            delay(SCRUB_SETTLE_MS)
+            commitScrub()
+        }
+    }
+
+    private fun closeScrub() {
+        scrubJob?.cancel()
+        scrubJob = null
+        scrubOkDown = false
+        scrub = null
+    }
+
+    /** Plays from the picked time: a replay from there, or the channel live when that is now. */
+    private fun commitScrub() {
+        val bar = scrub ?: return
+        closeScrub()
+        val channel = bar.channel
+        val now = LiveTvClock.nowEpochMs()
+        if (now - bar.targetMs < LiveTvScrubSteps.LIVE_MARGIN_MS) {
+            if (isCatchup()) switchTo(channel)
+            return
+        }
+        val start = bar.targetMs
+        switchJob?.cancel()
+        switchJob = scope.launch {
+            val replay = LiveTvRepository.replayChannel(channel, start)
+            if (replay == null) {
+                android.widget.Toast.makeText(controller.context, R.string.live_tv_catchup_failed, android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            currentListUrl = channel.streamUrl
+            val programme = LiveTvRepository.schedule(channel.guideKey).firstOrNull { start >= it.startEpochMs && start < it.stopEpochMs }
+            replayTitleProgramme = programme
+            controller._uiState.update { it.copy(title = programme?.title ?: channel.name, logo = LiveTvRepository.uiState.value.logoFor(channel)) }
+            playReplay(channel, replay)
+        }
+    }
+
+    /** Keys while the rewind bar shows: ◀▶ move (played from once let go), OK plays at once, Back leaves it. */
+    private fun onScrubKey(event: KeyEvent, down: Boolean, uiState: PlayerUiState): Boolean {
+        if (panelOpen || uiState.showControls) {
+            closeScrub()
+            return false
+        }
+        when (event.keyCode) {
+            in SCRUB_KEYS -> if (down) stepScrub(if (event.keyCode in BACK_SCRUB_KEYS) -1 else 1, event.repeatCount) else settleScrub()
+            in OK_KEYS -> if (down && event.repeatCount == 0) {
+                scrubOkDown = true
+            } else if (!down && scrubOkDown) {
+                commitScrub()
+            }
+            KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (down) commitScrub()
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> if (!down) closeScrub()
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                // Leaves the bar; the key then zaps as usual.
+                closeScrub()
+                return onPreviewKey(event, uiState)
+            }
+        }
+        return true
     }
 
     /** Whether the player shows a past programme (catch-up) rather than the live channel. */
@@ -583,6 +714,10 @@ internal class LiveTvPlayerState(
         /** A replay this near to now goes live rather than asking for a few seconds more. */
         const val REPLAY_CAUGHT_UP_MS = 90_000L
         const val INFO_MS = 6_000L
+        /** After ◀▶ are let go, the rewind bar waits this long for another press before playing from there. */
+        const val SCRUB_SETTLE_MS = 1_200L
+        val SCRUB_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)
+        val BACK_SCRUB_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND)
         val OK_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
     }
 }
@@ -679,8 +814,22 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
                 number = currentIndex + 1,
                 clock = clock,
                 startOver = remember(channel, liveState.currentProgrammes, clock.value / 60_000L) { state.startOverProgramme(channel) != null },
+                rewind = channel.catchup != null,
             )
         }
+    }
+
+    AnimatedVisibility(
+        visible = state.scrub != null && !uiState.showControls && !state.panelOpen,
+        // As the player's own seek bar comes and goes.
+        enter = fadeIn(tween(150)),
+        exit = fadeOut(tween(150)),
+        modifier = Modifier.align(Alignment.BottomCenter).zIndex(3f),
+    ) {
+        // The last bar stays drawn through the exit animation, after it has closed.
+        val shown = remember { arrayOfNulls<LiveTvScrub>(1) }
+        state.scrub?.let { shown[0] = it }
+        shown[0]?.let { bar -> LiveTvScrubBar(bar) }
     }
 
     AnimatedVisibility(
@@ -695,7 +844,7 @@ private fun BoxScope.LiveTvPlayerOverlayContent(state: LiveTvPlayerState, uiStat
 }
 
 /** Near solid, so the banner and info card read clearly over any picture. */
-private val LiveTvCardBackground = Color(0xF0121214)
+internal val LiveTvCardBackground = Color(0xF0121214)
 
 @Composable
 private fun LiveTvBanner(channel: LiveTvChannel, logo: String?, programme: LiveTvProgramme?, number: Int, clock: State<Long>) {
@@ -776,6 +925,7 @@ private fun LiveTvInfoCard(
     number: Int,
     clock: State<Long>,
     startOver: Boolean,
+    rewind: Boolean,
 ) {
     // Read once per minute tick: the kept guide is a map lookup.
     val next = remember(channel.guideKey, now, clock.value / 60_000L) { LiveTvRepository.nextProgramme(channel.guideKey) }
@@ -873,7 +1023,14 @@ private fun LiveTvInfoCard(
                 }
             }
             Text(
-                text = stringResource(if (startOver) R.string.live_tv_info_hint_start_over else R.string.live_tv_info_hint),
+                text = stringResource(
+                    when {
+                        rewind && startOver -> R.string.live_tv_info_hint_rewind_start_over
+                        rewind -> R.string.live_tv_info_hint_rewind
+                        startOver -> R.string.live_tv_info_hint_start_over
+                        else -> R.string.live_tv_info_hint
+                    },
+                ),
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.62f),
                 modifier = Modifier.padding(top = 10.dp),

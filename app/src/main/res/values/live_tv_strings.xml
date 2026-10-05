@@ -95,6 +95,8 @@
     <string name="live_tv_player_hint">▲▼ Switch channel  ·  ◀ Channel list  ·  OK Info</string>
     <string name="live_tv_info_hint">OK Controls  ·  ◀ Channel list  ·  ▲▼ Switch channel</string>
     <string name="live_tv_info_hint_start_over">OK Controls  ·  Hold OK Start over  ·  ◀ Channel list  ·  ▲▼ Switch channel</string>
+    <string name="live_tv_info_hint_rewind">OK Controls  ·  ◀ Rewind  ·  ▲▼ Switch channel</string>
+    <string name="live_tv_info_hint_rewind_start_over">OK Controls  ·  ◀ Rewind  ·  Hold OK Start over  ·  ▲▼ Switch channel</string>
     <string name="live_tv_info_now">Now</string>
     <string name="live_tv_info_next">Next · %1$s</string>
     <string name="live_tv_info_no_guide">No guide for this channel</string>

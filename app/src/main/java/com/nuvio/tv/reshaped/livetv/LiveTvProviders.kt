@@ -78,7 +78,8 @@ internal object LiveTvXtream {
                     logoUrl = fields["stream_icon"] ?: fields["logo"],
                     group = fields["category_id"]?.let(categories::get).orEmpty(),
                     headers = streamHeaders,
-                    catchup = if (fields["tv_archive"] == "1") {
+                    // Panels write it as 1, "1", true or a count of days.
+                    catchup = if (fields["tv_archive"].let { it == "true" || (it?.toDoubleOrNull() ?: 0.0) > 0.0 }) {
                         val days = fields["tv_archive_duration"]?.toIntOrNull()?.coerceIn(1, 30) ?: 1
                         catchups.getOrPut(days) { LiveTvCatchup(LiveTvCatchup.Kind.Xtream, days) }
                     } else {

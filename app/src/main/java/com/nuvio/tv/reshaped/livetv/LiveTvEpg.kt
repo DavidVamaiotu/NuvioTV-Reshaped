@@ -86,6 +86,8 @@ internal class LiveTvGuideRequest(
     val catchupKeys: Set<String> = emptySet(),
     /** XMLTV ids to playlist-scoped keys; two sources may use the same XMLTV id. */
     val keysById: Map<String, List<String>> = emptyMap(),
+    /** The country tag ([liveTvNameTag]) of channels whose name has one. */
+    val tagsByKey: Map<String, String> = emptyMap(),
 ) {
     companion object {
         fun from(channels: List<LiveTvChannel>): LiveTvGuideRequest {
@@ -94,10 +96,13 @@ internal class LiveTvGuideRequest(
             val withoutLogo = HashSet<String>()
             val catchup = HashSet<String>()
             val byId = HashMap<String, MutableList<String>>()
+            val tags = HashMap<String, String>()
+            // A few tags shared by thousands of channels: each kept once.
+            val tagPool = HashMap<String, String>()
             channels.forEach { channel ->
                 if (channel.catchup != null) catchup += channel.guideKey
                 if (!keys.add(channel.guideKey)) return@forEach
-                channel.tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase()?.let { id ->
+                channel.tvgId?.let(::liveTvGuideId)?.takeIf(String::isNotEmpty)?.let { id ->
                     byId.getOrPut(id) { ArrayList(1) } += channel.guideKey
                 }
                 val name = liveTvNameKey(channel.name)
@@ -107,8 +112,9 @@ internal class LiveTvGuideRequest(
                     byName.getOrPut(alias) { ArrayList(1) } += channel.guideKey
                 }
                 if (channel.logoUrl.isNullOrBlank()) withoutLogo += channel.guideKey
+                liveTvNameTag(channel.name)?.let { tags[channel.guideKey] = tagPool.getOrPut(it) { it } }
             }
-            return LiveTvGuideRequest(keys, byName, withoutLogo, catchup, byId)
+            return LiveTvGuideRequest(keys, byName, withoutLogo, catchup, byId, tags)
         }
     }
 }
@@ -137,6 +143,8 @@ internal class LiveTvGuide(
     val elements: Int = 0,
     /** A refresh failed and this is the last good saved guide; retry sooner without hiding it. */
     val refreshFailed: Boolean = false,
+    /** Keys this guide found only by the channel's name, not by its guide id: another guide's id match wins. */
+    val nameMatched: Set<String> = emptySet(),
 ) {
     val canReplaceSavedGuide: Boolean get() = complete && elements > 0 && !refreshFailed
 
@@ -144,7 +152,7 @@ internal class LiveTvGuide(
     fun hasAhead(nowEpochMs: Long): Boolean =
         schedule.values.any { programmes -> programmes.isNotEmpty() && programmes.last().stopEpochMs > nowEpochMs }
 
-    fun afterFailedRefresh(): LiveTvGuide = LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true)
+    fun afterFailedRefresh(): LiveTvGuide = LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true, nameMatched = nameMatched)
 }
 
 /** Imports finish independently; neither a slow source nor completion order changes EPG priority. */
@@ -213,6 +221,12 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
     var events = 0
     var opened = false
     var closed = false
+    // Where the last event ended: relaxed reading closes what a cut file left open with end tags
+    // that take up no text, and a cut guide must not pass as complete.
+    var line = -1
+    var column = -1
+    // `<tv/>`: its end tag takes up no text either.
+    var emptyTv = false
     var event = parser.eventType
     while (event != XmlPullParser.END_DOCUMENT) {
         // Blocking IO thread: a cancelled load stops at the next check.
@@ -224,11 +238,14 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
                 if (closed && !parser.name.equals("tv", ignoreCase = true)) break
                 check(parser.name.equals("tv", ignoreCase = true)) { "Not an XMLTV guide" }
                 opened = true
+                // A further guide joined on must end properly too.
+                closed = false
+                emptyTv = runCatching { parser.isEmptyElementTag }.getOrDefault(false)
             }
             when {
                 parser.name.equals("programme", ignoreCase = true) -> {
                     builder.elements++
-                    val channelId = parser.getAttributeValue(null, "channel")?.trim()?.lowercase()
+                    val channelId = parser.getAttributeValue(null, "channel")?.let(::liveTvGuideId)
                     val keys = channelId?.let(builder::keysFor)
                     if (keys == null || channelId == null) {
                         parser.skipElement()
@@ -250,12 +267,16 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
                 }
                 parser.name.equals("channel", ignoreCase = true) -> {
                     builder.elements++
-                    val channelId = parser.getAttributeValue(null, "id")?.trim()?.lowercase()
+                    val channelId = parser.getAttributeValue(null, "id")?.let(::liveTvGuideId)
                     if (channelId == null) parser.skipElement() else parser.readChannel(channelId, builder)
                 }
             }
         }
-        if (event == XmlPullParser.END_TAG && parser.depth == 1 && parser.name.equals("tv", ignoreCase = true)) closed = true
+        if (event == XmlPullParser.END_TAG && parser.depth == 1 && parser.name.equals("tv", ignoreCase = true)) {
+            closed = parser.lineNumber != line || parser.columnNumber != column || emptyTv
+        }
+        line = parser.lineNumber
+        column = parser.columnNumber
         event = parser.next()
     }
     check(opened && closed) { "Incomplete XMLTV guide" }
@@ -380,11 +401,17 @@ internal class LiveTvScheduleBuilder(
     private val truncated = HashSet<String>()
     /** Guide channels and programmes met, kept or not. */
     var elements = 0
-    /** Guide channel ids that feed channels matched by name, not by id. */
-    private val aliases = HashMap<String, List<String>>()
-    /** Keys some guide channel already feeds: one guide channel per list channel. */
+    /**
+     * Guide channel ids that may feed channels by name, in the guide's order. Several can name
+     * one channel ("VRT 1" and "VRT 1 HD", or an id of its own with no programmes): the first
+     * whose programmes come feeds it, see [ownKeys].
+     */
+    private val aliases = LinkedHashMap<String, List<String>>()
+    /** Keys a guide `<channel>` has by id: their logo is that one's, never a name match's. */
     private val claimed = HashSet<String>()
     private val icons = HashMap<String, String>()
+    /** The country tag of the name each alias matched with, when it had one. */
+    private val aliasTags = HashMap<String, String>()
     private val logos = HashMap<String, String>()
     /** Repeated titles (news, films shown twice) are kept once. */
     private val titles = HashMap<String, String>()
@@ -414,45 +441,94 @@ internal class LiveTvScheduleBuilder(
         }
     }
 
-    /** A `<channel>` of the guide ([channelId] lower case). Guides list these before their programmes. */
+    /**
+     * A `<channel>` of the guide ([channelId] lower case). Most guides list these before their
+     * programmes; some put each before its own programmes, or join guides end to end.
+     */
     fun channel(channelId: String, names: List<String>, icon: String?) {
-        if (channelsDone) return
         val direct = directKeys(channelId)
         if (direct != null) {
             claimed.addAll(direct)
+            idMatched.addAll(direct)
             if (icon != null) direct.forEach { if (it in request.keysWithoutLogo) logos[it] = icon }
             return
         }
         for (name in names) {
             val keys = request.keysByName[liveTvNameKey(name)] ?: continue
             aliases[channelId] = keys
-            if (icon != null) icons[channelId] = icon
+            liveTvNameTag(name)?.let { aliasTags[channelId] = it }
+            if (icon != null) {
+                // Past the first programme, logos are given as the channels come.
+                if (channelsDone) keys.forEach { if (it !in claimed && it in request.keysWithoutLogo) logos.putIfAbsent(it, icon) } else icons[channelId] = icon
+            }
             return
         }
     }
 
-    /** Name matches only feed channels whose own id is not in the guide, each from one guide channel. */
+    /**
+     * Name matches feed a channel only while its own id brings no programmes, each from one guide
+     * channel ([ownKeys]); for a logo, the first guide channel with the name gives it.
+     */
     private fun finishChannels() {
         channelsDone = true
         if (aliases.isEmpty()) return
-        val resolved = HashMap<String, List<String>>(aliases.size)
         aliases.forEach { (channelId, keys) ->
-            val free = keys.filter { claimed.add(it) }
-            if (free.isEmpty()) return@forEach
-            resolved[channelId] = free
-            icons[channelId]?.let { icon -> free.forEach { if (it in request.keysWithoutLogo) logos.putIfAbsent(it, icon) } }
+            val icon = icons[channelId] ?: return@forEach
+            keys.forEach { key -> if (key !in claimed && key in request.keysWithoutLogo) logos.putIfAbsent(key, icon) }
         }
-        aliases.clear()
-        aliases.putAll(resolved)
         icons.clear()
     }
 
     /** The channel keys a programme of guide channel [channelId] (lower case) is kept under, or null. */
     fun keysFor(channelId: String): List<String>? {
         if (!channelsDone) finishChannels()
-        directKeys(channelId)?.let { return it }
-        aliases[channelId]?.let { return it }
+        directKeys(channelId)?.let { return ownKeys(channelId, it, direct = true) }
+        aliases[channelId]?.let { return ownKeys(channelId, it, direct = false) }
         return null
+    }
+
+    /** The guide channel feeding each channel key, and whether it matched by id. */
+    private val feeders = HashMap<String, String>()
+    private val nameFed = HashSet<String>()
+    /** Keys fed by a name match whose country tag is the channel's own ("UK: News" for "UK | News"). */
+    private val sameTagFed = HashSet<String>()
+    /** Keys a guide channel matched by id: by `<channel>` or by programmes. */
+    private val idMatched = HashSet<String>()
+
+    /**
+     * Of [keys], the ones guide channel [channelId] feeds: one guide channel per channel key. A
+     * guide can list programmes for an id it has no `<channel>` for, so a channel can also be
+     * matched by name to another guide channel (often a +1 or HD copy): two schedules in one row
+     * showed every programme twice. The id match wins, whichever comes first in the file; among
+     * name matches, one with the channel's own country tag wins over another country's.
+     */
+    private fun ownKeys(channelId: String, keys: List<String>, direct: Boolean): List<String>? {
+        var all = true
+        if (direct) idMatched.addAll(keys)
+        val tag = if (direct) null else aliasTags[channelId]
+        for (key in keys) {
+            val feeder = feeders[key]
+            val sameTag = tag != null && tag == request.tagsByKey[key]
+            when {
+                feeder == null -> {
+                    feeders[key] = channelId
+                    if (!direct) nameFed += key
+                    if (sameTag) sameTagFed += key
+                }
+                feeder == channelId -> Unit
+                (direct && key in nameFed) || (sameTag && key in nameFed && key !in sameTagFed) -> {
+                    // What the weaker match brought in so far goes.
+                    feeders[key] = channelId
+                    if (direct) nameFed -= key
+                    if (direct) sameTagFed -= key else sameTagFed += key
+                    entries.remove(key)
+                    truncated -= key
+                }
+                else -> all = false
+            }
+        }
+        if (all) return keys
+        return keys.filter { feeders[it] == channelId }.takeIf { it.isNotEmpty() }
     }
 
     private fun directKeys(channelId: String): List<String>? =
@@ -548,11 +624,15 @@ internal class LiveTvScheduleBuilder(
     }
 
     fun build(complete: Boolean = true): LiveTvGuide {
+        // Name matches settle here too when the guide had no programme for them (their logos still count).
+        if (!channelsDone) finishChannels()
+        val nameMatched = HashSet<String>(nameFed)
+        aliases.values.forEach { keys -> keys.forEach { if (it !in idMatched) nameMatched += it } }
         val schedule = HashMap<String, List<LiveTvProgramme>>(entries.size * 2)
-        entries.forEach { (key, list) -> schedule[key] = list.sortedBy { it.startEpochMs } }
+        entries.forEach { (key, list) -> schedule[key] = liveTvWithoutOverlaps(list.sortedBy { it.startEpochMs }) }
         if (window.detailsPerChannel > 0) keepDetails(schedule)
         titles.clear()
-        return LiveTvGuide(schedule = schedule, logos = logos, truncated = truncated, complete = complete, elements = elements)
+        return LiveTvGuide(schedule = schedule, logos = logos, truncated = truncated, complete = complete, elements = elements, nameMatched = nameMatched)
     }
 
     /**
@@ -599,6 +679,61 @@ internal class LiveTvScheduleBuilder(
  * gain nothing from reading it sooner, unless the whole guide ends before the next refresh (a
  * portal's guide covers only the hours asked for): then it is read, and fetched, again as it runs out.
  */
+/**
+ * A channel's programmes ([sorted] by start) so that one is on at a time, as the guide grid shows
+ * them. Guides overlap: an entry running into the next, a long placeholder ("To Be Announced"
+ * all day) with the real programmes inside it, two feeds merged into one. The later entry gets
+ * its time and the earlier one keeps what is left before it (and after it, when it lies inside);
+ * the same show listed twice is kept once. Without this, the player (what is on now, replays,
+ * the channel's programme list) found the placeholder where the grid showed the programme.
+ */
+internal fun liveTvWithoutOverlaps(sorted: List<LiveTvProgramme>): List<LiveTvProgramme> {
+    var overlaps = false
+    var latestStop = Long.MIN_VALUE
+    for (programme in sorted) {
+        if (programme.startEpochMs < latestStop) {
+            overlaps = true
+            break
+        }
+        latestStop = maxOf(latestStop, programme.stopEpochMs)
+    }
+    // The usual case: nothing to do, nothing copied.
+    if (!overlaps) return sorted
+    val out = ArrayList<LiveTvProgramme>(sorted.size + 2)
+    for (programme in sorted) {
+        val start = programme.startEpochMs
+        val stop = programme.stopEpochMs
+        if (stop <= start) continue
+        val last = out.lastOrNull()
+        if (last != null && last.stopEpochMs > start && last.isSameShow(programme)) {
+            if (stop > last.stopEpochMs) out[out.size - 1] = last.copy(stopEpochMs = stop)
+            continue
+        }
+        // Programmes kept so far that this one overlaps all end after its start, and the list
+        // is in order with no overlaps, so they are at its end.
+        var i = out.size - 1
+        while (i >= 0 && out[i].stopEpochMs > start) {
+            val kept = out[i]
+            if (kept.startEpochMs < stop) {
+                out.removeAt(i)
+                if (kept.stopEpochMs - stop >= OVERLAP_MIN_PIECE_MS) out.add(i, kept.copy(startEpochMs = stop))
+                if (start - kept.startEpochMs >= OVERLAP_MIN_PIECE_MS) out.add(i, kept.copy(stopEpochMs = start))
+            }
+            i--
+        }
+        var at = out.size
+        while (at > 0 && out[at - 1].startEpochMs >= start) at--
+        out.add(at, programme)
+    }
+    return out
+}
+
+/** Pieces left of an overlapped programme shorter than this are dropped. */
+private const val OVERLAP_MIN_PIECE_MS = 60_000L
+
+private fun LiveTvProgramme.isSameShow(other: LiveTvProgramme): Boolean =
+    title === other.title || title.trim().equals(other.title.trim(), ignoreCase = true)
+
 internal fun nextScheduleReadAt(
     schedule: LiveTvSchedule,
     truncated: Set<String>,
@@ -659,6 +794,13 @@ private val NAME_NOISE = hashSetOf(
     "hd", "fhd", "uhd", "sd", "hq", "4k", "8k", "hevc", "h265", "h264", "1080p", "1080i", "720p", "576p", "50fps", "60fps",
 )
 
+/** The leading country tag of [name] in lower case ("uk" for "UK: BBC One"), or null. */
+internal fun liveTvNameTag(name: String): String? {
+    if (name.indexOfAny(NAME_TAG_ENDS) < 0) return null
+    val tag = NAME_TAG.find(name)?.value ?: return null
+    return tag.filter(Char::isLetter).lowercase()
+}
+
 /** A leading country tag: "UK:", "UK |", "|UK|", "[UK]", "(UK)". */
 private val NAME_TAG = Regex("""^\s*(?:[\[(|]\s*[A-Za-z]{2,3}\s*[\])|]|[A-Za-z]{2,3}\s*[:|])\s*""")
 private val NAME_TAG_ENDS = charArrayOf(':', '|', ']', ')')
@@ -667,7 +809,8 @@ private val NAME_TAG_ENDS = charArrayOf(':', '|', ']', ')')
  * A channel name reduced for matching a playlist's name with a guide's: lower case, no country
  * tag, no quality words, letters and digits only ("UK: BBC One HD" and "BBC One" are both "bbcone").
  */
-internal fun liveTvNameKey(name: String): String {
+internal fun liveTvNameKey(raw: String): String {
+    val name = raw.composed()
     // Every tag ends in one of these: most names have none and skip the pattern (it runs per channel and per guide name).
     val untagged = if (name.indexOfAny(NAME_TAG_ENDS) < 0) name else NAME_TAG.replaceFirst(name, "")
     val out = StringBuilder(untagged.length)
@@ -691,10 +834,50 @@ internal fun liveTvNameKey(name: String): String {
     return out.toString()
 }
 
+/**
+ * An XMLTV id as matched: trimmed, lower case, accents in one form. A playlist and a guide made by
+ * different tools can write "één.be" with the accent as its own mark, which looks the same.
+ */
+internal fun liveTvGuideId(id: String): String = id.trim().composed().lowercase()
+
+/** [this] in Unicode's composed form (NFC); plain ASCII, nearly every id and name, is returned as is. */
+private fun String.composed(): String =
+    if (all { it < '\u0080' }) this else java.text.Normalizer.normalize(this, java.text.Normalizer.Form.NFC)
+
 /** The key a channel's guide is kept under: its guide id in lower case, else its name. */
 internal fun liveTvGuideKey(tvgId: String?, name: String, sourceId: String = ""): String {
     val key = tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase() ?: (NAME_KEY_PREFIX + liveTvNameKey(name))
     return if (sourceId.isEmpty()) key else "$sourceId/$key"
+}
+
+/**
+ * Guide keys of channels listed with the same link under different keys, one list per link
+ * (usually none). Stalker channels are left out: their links are made per play.
+ */
+internal fun liveTvSameStreamKeys(channels: List<LiveTvChannel>): List<List<String>> {
+    val firstKey = HashMap<String, String>(channels.size * 2)
+    var groups: HashMap<String, LinkedHashSet<String>>? = null
+    channels.forEach { channel ->
+        if (channel.stalkerCommand != null) return@forEach
+        val first = firstKey.putIfAbsent(channel.streamUrl, channel.guideKey) ?: return@forEach
+        if (first == channel.guideKey) return@forEach
+        val all = groups ?: HashMap<String, LinkedHashSet<String>>().also { groups = it }
+        all.getOrPut(channel.streamUrl) { linkedSetOf(first) } += channel.guideKey
+    }
+    return groups?.values?.map { it.toList() }.orEmpty()
+}
+
+/** Keys of each of [groups] with no programmes get those of the first key in it that has some. */
+internal fun LiveTvSchedule.sharedAcrossStreams(groups: List<List<String>>): LiveTvSchedule {
+    if (groups.isEmpty()) return this
+    var filled: HashMap<String, List<LiveTvProgramme>>? = null
+    for (keys in groups) {
+        val programmes = keys.firstNotNullOfOrNull { key -> this[key]?.takeIf { it.isNotEmpty() } } ?: continue
+        for (key in keys) {
+            if (this[key].isNullOrEmpty()) (filled ?: HashMap(this).also { filled = it })[key] = programmes
+        }
+    }
+    return filled ?: this
 }
 
 /** A cell's visible span; provider timestamps never turn into unbounded layout constraints. */

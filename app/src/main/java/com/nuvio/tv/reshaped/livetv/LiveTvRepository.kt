@@ -63,6 +63,8 @@ object LiveTvRepository {
     private const val EPG_MIN_READ_GAP_MS = 60L * 60 * 1000
     /** A guide that could not be read is tried again sooner. */
     private const val EPG_RETRY_MS = 30L * 60 * 1000
+    /** Added to a guide's rank for a channel it matched only by name (see startEpg). */
+    private const val NAME_MATCH_RANK = 1_000_000
     /** A held ▲ moving a playlist channel is saved once it pauses this long. */
     private const val LIST_SAVE_DELAY_MS = 600L
     /**
@@ -719,15 +721,19 @@ object LiveTvRepository {
      * programme on at [startMs]), never past now, so the player shows the programme's own length.
      * The player asks for the next part, or goes live, as it gets to the end.
      */
-    suspend fun replayChannel(channel: LiveTvChannel, startMs: Long, programmeEndMs: Long = replayPartEnd(channel, startMs)): LiveTvReplay? {
+    suspend fun replayChannel(channel: LiveTvChannel, fromMs: Long, programmeEndMs: Long = replayPartEnd(channel, fromMs)): LiveTvReplay? {
         val catchup = channel.catchup ?: return null
         val now = LiveTvClock.nowEpochMs()
-        if (!LiveTvCatchupLinks.isPlayableFrom(catchup, startMs, now)) return null
         // Only an Xtream panel answers its /timeshift/ form; other "shift" servers take ?utc=.
         val source = _uiState.value.sources.firstOrNull { it.id == channel.sourceId }
         val xtreamPanel = source == null || source.type == LiveTvSourceType.Xtream ||
             (source.type == LiveTvSourceType.M3u && xtreamGuideUrlFor(source.url) != null)
-        val zone = if (LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup, xtreamPanel)) {
+        val panelLink = LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup, xtreamPanel)
+        // A panel's /timeshift/ link names whole minutes: the replay starts on the minute, and its
+        // window says so, so the position shown (and a rewind from it) matches what plays.
+        val startMs = if (panelLink) fromMs - Math.floorMod(fromMs, 60_000L) else fromMs
+        if (!LiveTvCatchupLinks.isPlayableFrom(catchup, startMs, now)) return null
+        val zone = if (panelLink) {
             LiveTvCatchupLinks.xtreamLogin(channel.streamUrl)?.let { (server, user, pass) -> LiveTvXtream.zone(server, user, pass, source?.userAgent.orEmpty()) }
         } else {
             null
@@ -1498,6 +1504,9 @@ object LiveTvRepository {
         val guideFiles = epgUrls.map { File(guideDir(), "guide_${Integer.toHexString(it.hashCode())}.xml.gz") }
         val cacheFile = File(guideDir(), LiveTvGuideCache.FILE_NAME)
         val catchupKeys = channels.mapNotNullTo(HashSet()) { channel -> channel.guideKey.takeIf { channel.catchup != null } }
+        // A channel two sources list with the same link (a provider's and an edited copy of its
+        // playlist) is one channel: the copy whose guide has nothing shows the other's.
+        val sameStream = liveTvSameStreamKeys(channels)
         // Names (and missing logos) decide name matches and guide logos: a list that renames
         // channels keeping their ids must not be served the matches kept for the old names.
         val cacheKey = LiveTvGuideCache.key(epgUrls, guideKeys, window, catchupKeys) * 31 + liveTvGuideMatchingKey(channels)
@@ -1536,15 +1545,19 @@ object LiveTvRepository {
                 guideDir().listFiles()?.filter { it !in guideFiles && it != cacheFile }?.forEach(File::delete)
             }
             var schedule: LiveTvSchedule = keptSchedule
+            // [schedule] with channels sharing a link filled in from each other: what is shown.
+            var shown: LiveTvSchedule = keptSchedule
             var nextReadAtMs = 0L
             var firstRead = true
             // Until then what is on now stays as it is: the minute tick skips working it out again.
             var changeAtMs = 0L
             var lastTickMs = 0L
             val publishGuide = { kept: LiveTvSchedule, logos: Map<String, String>?, nowMs: Long, failedLinks: Set<String>? ->
-                if (epgGeneration == generation) keptSchedule = kept
-                val current = currentProgrammes(kept, guideKeys, nowMs)
-                val guides = failedLinks?.let { guideStates(sourceLinks, it, kept, channels) }
+                val filled = kept.sharedAcrossStreams(sameStream)
+                shown = filled
+                if (epgGeneration == generation) keptSchedule = filled
+                val current = currentProgrammes(filled, guideKeys, nowMs)
+                val guides = failedLinks?.let { guideStates(sourceLinks, it, filled, channels) }
                 _uiState.update { state ->
                     if (epgGeneration != generation) {
                         state
@@ -1609,9 +1622,14 @@ object LiveTvRepository {
                                 }
                                 if (!guide.complete) partial = true
                                 if (guide.refreshFailed) failedLinks += epgUrl
-                                // A channel's own playlist's guides first, in its order; then the others'.
-                                fun rank(key: String): Int = sourceLinks[sourceForKey[key]]?.indexOf(epgUrl)
-                                    ?.takeIf { it >= 0 } ?: (epgUrls.size + index)
+                                // A guide that has the channel's guide id beats one that only found its name, so
+                                // an id the viewer assigned in the playlist is what shows (as in other players);
+                                // then a channel's own playlist's guides first, in its order; then the others'.
+                                fun rank(key: String): Int {
+                                    val order = sourceLinks[sourceForKey[key]]?.indexOf(epgUrl)
+                                        ?.takeIf { it >= 0 } ?: (epgUrls.size + index)
+                                    return if (key in guide.nameMatched) NAME_MATCH_RANK + order else order
+                                }
                                 guide.schedule.forEach { (key, list) ->
                                     val priority = rank(key)
                                     if (priority < (scheduleRanks[key] ?: Int.MAX_VALUE)) {
@@ -1658,8 +1676,8 @@ object LiveTvRepository {
                 }
                 // The clock set back also works it out again.
                 if (nowMs >= changeAtMs || nowMs < lastTickMs) {
-                    val current = currentProgrammes(schedule, guideKeys, nowMs)
-                    changeAtMs = nextProgrammeChange(schedule, guideKeys, nowMs)
+                    val current = currentProgrammes(shown, guideKeys, nowMs)
+                    changeAtMs = nextProgrammeChange(shown, guideKeys, nowMs)
                     _uiState.update { state ->
                         when {
                             epgGeneration != generation -> state
