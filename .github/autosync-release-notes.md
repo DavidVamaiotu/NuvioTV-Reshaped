@@ -5,3 +5,4 @@
 - **Search bar.** ▶ on the Live TV search field reaches the settings button.
 - **AutoSync audio sync, like the phone.** Audio sync may now swap a subtitle you picked when it never fits the audio and another file in the same language does, uses the full add-on subtitle list, skips a slow wait for sparse tracks, and loads the speech model early on TVs with more than 2 GB RAM.
 - **Netflix-style scrub previews.** While scrubbing, previews show as a filmstrip of frames with the current one outlined, sliding as you move. Dark keyframes get replaced by a brighter one, and missing frames are left out instead of showing empty tiles.
+- **Nuvio 1.1.0-beta.4.** Includes everything in the official NuvioTV 1.1.0-beta.4 release.
