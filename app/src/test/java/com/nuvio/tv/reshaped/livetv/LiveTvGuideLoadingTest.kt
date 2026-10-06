@@ -35,6 +35,23 @@ class LiveTvGuideLoadingTest {
         </tv>
     """.trimIndent()
 
+    @Test fun catchUpChannelsKeepAsManyPastDaysAsTheirProviderReplays() {
+        val days = 24 * hour
+        val week = LiveTvGuideWindow(2 * hour, 4, 4 * hour, 8, catchupPastMs = 7 * days, maxCatchupPast = 7 * 24)
+        val threeDays = channel("one").copy(catchup = LiveTvCatchup(LiveTvCatchup.Kind.Xtream, 3))
+        val guide = readXmlTvGuide("""
+            <tv>
+              <programme channel="shared" start="20260928080000 +0000" stop="20260928090000 +0000"><title>Four days ago</title></programme>
+              <programme channel="shared" start="20260930080000 +0000" stop="20260930090000 +0000"><title>Two days ago</title></programme>
+              <programme channel="shared" start="20261002080000 +0000" stop="20261002090000 +0000"><title>Now</title></programme>
+            </tv>
+        """.trimIndent().byteInputStream(), LiveTvGuideRequest.from(listOf(threeDays)), now, week, ::KXmlParser)
+        assertEquals(listOf("Two days ago", "Now"), guide.schedule.getValue(threeDays.guideKey).map { it.title })
+        assertEquals(3 * days, week.pastMsFor(3))
+        assertEquals(7 * days, week.pastMsFor(30))
+        assertEquals(2 * hour, week.pastMsFor(null))
+    }
+
     @Test fun matchingXmlTvIdsFromDifferentPlaylistsDoNotOverwriteEachOther() {
         val one = channel("one")
         val two = channel("two")

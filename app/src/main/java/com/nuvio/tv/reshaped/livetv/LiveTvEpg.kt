@@ -35,7 +35,10 @@ internal class LiveTvGuideWindow(
     val maxPast: Int,
     val aheadMs: Long,
     val maxAhead: Int,
-    /** How far back channels with catch-up keep programmes, so past ones can be played again. */
+    /**
+     * How far back channels with catch-up keep programmes at most, so past ones can be played
+     * again; each keeps as many days as its provider replays ([pastMsFor]).
+     */
     val catchupPastMs: Long = pastMs,
     val maxCatchupPast: Int = maxPast,
     /**
@@ -54,20 +57,22 @@ internal class LiveTvGuideWindow(
      */
     val maxCatchupProgrammes: Int = Int.MAX_VALUE,
 ) {
-    /** How far back [key]'s programmes are kept, given the request's catch-up channels. */
-    fun pastMsFor(catchup: Boolean): Long = if (catchup) catchupPastMs else pastMs
+    /** How far back a channel's programmes are kept: [catchupDays] is its catch-up's, null without. */
+    fun pastMsFor(catchupDays: Int?): Long =
+        if (catchupDays == null) pastMs else maxOf(pastMs, minOf(catchupPastMs, catchupDays * DAY))
 
     companion object {
         private const val HOUR = 60L * 60 * 1000
+        private const val DAY = 24 * HOUR
         val Regular = LiveTvGuideWindow(
             pastMs = 3 * HOUR, maxPast = 6, aheadMs = 12 * HOUR, maxAhead = 18,
-            catchupPastMs = 24 * HOUR, maxCatchupPast = 48,
+            catchupPastMs = 7 * DAY, maxCatchupPast = 7 * 48,
             detailsMs = 6 * HOUR, maxDescription = 320, detailsPerChannel = 4, detailsBudgetChars = 6_000_000,
             maxCatchupProgrammes = 300_000,
         )
         val LowMemory = LiveTvGuideWindow(
             pastMs = 2 * HOUR, maxPast = 4, aheadMs = 8 * HOUR, maxAhead = 10,
-            catchupPastMs = 12 * HOUR, maxCatchupPast = 24,
+            catchupPastMs = 7 * DAY, maxCatchupPast = 7 * 24,
             detailsMs = 3 * HOUR, maxDescription = 200, detailsPerChannel = 2, detailsBudgetChars = 1_500_000,
             maxCatchupProgrammes = 100_000,
         )
@@ -82,8 +87,8 @@ internal class LiveTvGuideRequest(
     val keysByName: Map<String, List<String>>,
     /** Keys of channels the playlist gives no logo: the guide's own logo is used for them. */
     val keysWithoutLogo: Set<String>,
-    /** Keys of channels with catch-up: they keep more past programmes. */
-    val catchupKeys: Set<String> = emptySet(),
+    /** Keys of channels with catch-up to how many days back they replay: they keep more past programmes. */
+    val catchupKeys: Map<String, Int> = emptyMap(),
     /** XMLTV ids to playlist-scoped keys; two sources may use the same XMLTV id. */
     val keysById: Map<String, List<String>> = emptyMap(),
     /** The country tag ([liveTvNameTag]) of channels whose name has one. */
@@ -94,13 +99,14 @@ internal class LiveTvGuideRequest(
             val keys = HashSet<String>(channels.size * 2)
             val byName = HashMap<String, MutableList<String>>(channels.size * 2)
             val withoutLogo = HashSet<String>()
-            val catchup = HashSet<String>()
+            val catchup = HashMap<String, Int>()
             val byId = HashMap<String, MutableList<String>>()
             val tags = HashMap<String, String>()
             // A few tags shared by thousands of channels: each kept once.
             val tagPool = HashMap<String, String>()
             channels.forEach { channel ->
-                if (channel.catchup != null) catchup += channel.guideKey
+                // A key two channels share keeps the longer catch-up.
+                channel.catchup?.let { catchup[channel.guideKey] = maxOf(it.days, catchup[channel.guideKey] ?: 0) }
                 if (!keys.add(channel.guideKey)) return@forEach
                 channel.tvgId?.let(::liveTvGuideId)?.takeIf(String::isNotEmpty)?.let { id ->
                     byId.getOrPut(id) { ArrayList(1) } += channel.guideKey
@@ -127,7 +133,7 @@ internal fun liveTvGuideMatchingKey(channels: List<LiveTvChannel>): Long {
         matching = matching * 31 + channel.name.hashCode()
         matching = matching * 31 + (channel.tvgName?.hashCode() ?: 0)
         matching = matching * 31 + if (channel.logoUrl.isNullOrBlank()) 1 else 0
-        matching = matching * 31 + if (channel.catchup != null) 1 else 0
+        matching = matching * 31 + (channel.catchup?.days ?: 0)
     }
     return matching
 }
@@ -555,7 +561,7 @@ internal class LiveTvScheduleBuilder(
             return false
         }
         return stopEpochMs > nowEpochMs - window.pastMs ||
-            (stopEpochMs > nowEpochMs - window.catchupPastMs && keys.any { it in request.catchupKeys })
+            keys.any { key -> request.catchupKeys[key]?.let { stopEpochMs > nowEpochMs - window.pastMsFor(it) } == true }
     }
 
     fun add(
@@ -578,8 +584,9 @@ internal class LiveTvScheduleBuilder(
         description: String? = null,
         image: String? = null,
     ) {
-        val catchup = key in request.catchupKeys
-        if (stopEpochMs <= startEpochMs || stopEpochMs <= nowEpochMs - window.pastMsFor(catchup)) return
+        val catchupDays = request.catchupKeys[key]
+        val catchup = catchupDays != null
+        if (stopEpochMs <= startEpochMs || stopEpochMs <= nowEpochMs - window.pastMsFor(catchupDays)) return
         if (startEpochMs >= nowEpochMs + window.aheadMs) {
             truncated += key
             return

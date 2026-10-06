@@ -3,6 +3,7 @@
 package com.nuvio.tv.ui.reshaped.livetv
 
 import android.view.KeyEvent
+import android.view.ViewConfiguration
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -330,22 +331,21 @@ internal class LiveTvPlayerState(
                 // (which pauses).
                 when {
                     down && event.repeatCount == 0 -> okHeld = true
-                    down -> if (okHeld) {
-                        val channel = currentChannel()
-                        val programme = channel?.let(::startOverProgramme)
-                        if (channel != null && programme != null) {
-                            okHeld = false
-                            swallowOkRelease = true
-                            playCatchup(channel, programme)
-                        }
+                    down -> if (okHeld && startOverFromHold()) {
+                        okHeld = false
+                        swallowOkRelease = true
                     }
                     okHeld -> {
                         okHeld = false
-                        if (infoOpen) {
-                            hideInfo()
-                            controller.onEvent(PlayerEvent.OnToggleControls)
-                        } else {
-                            showInfo()
+                        // Some remotes send no repeats for a held OK, only a late release.
+                        val held = event.eventTime - event.downTime >= ViewConfiguration.getLongPressTimeout()
+                        when {
+                            held && startOverFromHold() -> Unit
+                            infoOpen -> {
+                                hideInfo()
+                                controller.onEvent(PlayerEvent.OnToggleControls)
+                            }
+                            else -> showInfo()
                         }
                     }
                 }
@@ -566,6 +566,14 @@ internal class LiveTvPlayerState(
     /** The list entry of the channel playing (live or catch-up). */
     private fun currentChannel(): LiveTvChannel? =
         currentListUrl?.let { url -> LiveTvRepository.uiState.value.channels.firstOrNull { it.streamUrl == url } }
+
+    /** Starts the programme on now over, when the channel playing can; whether it did. */
+    private fun startOverFromHold(): Boolean {
+        val channel = currentChannel() ?: return false
+        val programme = startOverProgramme(channel) ?: return false
+        playCatchup(channel, programme)
+        return true
+    }
 
     /** What is on now on [channel], when its provider can play it from the start; null otherwise. */
     internal fun startOverProgramme(channel: LiveTvChannel): LiveTvProgramme? {

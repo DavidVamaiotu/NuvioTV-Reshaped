@@ -341,7 +341,7 @@ internal class LiveTvGuideState(
     private fun moveProgramme(step: Int, repeating: Boolean = false): Boolean {
         val channel = channel ?: return true
         val now = LiveTvClock.nowEpochMs()
-        val first = floorSlot(now - windowPastMs(channel.catchup != null))
+        val first = floorSlot(now - windowPastMs(channel.catchup?.days))
         val last = now + windowAheadMs()
         val blocks = blocksFor(channel)
         val current = blocks.blockAt(anchorMs)
@@ -385,7 +385,7 @@ internal class LiveTvGuideState(
         )
 
         fun floorSlot(ms: Long): Long = guideFloorSlot(ms)
-        fun windowPastMs(catchup: Boolean): Long = LiveTvRepository.guideWindow.pastMsFor(catchup)
+        fun windowPastMs(catchupDays: Int?): Long = LiveTvRepository.guideWindow.pastMsFor(catchupDays)
         fun windowAheadMs(): Long = LiveTvRepository.guideWindow.aheadMs
     }
 }

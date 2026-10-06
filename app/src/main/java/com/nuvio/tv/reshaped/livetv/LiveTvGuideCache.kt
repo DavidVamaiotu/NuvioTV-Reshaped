@@ -17,7 +17,7 @@ internal object LiveTvGuideCache {
     // 5: playlist-scoped channel identities and complete guide imports. 6: no overlapping programmes.
     // 7: id matches rank over name matches. 8: a name match fills in for an id without programmes.
     // 9: a name match with the channel's own country tag wins.
-    private const val VERSION = 9
+    private const val VERSION = 10
     private const val MAX_TITLE = 1_000
 
     class Entry(val schedule: LiveTvSchedule, val logos: Map<String, String>, val nextReadAtMs: Long)
