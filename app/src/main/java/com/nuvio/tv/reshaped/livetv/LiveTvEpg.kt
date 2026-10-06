@@ -52,10 +52,16 @@ internal class LiveTvGuideWindow(
     val detailsPerChannel: Int = 0,
     val detailsBudgetChars: Int = 0,
     /**
-     * At most this many past programmes over all catch-up channels: with thousands of them
-     * (whole Xtream panels), each keeps fewer, never fewer than [maxPast].
+     * At most this many past programmes over all catch-up channels, for their last [dayCatchupPast]
+     * each: with thousands of them (whole Xtream panels), each keeps fewer, never fewer than [maxPast].
      */
     val maxCatchupProgrammes: Int = Int.MAX_VALUE,
+    val dayCatchupPast: Int = maxCatchupPast,
+    /**
+     * Past programmes over all catch-up channels for their days before that: a channel keeps more
+     * than [dayCatchupPast] only while they fit, so long catch-up costs weak TVs little.
+     */
+    val weekCatchupProgrammes: Int = maxCatchupProgrammes,
 ) {
     /** How far back a channel's programmes are kept: [catchupDays] is its catch-up's, null without. */
     fun pastMsFor(catchupDays: Int?): Long =
@@ -68,13 +74,13 @@ internal class LiveTvGuideWindow(
             pastMs = 3 * HOUR, maxPast = 6, aheadMs = 12 * HOUR, maxAhead = 18,
             catchupPastMs = 7 * DAY, maxCatchupPast = 7 * 48,
             detailsMs = 6 * HOUR, maxDescription = 320, detailsPerChannel = 4, detailsBudgetChars = 6_000_000,
-            maxCatchupProgrammes = 300_000,
+            maxCatchupProgrammes = 300_000, dayCatchupPast = 48, weekCatchupProgrammes = 200_000,
         )
         val LowMemory = LiveTvGuideWindow(
             pastMs = 2 * HOUR, maxPast = 4, aheadMs = 8 * HOUR, maxAhead = 10,
             catchupPastMs = 7 * DAY, maxCatchupPast = 7 * 24,
             detailsMs = 3 * HOUR, maxDescription = 200, detailsPerChannel = 2, detailsBudgetChars = 1_500_000,
-            maxCatchupProgrammes = 100_000,
+            maxCatchupProgrammes = 100_000, dayCatchupPast = 24, weekCatchupProgrammes = 60_000,
         )
     }
 }
@@ -397,13 +403,56 @@ private fun XmlPullParser.readProgramme(details: Boolean): ProgrammeText {
     return text
 }
 
+/**
+ * One channel's programmes while a guide is read, with how many have ended and how many have not
+ * at the read's now, and the latest start: kept as they change, so adding one costs no full pass.
+ */
+private class KeptProgrammes : ArrayList<LiveTvProgramme>(4) {
+    var past = 0
+        private set
+    var ahead = 0
+        private set
+    var latestStart = Long.MIN_VALUE
+        private set
+
+    fun addKept(past: Boolean, programme: LiveTvProgramme) {
+        add(programme)
+        if (past) this.past++ else ahead++
+        if (programme.startEpochMs > latestStart) latestStart = programme.startEpochMs
+    }
+
+    fun removeKept(index: Int, nowEpochMs: Long) {
+        val removed = removeAt(index)
+        if (removed.stopEpochMs <= nowEpochMs) past-- else ahead--
+        if (removed.startEpochMs == latestStart) {
+            latestStart = Long.MIN_VALUE
+            forEach { if (it.startEpochMs > latestStart) latestStart = it.startEpochMs }
+        }
+    }
+
+    /** The index of the earliest or [latest] programme that has ended ([past]) or not; one must exist. */
+    fun extreme(past: Boolean, latest: Boolean, nowEpochMs: Long): Int {
+        var found = -1
+        var foundStart = 0L
+        for (index in indices) {
+            val programme = this[index]
+            if ((programme.stopEpochMs <= nowEpochMs) != past) continue
+            if (found < 0 || (if (latest) programme.startEpochMs > foundStart else programme.startEpochMs < foundStart)) {
+                found = index
+                foundStart = programme.startEpochMs
+            }
+        }
+        return found
+    }
+}
+
 /** Collects programmes for the requested channels while a guide is read. */
 internal class LiveTvScheduleBuilder(
     private val request: LiveTvGuideRequest,
     private val nowEpochMs: Long,
     private val window: LiveTvGuideWindow,
 ) {
-    private val entries = HashMap<String, MutableList<LiveTvProgramme>>()
+    private val entries = HashMap<String, KeptProgrammes>()
     private val truncated = HashSet<String>()
     /** Guide channels and programmes met, kept or not. */
     var elements = 0
@@ -547,7 +596,8 @@ internal class LiveTvScheduleBuilder(
     /** Past programmes each catch-up channel keeps, within [LiveTvGuideWindow.maxCatchupProgrammes] over all. */
     private val catchupPastCount: Int = run {
         val channels = request.catchupKeys.size.coerceAtLeast(1)
-        (window.maxCatchupProgrammes / channels).coerceIn(window.maxPast, window.maxCatchupPast)
+        val day = (window.maxCatchupProgrammes / channels).coerceIn(window.maxPast, window.dayCatchupPast)
+        maxOf(day, (window.weekCatchupProgrammes / channels).coerceAtMost(window.maxCatchupPast))
     }
 
     /**
@@ -591,35 +641,32 @@ internal class LiveTvScheduleBuilder(
             truncated += key
             return
         }
-        val list = entries.getOrPut(key) { ArrayList(4) }
+        val list = entries.getOrPut(key) { KeptProgrammes() }
         val past = stopEpochMs <= nowEpochMs
-        var kept = 0
-        for (programme in list) {
-            // The same slot twice (a guide channel matched by id and by name): keep one.
-            if (programme.startEpochMs == startEpochMs) return
-            if ((programme.stopEpochMs <= nowEpochMs) == past) kept++
-        }
-        if (past && kept >= (if (catchup) catchupPastCount else window.maxPast)) {
+        // The same slot twice (a guide channel matched by id and by name): keep one. Guides list a
+        // channel's programmes in time order, so a start after every kept one needs no search.
+        if (startEpochMs <= list.latestStart && list.any { it.startEpochMs == startEpochMs }) return
+        if (past && list.past >= (if (catchup) catchupPastCount else window.maxPast)) {
             // Keep the latest programmes that have ended.
-            val earliest = list.filter { it.stopEpochMs <= nowEpochMs }.minBy { it.startEpochMs }
-            if (earliest.startEpochMs >= startEpochMs) return
-            list.remove(earliest)
-        } else if (!past && kept >= window.maxAhead) {
+            val earliest = list.extreme(past = true, latest = false, nowEpochMs)
+            if (list[earliest].startEpochMs >= startEpochMs) return
+            list.removeKept(earliest, nowEpochMs)
+        } else if (!past && list.ahead >= window.maxAhead) {
             // Guides are usually in time order; if not, keep the earliest programmes.
             truncated += key
-            val latest = list.filter { it.stopEpochMs > nowEpochMs }.maxBy { it.startEpochMs }
-            if (latest.startEpochMs <= startEpochMs) return
-            list.remove(latest)
+            val latest = list.extreme(past = false, latest = true, nowEpochMs)
+            if (list[latest].startEpochMs <= startEpochMs) return
+            list.removeKept(latest, nowEpochMs)
         }
         val details = wantsDetails(startEpochMs, stopEpochMs)
-        list += LiveTvProgramme(
+        list.addKept(past, LiveTvProgramme(
             title = titles.getOrPut(title) { title },
             startEpochMs = startEpochMs,
             stopEpochMs = stopEpochMs,
             // Repeats share one copy, as titles do.
             description = description?.takeIf { details }?.let(::shortDescription)?.let { titles.getOrPut(it) { it } },
             image = image?.takeIf { details }?.let { titles.getOrPut(it) { it } },
-        )
+        ))
     }
 
     /** Cut at a word near [LiveTvGuideWindow.maxDescription], with an ellipsis. */
@@ -761,6 +808,20 @@ internal fun nextScheduleReadAt(
 }
 
 /**
+ * The index of the first programme ending after [epochMs] (size when none), found by halving: a
+ * schedule is in time order without overlaps, and catch-up channels keep days of past programmes.
+ */
+internal fun List<LiveTvProgramme>.firstEndingAfter(epochMs: Long): Int {
+    var low = 0
+    var high = size
+    while (low < high) {
+        val middle = (low + high) ushr 1
+        if (this[middle].stopEpochMs > epochMs) high = middle else low = middle + 1
+    }
+    return low
+}
+
+/**
  * When the programme on air next changes for any of [keys] (one ends, or one starts where nothing
  * was on): until then [currentProgrammes] gives the same answer. Long.MAX_VALUE when it never does.
  */
@@ -772,7 +833,8 @@ internal fun nextProgrammeChange(
     var next = Long.MAX_VALUE
     if (schedule.isEmpty()) return next
     for (key in keys) {
-        val programme = schedule[key]?.firstOrNull { it.stopEpochMs > nowEpochMs } ?: continue
+        val programmes = schedule[key] ?: continue
+        val programme = programmes.getOrNull(programmes.firstEndingAfter(nowEpochMs)) ?: continue
         val change = if (programme.startEpochMs <= nowEpochMs) programme.stopEpochMs else programme.startEpochMs
         if (change < next) next = change
     }
@@ -788,10 +850,9 @@ internal fun currentProgrammes(
     if (schedule.isEmpty()) return emptyMap()
     val current = HashMap<String, LiveTvProgramme>()
     for (key in keys) {
-        val programme = schedule[key]
-            ?.firstOrNull { nowEpochMs >= it.startEpochMs && nowEpochMs < it.stopEpochMs }
-            ?: continue
-        current[key] = programme
+        val programmes = schedule[key] ?: continue
+        val programme = programmes.getOrNull(programmes.firstEndingAfter(nowEpochMs)) ?: continue
+        if (nowEpochMs >= programme.startEpochMs) current[key] = programme
     }
     return current
 }
