@@ -1,2 +1,3 @@
-- Same app as Nuvio Reshaped beta 1.1.0-beta.4 (build 1): Nuvio 1.1.0-beta.4, Tester channel in the update picker, the rebuilt Live TV guide and guide-matching fixes, rewind on catch-up channels, AutoSync audio sync like the phone, and Netflix-style scrub previews.
-- From here on, Live TV and player fixes reach Tester first.
+- Live TV catch-up: channels keep as many days of past programmes as the provider replays (up to 7), instead of one day. Older programmes only show when the provider's guide lists them.
+- Live TV: hold OK to start the programme over now also works on remotes that send a held OK as one long press.
+- Live TV guide: reads a little faster and the saved guide opens quicker; weak TVs with very large lists keep what they kept before.
