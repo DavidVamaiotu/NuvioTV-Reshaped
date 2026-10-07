@@ -36,8 +36,8 @@ internal class LiveTvGuideWindow(
     val aheadMs: Long,
     val maxAhead: Int,
     /**
-     * How far back channels with catch-up keep programmes at most, so past ones can be played
-     * again; each keeps as many days as its provider replays ([pastMsFor]).
+     * How far back channels with catch-up keep programmes in memory, so past ones can be played
+     * again (their days, at most this); older days are in [LiveTvArchive], read when looked at.
      */
     val catchupPastMs: Long = pastMs,
     val maxCatchupPast: Int = maxPast,
@@ -52,16 +52,10 @@ internal class LiveTvGuideWindow(
     val detailsPerChannel: Int = 0,
     val detailsBudgetChars: Int = 0,
     /**
-     * At most this many past programmes over all catch-up channels, for their last [dayCatchupPast]
-     * each: with thousands of them (whole Xtream panels), each keeps fewer, never fewer than [maxPast].
+     * At most this many past programmes over all catch-up channels: with thousands of them
+     * (whole Xtream panels), each keeps fewer, never fewer than [maxPast].
      */
     val maxCatchupProgrammes: Int = Int.MAX_VALUE,
-    val dayCatchupPast: Int = maxCatchupPast,
-    /**
-     * Past programmes over all catch-up channels for their days before that: a channel keeps more
-     * than [dayCatchupPast] only while they fit, so long catch-up costs weak TVs little.
-     */
-    val weekCatchupProgrammes: Int = maxCatchupProgrammes,
 ) {
     /** How far back a channel's programmes are kept: [catchupDays] is its catch-up's, null without. */
     fun pastMsFor(catchupDays: Int?): Long =
@@ -72,15 +66,15 @@ internal class LiveTvGuideWindow(
         private const val DAY = 24 * HOUR
         val Regular = LiveTvGuideWindow(
             pastMs = 3 * HOUR, maxPast = 6, aheadMs = 12 * HOUR, maxAhead = 18,
-            catchupPastMs = 7 * DAY, maxCatchupPast = 7 * 48,
+            catchupPastMs = DAY, maxCatchupPast = 48,
             detailsMs = 6 * HOUR, maxDescription = 320, detailsPerChannel = 4, detailsBudgetChars = 6_000_000,
-            maxCatchupProgrammes = 300_000, dayCatchupPast = 48, weekCatchupProgrammes = 200_000,
+            maxCatchupProgrammes = 300_000,
         )
         val LowMemory = LiveTvGuideWindow(
             pastMs = 2 * HOUR, maxPast = 4, aheadMs = 8 * HOUR, maxAhead = 10,
-            catchupPastMs = 7 * DAY, maxCatchupPast = 7 * 24,
+            catchupPastMs = 12 * HOUR, maxCatchupPast = 24,
             detailsMs = 3 * HOUR, maxDescription = 200, detailsPerChannel = 2, detailsBudgetChars = 1_500_000,
-            maxCatchupProgrammes = 100_000, dayCatchupPast = 24, weekCatchupProgrammes = 60_000,
+            maxCatchupProgrammes = 100_000,
         )
     }
 }
@@ -164,7 +158,11 @@ internal class LiveTvGuide(
     fun hasAhead(nowEpochMs: Long): Boolean =
         schedule.values.any { programmes -> programmes.isNotEmpty() && programmes.last().stopEpochMs > nowEpochMs }
 
-    fun afterFailedRefresh(): LiveTvGuide = LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true, nameMatched = nameMatched)
+    /** The past days of catch-up channels this read met, for [LiveTvArchive]; null when not kept. */
+    var spill: LiveTvArchiveSpill? = null
+
+    fun afterFailedRefresh(): LiveTvGuide =
+        LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true, nameMatched = nameMatched).also { it.spill = spill }
 }
 
 /** Imports finish independently; neither a slow source nor completion order changes EPG priority. */
@@ -200,8 +198,9 @@ internal suspend fun readXmlTvGuide(
     request: LiveTvGuideRequest,
     nowEpochMs: Long,
     window: LiveTvGuideWindow,
+    spills: LiveTvArchive.Spills? = null,
 ): LiveTvGuide =
-    LiveTvHttp.readFile(file) { input -> readXmlTvGuide(input, request, nowEpochMs, window) }
+    LiveTvHttp.readFile(file) { input -> readXmlTvGuide(input, request, nowEpochMs, window, spills = spills) }
 
 /** [readXmlTvGuide] from a stream (blocking): a saved file, or a download as it arrives. */
 internal fun readXmlTvGuide(
@@ -210,8 +209,11 @@ internal fun readXmlTvGuide(
     nowEpochMs: Long,
     window: LiveTvGuideWindow,
     parserFactory: () -> XmlPullParser = Xml::newPullParser,
+    /** Where past days of catch-up channels go ([LiveTvArchive]); null when they are not kept. */
+    spills: LiveTvArchive.Spills? = null,
 ): LiveTvGuide {
-    val builder = LiveTvScheduleBuilder(request, nowEpochMs, window)
+    val spill = if (request.catchupKeys.isEmpty()) null else spills?.create()
+    val builder = LiveTvScheduleBuilder(request, nowEpochMs, window, spill)
     // A malformed tail (unknown entity, cut download) keeps what was read before it.
     val complete = try {
         readGuide(LiveTvHttp.gunzipIfNeeded(input), builder, parserFactory)
@@ -220,8 +222,10 @@ internal fun readXmlTvGuide(
         throw cancel
     } catch (_: Exception) {
         false
+    } finally {
+        spill?.finish()
     }
-    return builder.build(complete)
+    return builder.build(complete).also { it.spill = spill }
 }
 
 private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parserFactory: () -> XmlPullParser) {
@@ -451,6 +455,8 @@ internal class LiveTvScheduleBuilder(
     private val request: LiveTvGuideRequest,
     private val nowEpochMs: Long,
     private val window: LiveTvGuideWindow,
+    /** Where the past days of catch-up channels go, beyond what memory keeps; null to skip them. */
+    private val spill: LiveTvArchiveSpill? = null,
 ) {
     private val entries = HashMap<String, KeptProgrammes>()
     private val truncated = HashSet<String>()
@@ -577,6 +583,7 @@ internal class LiveTvScheduleBuilder(
                     if (direct) nameFed -= key
                     if (direct) sameTagFed -= key else sameTagFed += key
                     entries.remove(key)
+                    spill?.drop(key)
                     truncated -= key
                 }
                 else -> all = false
@@ -596,8 +603,7 @@ internal class LiveTvScheduleBuilder(
     /** Past programmes each catch-up channel keeps, within [LiveTvGuideWindow.maxCatchupProgrammes] over all. */
     private val catchupPastCount: Int = run {
         val channels = request.catchupKeys.size.coerceAtLeast(1)
-        val day = (window.maxCatchupProgrammes / channels).coerceIn(window.maxPast, window.dayCatchupPast)
-        maxOf(day, (window.weekCatchupProgrammes / channels).coerceAtMost(window.maxCatchupPast))
+        (window.maxCatchupProgrammes / channels).coerceIn(window.maxPast, window.maxCatchupPast)
     }
 
     /**
@@ -611,8 +617,12 @@ internal class LiveTvScheduleBuilder(
             return false
         }
         return stopEpochMs > nowEpochMs - window.pastMs ||
-            keys.any { key -> request.catchupKeys[key]?.let { stopEpochMs > nowEpochMs - window.pastMsFor(it) } == true }
+            keys.any { key -> request.catchupKeys[key]?.let { stopEpochMs > nowEpochMs - pastFor(it) } == true }
     }
+
+    /** How far back a catch-up channel's programmes are read: its archive's days, or what memory keeps. */
+    private fun pastFor(catchupDays: Int): Long =
+        if (spill != null) maxOf(window.pastMsFor(catchupDays), LiveTvArchive.pastMsFor(catchupDays)) else window.pastMsFor(catchupDays)
 
     fun add(
         keys: List<String>,
@@ -636,7 +646,14 @@ internal class LiveTvScheduleBuilder(
     ) {
         val catchupDays = request.catchupKeys[key]
         val catchup = catchupDays != null
-        if (stopEpochMs <= startEpochMs || stopEpochMs <= nowEpochMs - window.pastMsFor(catchupDays)) return
+        if (stopEpochMs <= startEpochMs) return
+        // Past days of a catch-up channel go to the archive as they come; memory keeps the last of them.
+        if (spill != null && catchupDays != null && stopEpochMs <= nowEpochMs &&
+            stopEpochMs > nowEpochMs - LiveTvArchive.pastMsFor(catchupDays)
+        ) {
+            spill.write(key, startEpochMs, stopEpochMs, title)
+        }
+        if (stopEpochMs <= nowEpochMs - window.pastMsFor(catchupDays)) return
         if (startEpochMs >= nowEpochMs + window.aheadMs) {
             truncated += key
             return

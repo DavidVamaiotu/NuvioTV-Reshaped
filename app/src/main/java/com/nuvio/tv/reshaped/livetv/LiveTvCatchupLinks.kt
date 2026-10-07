@@ -24,6 +24,10 @@ internal object LiveTvCatchupLinks {
     /** An Xtream live link `http://host/live/user/pass/id.ext` (or without `/live`), split up. */
     private val XTREAM_LIVE = Regex("""^(https?://[^/]+)/(?:live/)?([^/]+)/([^/]+)/(\d+)(\.[A-Za-z0-9]+)?$""", RegexOption.IGNORE_CASE)
 
+    /** The stream id an Xtream live link ends in. */
+    fun xtreamStreamId(liveUrl: String): String? =
+        XTREAM_LIVE.find(liveUrl.substringBefore('?'))?.groupValues?.get(4)
+
     /** The panel login an Xtream live link carries: server, user, password. */
     fun xtreamLogin(liveUrl: String): Triple<String, String, String>? =
         XTREAM_LIVE.find(liveUrl.substringBefore('?'))?.destructured?.let { (host, user, pass) ->

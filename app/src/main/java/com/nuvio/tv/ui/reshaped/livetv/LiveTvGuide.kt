@@ -77,6 +77,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
+import com.nuvio.tv.reshaped.livetv.LiveTvArchive
 import com.nuvio.tv.reshaped.livetv.LiveTvCatchupLinks
 import com.nuvio.tv.reshaped.livetv.LiveTvChannel
 import com.nuvio.tv.reshaped.livetv.LiveTvClock
@@ -341,7 +342,10 @@ internal class LiveTvGuideState(
     private fun moveProgramme(step: Int, repeating: Boolean = false): Boolean {
         val channel = channel ?: return true
         val now = LiveTvClock.nowEpochMs()
-        val first = floorSlot(now - windowPastMs(channel.catchup?.days))
+        val first = floorSlot(now - maxOf(windowPastMs(channel.catchup?.days), LiveTvArchive.pastMsFor(channel.catchup?.days)))
+        // Going back in time, the channel's older days are read in ([LiveTvRepository.requestHistory]).
+        val olderDaysPending = step < 0 && channel.catchup != null && !LiveTvRepository.hasHistory(channel)
+        if (olderDaysPending) LiveTvRepository.requestHistory(channel)
         val last = now + windowAheadMs()
         val blocks = blocksFor(channel)
         val current = blocks.blockAt(anchorMs)
@@ -354,6 +358,8 @@ internal class LiveTvGuideState(
         if (step < 0 && onExitLeft != null && fromPast &&
             (programme == null || !LiveTvCatchupLinks.isPlayable(channel.catchup, programme, now))
         ) {
+            // Not before its older days were looked for: they may carry on there.
+            if (olderDaysPending && current.start > first) return true
             // A held ◀ pauses on what is on now, then goes on to the categories: it never
             // needs letting go and pressing again, which felt stuck.
             if (!repeating || ++heldAtEdge >= EXIT_AFTER_REPEATS) {
@@ -494,6 +500,10 @@ internal fun LiveTvGuideGrid(
                 LazyColumn(state = listState, userScrollEnabled = false, modifier = Modifier.fillMaxSize()) {
                     itemsIndexed(state.channels, key = { _, channel -> channel.id }, contentType = { _, _ -> "guideRow" }) { index, channel ->
                         val selectedRow = index == state.row
+                        // Scrolled back past what is kept in memory: the channel's older days are read in.
+                        if (channel.catchup != null && windowStart < LiveTvClock.nowEpochMs() - LiveTvGuideState.windowPastMs(channel.catchup.days)) {
+                            LaunchedEffect(channel.guideKey) { LiveTvRepository.requestHistory(channel) }
+                        }
                         GuideRow(
                             channel = channel,
                             logo = liveState.logoFor(channel),

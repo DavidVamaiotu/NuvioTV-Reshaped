@@ -136,6 +136,33 @@ internal object LiveTvXtream {
         return if (formats.isEmpty() || "ts" in formats || "m3u8" !in formats) "ts" else "m3u8"
     }
 
+    /**
+     * The programmes of stream [streamId] that ended after [sinceMs], from the panel's own listing
+     * (get_simple_data_table): it covers the channel's whole catch-up even when the panel's guide
+     * file lists only a day back. Oldest first; titles are base64, as panels send them.
+     */
+    suspend fun pastProgrammes(serverUrl: String, username: String, password: String, streamId: String, sinceMs: Long, userAgent: String = ""): List<LiveTvProgramme> {
+        val settings = LiveTvXtreamSettings(serverUrl, username, password)
+        val url = apiUrl(settings, "get_simple_data_table") + "&stream_id=${streamId.urlEncoded()}"
+        val nowMs = LiveTvClock.nowEpochMs()
+        val titles = HashMap<String, String>()
+        return LiveTvHttp.stream(url, withLiveTvUserAgent(LIVE_TV_PLAYLIST_HEADERS, userAgent)) { input ->
+            readObjects(input, arrayName = "epg_listings") { fields ->
+                val start = fields["start_timestamp"]?.toLongOrNull()?.times(1000L) ?: return@readObjects null
+                val stop = fields["stop_timestamp"]?.toLongOrNull()?.times(1000L) ?: return@readObjects null
+                if (stop <= start || stop <= sinceMs || stop > nowMs) return@readObjects null
+                val title = fields["title"]?.let(::decodeBase64)?.trim()?.takeIf(String::isNotEmpty) ?: return@readObjects null
+                LiveTvProgramme(title = titles.getOrPut(title) { title }, startEpochMs = start, stopEpochMs = stop)
+            }
+        }.sortedBy { it.startEpochMs }
+    }
+
+    /** Panels send titles base64 encoded; one that is not (some do send plain text) is kept as it is. */
+    private fun decodeBase64(value: String): String =
+        runCatching { String(android.util.Base64.decode(value, android.util.Base64.DEFAULT), Charsets.UTF_8) }
+            .getOrNull()?.takeIf { decoded -> decoded.none { it == '\uFFFD' || (it < ' ' && it != '\n' && it != '\t') } }
+            ?: value
+
     private fun loginUrl(settings: LiveTvXtreamSettings): String =
         "${settings.serverUrl}/player_api.php?username=${settings.username.urlEncoded()}" +
             "&password=${settings.password.urlEncoded()}"
@@ -694,7 +721,7 @@ private fun InputStream.withoutBom(): InputStream {
 }
 
 /** Reads a top-level array of objects (or `{"data":[...]}`), mapping each object's plain fields. */
-private fun <T : Any> readObjects(input: InputStream, map: (Map<String, String>) -> T?): List<T> =
+private fun <T : Any> readObjects(input: InputStream, arrayName: String = "data", map: (Map<String, String>) -> T?): List<T> =
     JsonReader(InputStreamReader(input.withoutBom(), Charsets.UTF_8)).use { reader ->
         reader.isLenient = true
         when (reader.peek()) {
@@ -703,7 +730,7 @@ private fun <T : Any> readObjects(input: InputStream, map: (Map<String, String>)
                 var result: List<T> = emptyList()
                 reader.beginObject()
                 while (reader.hasNext()) {
-                    if (reader.nextName() == "data" && reader.peek() == JsonToken.BEGIN_ARRAY) {
+                    if (reader.nextName() == arrayName && reader.peek() == JsonToken.BEGIN_ARRAY) {
                         result = reader.readObjectArray(map)
                     } else {
                         reader.skipValue()

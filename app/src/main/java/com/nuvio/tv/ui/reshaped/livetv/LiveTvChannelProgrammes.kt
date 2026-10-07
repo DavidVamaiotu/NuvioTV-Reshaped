@@ -75,6 +75,18 @@ internal fun LiveTvProgrammeColumn(
     }
     // A couple of what came before stay in view above what is on now.
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (startIndex - 2).coerceAtLeast(0))
+    // Each row by its start (and its place among rows starting then), so older days read in
+    // above ([LiveTvRepository.requestHistory]) leave the focused row where it is.
+    val keys = remember(programmes) {
+        var previous = Long.MIN_VALUE
+        var same = 0
+        programmes.map { programme ->
+            same = if (programme.startEpochMs == previous) same + 1 else 0
+            previous = programme.startEpochMs
+            "${programme.startEpochMs}:$same"
+        }
+    }
+    LaunchedEffect(channel.guideKey) { LiveTvRepository.requestHistory(channel) }
     val startFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         // The row must be composed before it can take focus.
@@ -138,7 +150,7 @@ internal fun LiveTvProgrammeColumn(
             verticalArrangement = Arrangement.spacedBy(2.dp),
             contentPadding = PaddingValues(bottom = 32.dp),
         ) {
-            itemsIndexed(programmes, contentType = { _, _ -> "programme" }) { index, programme ->
+            itemsIndexed(programmes, key = { index, _ -> keys[index] }, contentType = { _, _ -> "programme" }) { index, programme ->
                 // Read here, so the minute tick recomposes only the rows in view.
                 val now = clock.value
                 val live = programme.startEpochMs <= now && now < programme.stopEpochMs

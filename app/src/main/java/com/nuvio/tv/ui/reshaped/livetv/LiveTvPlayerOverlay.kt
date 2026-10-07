@@ -472,6 +472,8 @@ internal class LiveTvPlayerState(
     /** Shows the rewind bar on where the picture is, moved one [direction] step. */
     private fun openScrub(channel: LiveTvChannel, direction: Int) {
         if (channel.catchup == null) return
+        // Its older days, for stepping back past what the guide keeps in memory.
+        LiveTvRepository.requestHistory(channel)
         hideInfo()
         val now = LiveTvClock.nowEpochMs()
         val at = playheadMs(now)

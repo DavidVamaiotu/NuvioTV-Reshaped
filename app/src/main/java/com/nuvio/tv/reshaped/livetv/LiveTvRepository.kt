@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -76,6 +77,12 @@ object LiveTvRepository {
     private const val UNSEEN_GRACE_MS = 10_000L
     /** Sources loaded at once on a refresh: each holds a connection and a parse buffer. */
     private const val PARALLEL_SOURCES = 2
+    /** Channels whose older days are kept in memory once looked at; see [requestHistory]. */
+    private const val HISTORY_CHANNELS = 24
+    private const val HISTORY_CHANNELS_LOW_MEMORY = 8
+    /** Older days are asked of the panel only when the guide and archive fall this short of the catch-up. */
+    private const val HISTORY_GAP_MS = 3L * 60 * 60 * 1000
+    private const val HISTORY_FETCH_MS = 15_000L
     /** Marks a Stalker portal's guide in the guide list; see [stalkerGuideLink]. */
     private const val STALKER_GUIDE_PREFIX = "stalker-guide:"
 
@@ -767,7 +774,7 @@ object LiveTvRepository {
      */
     private fun replayPartEnd(channel: LiveTvChannel, startMs: Long): Long {
         val minEnd = startMs + 60_000L
-        val programmes = keptSchedule[channel.guideKey].orEmpty()
+        val programmes = schedule(channel.guideKey)
         val programme = programmes.firstOrNull { it.stopEpochMs > minEnd } ?: return startMs + REPLAY_PART_MS
         return if (programme.startEpochMs > minEnd) programme.startEpochMs else programme.stopEpochMs
     }
@@ -1477,10 +1484,118 @@ object LiveTvRepository {
     fun nextProgramme(guideKey: String, nowEpochMs: Long = LiveTvClock.nowEpochMs()): LiveTvProgramme? =
         keptSchedule[guideKey]?.firstOrNull { it.startEpochMs > nowEpochMs }
 
-    /** Every kept programme of [guideKey], earliest first: the last few hours and the next ones. */
-    fun schedule(guideKey: String): List<LiveTvProgramme> = keptSchedule[guideKey].orEmpty()
+    /**
+     * Every kept programme of [guideKey], earliest first: the last few hours and the next ones, and
+     * before them the older days of a catch-up channel once they were looked at ([requestHistory]).
+     */
+    fun schedule(guideKey: String): List<LiveTvProgramme> {
+        val kept = keptSchedule[guideKey].orEmpty()
+        synchronized(history) {
+            val entry = history[guideKey] ?: return kept
+            if (entry.kept === kept) return entry.merged
+            return HistoryEntry(entry.older, kept).also { history[guideKey] = it }.merged
+        }
+    }
+
+    /**
+     * A channel's archived days ([LiveTvArchive]) and what its Xtream panel lists before them, in
+     * front of the kept guide ([kept]): the guide's own programmes win where they meet.
+     */
+    private class HistoryEntry(val older: List<LiveTvProgramme>, val kept: List<LiveTvProgramme>) {
+        val merged: List<LiveTvProgramme> = run {
+            val first = kept.firstOrNull()?.startEpochMs ?: Long.MAX_VALUE
+            val before = older.filter { it.stopEpochMs <= first }
+            if (before.isEmpty()) kept else before + kept
+        }
+    }
+
+    /** The channels whose older days were looked at last; a few, so memory stays small. */
+    private val history = object : LinkedHashMap<String, HistoryEntry>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, HistoryEntry>?): Boolean =
+            size > if (guideWindow === LiveTvGuideWindow.LowMemory) HISTORY_CHANNELS_LOW_MEMORY else HISTORY_CHANNELS
+    }
+    private val historyLoading = HashSet<String>()
+    /** Panels are asked for a channel's past at most two at a time, however fast the rows go by. */
+    private val historyFetches = Semaphore(2)
+
+    /** Whether [channel]'s older days were read ([schedule] has them), or it has none to read. */
+    fun hasHistory(channel: LiveTvChannel): Boolean =
+        channel.catchup == null || synchronized(history) { channel.guideKey in history }
+
+    /**
+     * Reads [channel]'s older days, when it has catch-up, in the background: its archived days, and
+     * from its Xtream panel what neither the archive nor the guide reaches. The guide then shows them
+     * ([LiveTvUiState.guideVersion] goes up). Cheap to call again: once read, or while read, it does nothing.
+     */
+    fun requestHistory(channel: LiveTvChannel) {
+        val catchup = channel.catchup ?: return
+        val key = channel.guideKey
+        synchronized(history) {
+            if (key in history || !historyLoading.add(key)) return
+        }
+        scope.launch(Dispatchers.IO) {
+            val older = try {
+                loadHistory(channel, catchup)
+            } catch (cancel: CancellationException) {
+                synchronized(history) { historyLoading -= key }
+                throw cancel
+            } catch (error: Exception) {
+                Log.w(TAG, "Older programmes failed", error)
+                emptyList()
+            }
+            synchronized(history) {
+                historyLoading -= key
+                history[key] = HistoryEntry(older, keptSchedule[key].orEmpty())
+            }
+            if (older.isNotEmpty()) _uiState.update { it.copy(guideVersion = it.guideVersion + 1) }
+        }
+    }
+
+    private suspend fun loadHistory(channel: LiveTvChannel, catchup: LiveTvCatchup): List<LiveTvProgramme> {
+        val archived = LiveTvArchive.read(archiveFile(), channel.guideKey)
+        val nowMs = LiveTvClock.nowEpochMs()
+        val reach = nowMs - LiveTvArchive.pastMsFor(catchup.days)
+        val earliest = minOf(
+            archived.firstOrNull()?.startEpochMs ?: Long.MAX_VALUE,
+            keptSchedule[channel.guideKey]?.firstOrNull()?.startEpochMs ?: Long.MAX_VALUE,
+        )
+        if (earliest - reach < HISTORY_GAP_MS) return archived
+        // An Xtream panel lists each channel's whole catch-up, which its guide file often does not.
+        val source = _uiState.value.sources.firstOrNull { it.id == channel.sourceId }
+        val xtreamPanel = source == null || source.type == LiveTvSourceType.Xtream ||
+            (source.type == LiveTvSourceType.M3u && xtreamGuideUrlFor(source.url) != null)
+        if (!LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup, xtreamPanel)) return archived
+        val (server, user, pass) = LiveTvCatchupLinks.xtreamLogin(channel.streamUrl) ?: return archived
+        val streamId = LiveTvCatchupLinks.xtreamStreamId(channel.streamUrl) ?: return archived
+        val listed = historyFetches.withPermit {
+            withTimeoutOrNull(HISTORY_FETCH_MS) {
+                runCatching { LiveTvXtream.pastProgrammes(server, user, pass, streamId, reach, source?.userAgent.orEmpty()) }
+                    .onFailure { if (it is CancellationException) throw it }
+                    .getOrDefault(emptyList())
+            }
+        }.orEmpty()
+        val before = liveTvWithoutOverlaps(listed).filter { it.stopEpochMs <= earliest }
+        return if (before.isEmpty()) archived else before + archived
+    }
+
+    /** Each profile keeps its own channels' past days. */
+    private fun archiveFile(): File = File(appContext.filesDir, "live_tv/guide_archive_${loadedProfileId ?: 0}.bin")
+
+    private fun spillDir(): File = File(appContext.cacheDir, "live_tv_spill")
+
+    /** After the archive changed: the channels looked at read their older days again. */
+    private fun reloadHistory() {
+        val channels = synchronized(history) {
+            val keys = history.keys.toSet()
+            history.clear()
+            keys
+        }
+        if (channels.isEmpty()) return
+        _uiState.value.channels.filter { it.guideKey in channels }.distinctBy { it.guideKey }.forEach(::requestHistory)
+    }
 
     private fun stopEpg() {
+        synchronized(history) { history.clear() }
         keptSchedule = emptyMap()
         epgGeneration++
         epgJob?.cancel()
@@ -1511,6 +1626,7 @@ object LiveTvRepository {
         // channels keeping their ids must not be served the matches kept for the old names.
         val cacheKey = LiveTvGuideCache.key(epgUrls, guideKeys, window, catchupKeys) * 31 + liveTvGuideMatchingKey(channels)
         guideWindow = window
+        synchronized(history) { history.clear() }
         // Which sources each guide belongs to, and how a portal's guide is fetched. Read here, on [serial].
         val sourceLinks = _uiState.value.sources.associate { it.id to loaded[it.id]?.epgUrls.orEmpty() }
         val sourcesById = _uiState.value.sources.associateBy { it.id }
@@ -1606,66 +1722,83 @@ object LiveTvRepository {
                             var partial = false
                             val scheduleRanks = HashMap<String, Int>()
                             val logoRanks = HashMap<String, Int>()
-                            // Two independent imports at most (one on weak TVs), and a bounded result
-                            // queue. A slow first feed no longer prevents a faster provider's guide from showing.
-                            loadLiveTvGuides(epgUrls.size, parallel = if (window === LiveTvGuideWindow.LowMemory) 1 else 2, read = { index ->
-                                val epgUrl = epgUrls[index]
-                                readGuide(
-                                    downloads[index], epgUrl.takeUnless { it.startsWith(STALKER_GUIDE_PREFIX) },
-                                    guideFiles[index], request, nowMs, window, force, guideHeaders[index],
-                                )
-                            }, publish = publish@ { index, guide ->
-                                val epgUrl = epgUrls[index]
-                                if (guide == null) {
-                                    failedLinks += epgUrl
-                                    return@publish
-                                }
-                                if (!guide.complete) partial = true
-                                if (guide.refreshFailed) failedLinks += epgUrl
-                                // A guide that has the channel's guide id beats one that only found its name, so
-                                // an id the viewer assigned in the playlist is what shows (as in other players);
-                                // then a channel's own playlist's guides first, in its order; then the others'.
-                                fun rank(key: String): Int {
-                                    val order = sourceLinks[sourceForKey[key]]?.indexOf(epgUrl)
-                                        ?.takeIf { it >= 0 } ?: (epgUrls.size + index)
-                                    return if (key in guide.nameMatched) NAME_MATCH_RANK + order else order
-                                }
-                                guide.schedule.forEach { (key, list) ->
-                                    val priority = rank(key)
-                                    if (priority < (scheduleRanks[key] ?: Int.MAX_VALUE)) {
-                                        scheduleRanks[key] = priority
-                                        loaded[key] = list
-                                        if (key in guide.truncated) truncated += key else truncated -= key
+                            // Past days of catch-up channels, written to disk while the guides are
+                            // read, and the read each channel's programmes came from: taken into the archive.
+                            val spills = if (request.catchupKeys.isEmpty()) null else LiveTvArchive.Spills(spillDir())
+                            val chosenSpills = HashMap<String, LiveTvArchiveSpill>()
+                            try {
+                                // Two independent imports at most (one on weak TVs), and a bounded result
+                                // queue. A slow first feed no longer prevents a faster provider's guide from showing.
+                                loadLiveTvGuides(epgUrls.size, parallel = if (window === LiveTvGuideWindow.LowMemory) 1 else 2, read = { index ->
+                                    val epgUrl = epgUrls[index]
+                                    readGuide(
+                                        downloads[index], epgUrl.takeUnless { it.startsWith(STALKER_GUIDE_PREFIX) },
+                                        guideFiles[index], request, nowMs, window, force, guideHeaders[index], spills,
+                                    )
+                                }, publish = publish@ { index, guide ->
+                                    val epgUrl = epgUrls[index]
+                                    if (guide == null) {
+                                        failedLinks += epgUrl
+                                        return@publish
                                     }
-                                }
-                                guide.logos.forEach { (key, logo) ->
-                                    val priority = rank(key)
-                                    if (priority < (logoRanks[key] ?: Int.MAX_VALUE)) {
-                                        logoRanks[key] = priority
-                                        logos[key] = logo
+                                    if (!guide.complete) partial = true
+                                    if (guide.refreshFailed) failedLinks += epgUrl
+                                    // A guide that has the channel's guide id beats one that only found its name, so
+                                    // an id the viewer assigned in the playlist is what shows (as in other players);
+                                    // then a channel's own playlist's guides first, in its order; then the others'.
+                                    fun rank(key: String): Int {
+                                        val order = sourceLinks[sourceForKey[key]]?.indexOf(epgUrl)
+                                            ?.takeIf { it >= 0 } ?: (epgUrls.size + index)
+                                        return if (key in guide.nameMatched) NAME_MATCH_RANK + order else order
                                     }
+                                    guide.schedule.forEach { (key, list) ->
+                                        val priority = rank(key)
+                                        if (priority < (scheduleRanks[key] ?: Int.MAX_VALUE)) {
+                                            scheduleRanks[key] = priority
+                                            loaded[key] = list
+                                            val spill = guide.spill
+                                            if (guide.complete && spill != null) chosenSpills[key] = spill else chosenSpills -= key
+                                            if (key in guide.truncated) truncated += key else truncated -= key
+                                        }
+                                    }
+                                    guide.logos.forEach { (key, logo) ->
+                                        val priority = rank(key)
+                                        if (priority < (logoRanks[key] ?: Int.MAX_VALUE)) {
+                                            logoRanks[key] = priority
+                                            logos[key] = logo
+                                        }
+                                    }
+                                    publishGuide(
+                                        HashMap(previous).apply { putAll(loaded) },
+                                        HashMap(previousLogos).apply { putAll(logos) }, nowMs, null,
+                                    )
+                                })
+                                val failed = failedLinks.isNotEmpty()
+                                if (force && epgGeneration == generation) forceGuideDownload = false
+                                // A guide that failed, or broke off part way, keeps what it showed before.
+                                schedule = if ((failed || partial) && previous.isNotEmpty()) HashMap(previous).apply { putAll(loaded) } else loaded
+                                val regular = if (loaded.isEmpty()) {
+                                    nowMs + EPG_RETRY_MS
+                                } else {
+                                    nextScheduleReadAt(loaded, truncated, nowMs, EPG_MIN_READ_GAP_MS, EPG_DOWNLOAD_MS)
                                 }
-                                publishGuide(
-                                    HashMap(previous).apply { putAll(loaded) },
-                                    HashMap(previousLogos).apply { putAll(logos) }, nowMs, null,
-                                )
-                            })
-                            val failed = failedLinks.isNotEmpty()
-                            if (force && epgGeneration == generation) forceGuideDownload = false
-                            // A guide that failed, or broke off part way, keeps what it showed before.
-                            schedule = if ((failed || partial) && previous.isNotEmpty()) HashMap(previous).apply { putAll(loaded) } else loaded
-                            val regular = if (loaded.isEmpty()) {
-                                nowMs + EPG_RETRY_MS
-                            } else {
-                                nextScheduleReadAt(loaded, truncated, nowMs, EPG_MIN_READ_GAP_MS, EPG_DOWNLOAD_MS)
-                            }
-                            nextReadAtMs = if (failed || partial) minOf(regular, nowMs + EPG_RETRY_MS) else regular
-                            val shownLogos = if (failed || partial) HashMap(previousLogos).apply { putAll(logos) } else logos
-                            publishGuide(schedule, shownLogos, nowMs, failedLinks)
-                            // A guide that broke off part way is not saved as the kept programmes.
-                            if (!failed && !partial && loaded.isNotEmpty() && epgGeneration == generation) {
-                                val entry = LiveTvGuideCache.Entry(loaded, logos, nextReadAtMs)
-                                withContext(Dispatchers.IO) { LiveTvGuideCache.write(cacheFile, cacheKey, guideFiles, entry) }
+                                nextReadAtMs = if (failed || partial) minOf(regular, nowMs + EPG_RETRY_MS) else regular
+                                val shownLogos = if (failed || partial) HashMap(previousLogos).apply { putAll(logos) } else logos
+                                publishGuide(schedule, shownLogos, nowMs, failedLinks)
+                                // A guide that broke off part way is not saved as the kept programmes.
+                                if (!failed && !partial && loaded.isNotEmpty() && epgGeneration == generation) {
+                                    val entry = LiveTvGuideCache.Entry(loaded, logos, nextReadAtMs)
+                                    withContext(Dispatchers.IO) { LiveTvGuideCache.write(cacheFile, cacheKey, guideFiles, entry) }
+                                }
+                                if (spills != null && loaded.isNotEmpty() && epgGeneration == generation) {
+                                    val taken = chosenSpills.filterValues { !it.failed }
+                                    val archived = withContext(Dispatchers.IO) {
+                                        LiveTvArchive.write(archiveFile(), taken, request.catchupKeys, nowMs)
+                                    }
+                                    if (archived) reloadHistory()
+                                }
+                            } finally {
+                                if (spills != null) withContext(NonCancellable + Dispatchers.IO) { spills.clear() }
                             }
                         }
                         Unit
@@ -1738,11 +1871,12 @@ object LiveTvRepository {
         window: LiveTvGuideWindow,
         force: Boolean,
         headers: Map<String, String> = LIVE_TV_STREAM_HEADERS,
+        spills: LiveTvArchive.Spills? = null,
     ): LiveTvGuide? {
         try {
             val saved = withContext(Dispatchers.IO) { file.lastModified() }
             val cached = if (!force && saved != 0L && nowMs - saved in 0 until EPG_DOWNLOAD_MS) {
-                readXmlTvGuide(file, request, nowMs, window)
+                readXmlTvGuide(file, request, nowMs, window, spills)
             } else {
                 null
             }
@@ -1757,12 +1891,12 @@ object LiveTvRepository {
                     try {
                         val read = LiveTvHttp.downloadReading(
                             url, headers, file, LiveTvHttp.GUIDE_READ_TIMEOUT_S,
-                            read = { input -> readXmlTvGuide(input, request, nowMs, window) },
+                            read = { input -> readXmlTvGuide(input, request, nowMs, window, spills = spills) },
                             keep = { guide -> guide.canReplaceSavedGuide },
                         )
                         if (read.canReplaceSavedGuide) return read
                         // A cut or malformed response must never replace a usable saved feed.
-                        if (saved != 0L) return (cached ?: readXmlTvGuide(file, request, nowMs, window)).afterFailedRefresh()
+                        if (saved != 0L) return (cached ?: readXmlTvGuide(file, request, nowMs, window, spills)).afterFailedRefresh()
                         if (read.elements > 0) return read
                         Log.w(TAG, "Guide link gave no guide: ${url.substringBefore('?')}")
                     } catch (cancel: CancellationException) {
@@ -1773,7 +1907,7 @@ object LiveTvRepository {
                     }
                     // The guide saved before, if any.
                     if (saved == 0L) return null
-                    return (cached ?: readXmlTvGuide(file, request, nowMs, window)).afterFailedRefresh()
+                    return (cached ?: readXmlTvGuide(file, request, nowMs, window, spills)).afterFailedRefresh()
                 }
                 try {
                     download(file)
@@ -1782,10 +1916,10 @@ object LiveTvRepository {
                 } catch (error: Exception) {
                     Log.w(TAG, "Guide download failed", error)
                     if (saved == 0L) return null
-                    return (cached ?: readXmlTvGuide(file, request, nowMs, window)).afterFailedRefresh()
+                    return (cached ?: readXmlTvGuide(file, request, nowMs, window, spills)).afterFailedRefresh()
                 }
             }
-            return readXmlTvGuide(file, request, nowMs, window)
+            return readXmlTvGuide(file, request, nowMs, window, spills)
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (error: Exception) {
