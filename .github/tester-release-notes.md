@@ -1,3 +1,4 @@
-- Live TV catch-up: channels keep as many days of past programmes as the provider replays (up to 7), instead of one day. Older programmes only show when the provider's guide lists them.
-- Live TV: hold OK to start the programme over now also works on remotes that send a held OK as one long press.
-- Live TV guide: reads a little faster and the saved guide opens quicker; weak TVs with very large lists keep what they kept before.
+- Live TV catch-up: a full week (up to what the provider replays, 7 days at most) on every TV, low-memory TVs included. Past days are kept on storage instead of in memory, and are read only for the channels you scroll back on.
+- Live TV catch-up: days the provider's guide file no longer lists stay available, as long as the provider still replays them.
+- Live TV catch-up (Xtream): when the guide file only goes back a day, the older days are asked from the provider itself.
+- Memory use of the guide is back to what it was before Tester build 2.
