@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: NuvioTV 1.1.0-beta.4 sync, Tester channel picker, rebuilt Live TV guide and rewind, AutoSync audio sync parity, Netflix-style scrub previews
+# Release trigger: NuvioTV 1.1.0-beta.5 sync, lighter AutoSync
 
 
 on:
