@@ -28,11 +28,13 @@ internal object NetflixTokens {
     val ringWidth = 2.5.dp
     val metaHeight = 100.dp
     val rowEndPadding = 520.dp
-    // The pill menu floats in the top 56dp band. Content starts below it, and a focused row's
-    // tile lands low enough that its header stays clear of the pill when it slides back in.
+    // The pill menu stays in the top 56dp band; the page is clipped below it, so a focused row's
+    // header sits right under the pill with no sliver of the row above. focusTopInset is from the
+    // top of that clipped page to the focused row's tiles (its header is above them).
     val pillBand = 56.dp
     val contentTop = pillBand + 14.dp
-    val focusTopInset = contentTop + 44.dp
+    val listTopGap = contentTop - pillBand
+    val focusTopInset = listTopGap + 44.dp
 
     val billboardHeight = 368.dp
     val billboardCorner = 20.dp
@@ -58,7 +60,7 @@ internal object NetflixTokens {
     val emphasized = CubicBezierEasing(0.2f, 0f, 0f, 1f)
     const val MORPH_STIFFNESS = 380f
     const val OPEN_STIFFNESS = 420f
-    const val SCROLL_STIFFNESS = 700f
+    const val SCROLL_STIFFNESS = 460f
     /** Beyond this many titles a focus jump (Back to start, restore) snaps instead of sliding. */
     const val MORPH_SNAP_DISTANCE = 4
     // Holding Left/Right: tiles fold to posters and the row glides at a steady speed, then the

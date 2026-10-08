@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListPrefetchStrategy
 import androidx.compose.foundation.lazy.LazyListState
@@ -408,6 +409,9 @@ private fun NetflixHomeContent(
             state = columnListState,
             modifier = Modifier
                 .fillMaxSize()
+                // The page starts under the pill's band and is clipped there (lazy lists clip to their
+                // bounds), so rows scroll away under a clear band instead of behind the pill.
+                .padding(top = NetflixTokens.pillBand)
                 .onFocusChanged { contentHasFocus.value = it.hasFocus }
                 .focusRequester(contentFocusRequester)
                 .focusRestorer()
@@ -447,7 +451,7 @@ private fun NetflixHomeContent(
                         null
                     },
                 ),
-            contentPadding = PaddingValues(top = NetflixTokens.contentTop, bottom = 120.dp),
+            contentPadding = PaddingValues(top = NetflixTokens.listTopGap, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(NetflixTokens.rowGap)
         ) {
             if (heroVisible) {

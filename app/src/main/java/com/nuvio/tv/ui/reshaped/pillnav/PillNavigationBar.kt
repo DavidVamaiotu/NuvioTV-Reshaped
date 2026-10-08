@@ -43,7 +43,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.geometry.Rect
@@ -63,12 +62,10 @@ import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Icon
-import androidx.tv.material3.LocalTextStyle
 import androidx.tv.material3.Text
 import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
@@ -323,7 +320,7 @@ internal fun PillNavigationBar(
                         },
                         activeProfileColorHex = activeProfileColorHex,
                         activeProfileAvatarImageUrl = activeProfileAvatarImageUrl,
-                        shadowed = clear,
+                        crispLabels = clear,
                     )
                 }
             }
@@ -342,7 +339,7 @@ private fun PillItem(
     onBounds: (Float, Float) -> Unit,
     activeProfileColorHex: String,
     activeProfileAvatarImageUrl: String?,
-    shadowed: Boolean = false,
+    crispLabels: Boolean = false,
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale = animateFloatAsState(
@@ -352,6 +349,9 @@ private fun PillItem(
     )
     val contentAlpha = if (focused || selected) 1f else PillNavTokens.unselectedAlpha
     val isTab = entry.kind == PillNavEntryKind.Tab
+    // Crisp labels: text drawn straight to the screen with its alpha in the colour, never through a scaled
+    // or faded layer, which TVs can rasterize at the wrong size and stretch. The lens shows focus instead.
+    val flatText = crispLabels && isTab
     Box(
         modifier = Modifier
             .fillMaxHeight()
@@ -364,22 +364,22 @@ private fun PillItem(
                 if (it.isFocused) onFocused()
             }
             .clickable(interactionSource = null, indication = null, onClick = onClick)
-            .graphicsLayer {
-                scaleX = scale.value
-                scaleY = scale.value
-                alpha = contentAlpha
-            }
+            .then(
+                if (flatText) Modifier else Modifier.graphicsLayer {
+                    scaleX = scale.value
+                    scaleY = scale.value
+                    alpha = contentAlpha
+                }
+            )
             .then(if (isTab) Modifier.padding(horizontal = PillNavTokens.itemHorizontalPadding) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
         when (entry.kind) {
             PillNavEntryKind.Tab -> Text(
                 text = entry.label,
-                color = Color.White,
+                color = if (flatText) Color.White.copy(alpha = contentAlpha) else Color.White,
                 fontSize = PillNavTokens.labelSize,
                 fontWeight = if (selected || focused) FontWeight.SemiBold else FontWeight.Medium,
-                // Clear glass has no dark body behind the labels, so a soft shadow keeps them readable on bright art.
-                style = if (shadowed) LabelShadowStyle else LocalTextStyle.current,
                 maxLines = 1,
                 softWrap = false,
             )
@@ -525,10 +525,6 @@ private fun DrawScope.drawLiquidIndicator(indicator: LiquidIndicator, paint: Len
         style = paint.rimStroke,
     )
 }
-
-private val LabelShadowStyle = TextStyle(
-    shadow = Shadow(color = Color.Black.copy(alpha = 0.55f), offset = Offset(0f, 1f), blurRadius = 6f)
-)
 
 /** Static top sheen over the glass fill: the frosted look without sampling what is behind the pill. */
 private val FrostSheen = Brush.verticalGradient(
