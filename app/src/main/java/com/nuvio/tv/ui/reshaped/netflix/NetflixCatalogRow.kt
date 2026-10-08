@@ -2,6 +2,7 @@ package com.nuvio.tv.ui.reshaped.netflix
 
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -45,6 +47,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -371,33 +374,45 @@ internal fun NetflixRowHeader(title: String, subtitle: String?) {
 
 /**
  * Metadata and synopsis of the wide tile, directly under it (the tile is pinned left, so this
- * never has to move sideways). Every row keeps this space, so moving between rows never
- * relayouts the page mid-scroll; only the text fades.
+ * never has to move sideways). The space opens together with the tile's widening, on the same
+ * spring, and only while a tile is actually wide: a row with no details has no gap under it.
  */
 @Composable
 private fun NetflixRowDetails(rowHasFocus: Boolean, item: MetaPreview?, showImdbRatings: Boolean) {
-    // Keep the last item while fading out so the text doesn't vanish mid-fade.
+    val open = item != null && rowHasFocus
+    val height by animateDpAsState(
+        targetValue = if (open) NetflixTokens.metaHeight else 0.dp,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = NetflixTokens.EXPAND_STIFFNESS),
+        label = "netflixRowDetailsHeight"
+    )
+    // Keep the last item while closing so the text doesn't vanish mid-animation.
     var shown by remember { mutableStateOf<MetaPreview?>(null) }
     if (item != null) shown = item
     val alpha by animateFloatAsState(
-        targetValue = if (item != null && rowHasFocus) 1f else 0f,
+        targetValue = if (open) 1f else 0f,
         animationSpec = tween(NetflixTokens.META_FADE_MS),
         label = "netflixRowDetailsAlpha"
     )
+    if (height <= 0.dp) return
+    val current = shown ?: return
+    val context = LocalContext.current
+    val tokens = remember(current.id, current.genres, current.releaseInfo, current.imdbRating, current.runtime, showImdbRatings) {
+        current.netflixMetaLine(context, showImdbRatings)
+    }
     Box(
         modifier = Modifier
-            .padding(start = NetflixTokens.pageStart + 4.dp, top = 12.dp)
-            .width(NetflixTokens.tileExpandedWidth)
-            .height(NetflixTokens.metaHeight - 12.dp)
+            .width(NetflixTokens.tileExpandedWidth + NetflixTokens.pageStart)
+            .height(height)
+            .clipToBounds()
             .graphicsLayer { this.alpha = alpha }
     ) {
-        val current = shown ?: return@Box
-        if (alpha <= 0f && item == null) return@Box
-        val context = LocalContext.current
-        val tokens = remember(current.id, current.genres, current.releaseInfo, current.imdbRating, current.runtime, showImdbRatings) {
-            current.netflixMetaLine(context, showImdbRatings)
-        }
-        Column {
+        // Laid out at full size and revealed by the growing box, so the text never reflows.
+        Column(
+            modifier = Modifier
+                .wrapContentHeight(align = Alignment.Top, unbounded = true)
+                .padding(start = NetflixTokens.pageStart + 4.dp, top = 12.dp)
+                .width(NetflixTokens.tileExpandedWidth)
+        ) {
             NetflixMetaRow(tokens = tokens)
             val synopsis = current.description
             if (!synopsis.isNullOrBlank()) {

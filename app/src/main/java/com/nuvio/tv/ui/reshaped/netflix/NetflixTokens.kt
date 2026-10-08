@@ -26,7 +26,7 @@ internal object NetflixTokens {
     val tileExpandedWidth = tileHeight * (16f / 9f)
     val tileCorner = 8.dp
     val ringWidth = 2.5.dp
-    val metaHeight = 92.dp
+    val metaHeight = 100.dp
     val rowEndPadding = 520.dp
     // The pill menu floats in the top 56dp band. Content starts below it, and a focused row's
     // tile lands low enough that its header stays clear of the pill when it slides back in.
