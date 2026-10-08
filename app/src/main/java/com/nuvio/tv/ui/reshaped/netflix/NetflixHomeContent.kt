@@ -2,12 +2,12 @@ package com.nuvio.tv.ui.reshaped.netflix
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -72,6 +72,7 @@ import com.nuvio.tv.ui.screens.home.HomeUiState
 import com.nuvio.tv.ui.screens.home.HomeViewModel
 import com.nuvio.tv.ui.util.dpadVerticalFastScroll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -173,19 +174,33 @@ private fun NetflixHomeContent(
     val heroVisible = uiState.heroSectionEnabled && uiState.heroItems.isNotEmpty()
     var billboardFocused by remember { mutableStateOf(false) }
 
-    // Focused row snaps to a fixed line near the top; the billboard always shows whole.
-    val verticalSpec = remember(density, columnListState) {
-        val topInsetPx = with(density) { NetflixTokens.focusTopInset.toPx() }
+    // The page never scrolls by focus' bring-into-view: the follower below moves the focused row
+    // to the top line instead, tracking it live, so rows above shrinking or growing mid-move can't
+    // make it overshoot and bounce back.
+    val verticalSpec = remember {
         @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
         object : BringIntoViewSpec {
-            override val scrollAnimationSpec: AnimationSpec<Float> =
-                spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = NetflixTokens.SCROLL_STIFFNESS)
-            override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
-                if (billboardFocused) return 0f
-                val distance = offset - topInsetPx
-                if (kotlin.math.abs(distance) < 1f) return 0f
-                if (distance < 0f && !columnListState.canScrollBackward) return 0f
-                return distance
+            override val scrollAnimationSpec: AnimationSpec<Float> = spring()
+            override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = 0f
+        }
+    }
+    // Lazy index of the focused row (-1: the billboard or nothing).
+    val focusedListIndex = remember { mutableIntStateOf(-1) }
+
+    val isFastScrollingState = remember { mutableStateOf(false) }
+    LaunchedEffect(columnListState) {
+        // Shared across targets, so a held Down keeps gliding instead of stopping at every row.
+        val velocity = floatArrayOf(0f)
+        snapshotFlow { focusedListIndex.intValue }.collectLatest { target ->
+            if (target < 0) {
+                velocity[0] = 0f
+                return@collectLatest
+            }
+            try {
+                followRowToTop(columnListState, target, velocity, isFastScrolling = { isFastScrollingState.value })
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                // Another scroll (held D-pad, scroll to top) took over; wait for the next row.
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
             }
         }
     }
@@ -376,7 +391,6 @@ private fun NetflixHomeContent(
     }
     val cwPosterPattern = patternForScreen(uiState.customPosterUrlPattern, CustomPosterScreen.CONTINUE_WATCHING, uiState.customPosterEnabledScreens)
     val contentFocusRequester = LocalContentFocusRequester.current
-    val isFastScrollingState = remember { mutableStateOf(false) }
 
     // Accent glow behind the billboard (the colour of the featured title), fading away as the
     // page scrolls to the rows. Colour and fade are read while drawing only: no recomposition.
@@ -404,6 +418,10 @@ private fun NetflixHomeContent(
                 }
         )
     }
+    val heroCount = if (heroVisible) 1 else 0
+    val cwCount = if (uiState.continueWatchingEnabled && uiState.continueWatchingItems.isNotEmpty()) 1 else 0
+    val upcomingCount = if (uiState.continueWatchingEnabled && uiState.upcomingItems.isNotEmpty()) 1 else 0
+    val rowsStart = heroCount + cwCount + upcomingCount
     CompositionLocalProvider(LocalBringIntoViewSpec provides verticalSpec) {
         LazyColumn(
             state = columnListState,
@@ -464,6 +482,7 @@ private fun NetflixHomeContent(
                         onActiveIndexChanged = { savedHeroIndex.intValue = it },
                         onFocused = { item ->
                             billboardFocused = true
+                            focusedListIndex.intValue = -1
                             snapshot.rowIndex = -2
                             snapshot.itemIndex = 0
                             snapshot.rowKey = HERO_KEY
@@ -502,6 +521,7 @@ private fun NetflixHomeContent(
                             snapshot.rowIndex = -1
                             snapshot.itemIndex = itemIndex
                             snapshot.rowKey = CW_KEY
+                            focusedListIndex.intValue = heroCount
                             activeRowKeyState.value = CW_KEY
                             cwFocusedIndex.intValue = itemIndex
                             onFocusedRowKeyChanged(null)
@@ -548,6 +568,7 @@ private fun NetflixHomeContent(
                             snapshot.rowIndex = -1
                             snapshot.itemIndex = itemIndex
                             snapshot.rowKey = UPCOMING_KEY
+                            focusedListIndex.intValue = heroCount + cwCount
                             activeRowKeyState.value = UPCOMING_KEY
                             cwFocusedIndex.intValue = itemIndex
                             onFocusedRowKeyChanged(null)
@@ -628,6 +649,8 @@ private fun NetflixHomeContent(
                                     snapshot.rowIndex = index
                                     snapshot.itemIndex = itemIndex
                                     snapshot.rowKey = catalogKey
+                                    billboardFocused = false
+                                    focusedListIndex.intValue = rowsStart + index
                                     activeRowKeyState.value = catalogKey
                                     onFocusedRowKeyChanged(catalogKey)
                                     rowFocusedItemIndex[catalogKey] = itemIndex
@@ -656,6 +679,7 @@ private fun NetflixHomeContent(
                                 snapshot.rowIndex = index
                                 snapshot.itemIndex = itemIndex
                                 snapshot.rowKey = collectionKey
+                                focusedListIndex.intValue = rowsStart + index
                                 activeRowKeyState.value = collectionKey
                                 onFocusedRowKeyChanged(null)
                                 rowFocusedItemIndex[collectionKey] = itemIndex
@@ -684,4 +708,56 @@ private fun ContinueWatchingItem.contentTypeForDetail(): String = when (this) {
 private fun ContinueWatchingItem.remove(onRemove: (String, Int?, Int?, Boolean) -> Unit) = when (this) {
     is ContinueWatchingItem.InProgress -> onRemove(progress.contentId, progress.season, progress.episode, false)
     is ContinueWatchingItem.NextUp -> onRemove(info.contentId, info.seedSeason, info.seedEpisode, true)
+}
+
+/**
+ * Moves the page so the row at [index] sits at the top line (offset 0, just under the pill band)
+ * on a critically damped spring that follows the row's live position every frame: if rows above
+ * fold their details while it moves, it never overshoots and bounces back.
+ */
+private suspend fun followRowToTop(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    index: Int,
+    velocityHolder: FloatArray,
+    isFastScrolling: () -> Boolean,
+) {
+    val omega = kotlin.math.sqrt(NetflixTokens.SCROLL_STIFFNESS)
+    var velocity by FloatHolderDelegate(velocityHolder)
+    var lastFrame = 0L
+    var elapsedNanos = 0L
+    while (true) {
+        val frame = withFrameNanos { it }
+        val dt = if (lastFrame == 0L) 1f / 60f else ((frame - lastFrame) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
+        if (lastFrame != 0L) elapsedNanos += frame - lastFrame
+        lastFrame = frame
+        if (isFastScrolling()) {
+            velocity = 0f
+            continue
+        }
+        val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+        if (info == null) {
+            // Far away (restored focus): jump there, then settle.
+            listState.scrollToItem(index)
+            velocity = 0f
+            continue
+        }
+        val error = info.offset.toFloat()
+        if (elapsedNanos > FOLLOW_MIN_NANOS && kotlin.math.abs(error) < 0.5f && kotlin.math.abs(velocity) < 8f) {
+            if (error != 0f) listState.scrollBy(error)
+            return
+        }
+        velocity += (omega * omega * error - 2f * omega * velocity) * dt
+        val delta = velocity * dt
+        val consumed = listState.scrollBy(delta)
+        // Top or bottom of the page: nothing left to move.
+        if (kotlin.math.abs(delta) > 0.5f && kotlin.math.abs(consumed) < 0.01f && elapsedNanos > FOLLOW_MIN_NANOS) return
+    }
+}
+
+/** The rows' details open and fold over about this long; keep following until then. */
+private const val FOLLOW_MIN_NANOS = 450_000_000L
+
+private class FloatHolderDelegate(private val holder: FloatArray) {
+    operator fun getValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>): Float = holder[0]
+    operator fun setValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>, value: Float) { holder[0] = value }
 }

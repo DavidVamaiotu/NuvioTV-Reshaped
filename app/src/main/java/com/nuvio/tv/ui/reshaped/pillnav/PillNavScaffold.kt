@@ -12,6 +12,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -82,7 +83,8 @@ internal fun PillNavScaffold(
 ) {
     val showBar = currentRoute in rootRoutes
     // Settings and Live TV keep the pill in their header band; every other root screen scrolls under it, so it tucks away.
-    // Netflix-style Home and Search keep their content below the pill's band, so there the pill stays put too.
+    // In the Netflix look the pill stays put on Home (whose page starts below its band) and on Search
+    // (Nuvio's own screen, moved down below the band here).
     val netflixUi = com.nuvio.tv.ui.reshaped.netflix.rememberNetflixUiEnabled()
     val netflixSearch = currentRoute == Screen.Search.route && netflixUi
     val netflixHome = currentRoute == Screen.Home.route && netflixUi
@@ -210,6 +212,7 @@ internal fun PillNavScaffold(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .then(if (netflixSearch) Modifier.padding(top = PillNavTokens.barTopGap + PillNavTokens.barHeight) else Modifier)
                 .pillGlassSource(glassBackdrop?.takeIf { showBar })
                 .onPreviewKeyEvent { keyEvent ->
                     if (keyEvent.key == Key.Back) {

@@ -28,13 +28,11 @@ internal object NetflixTokens {
     val ringWidth = 2.5.dp
     val metaHeight = 100.dp
     val rowEndPadding = 520.dp
-    // The pill menu stays in the top 56dp band; the page is clipped below it, so a focused row's
-    // header sits right under the pill with no sliver of the row above. focusTopInset is from the
-    // top of that clipped page to the focused row's tiles (its header is above them).
+    // The pill menu stays in the top 56dp band; the page is clipped below it, and a focused row's
+    // top (its header) lands listTopGap under the band, so nothing of the row above shows.
     val pillBand = 56.dp
     val contentTop = pillBand + 14.dp
     val listTopGap = contentTop - pillBand
-    val focusTopInset = listTopGap + 44.dp
 
     val billboardHeight = 368.dp
     val billboardCorner = 20.dp
