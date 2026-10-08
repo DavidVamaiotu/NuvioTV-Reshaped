@@ -48,14 +48,15 @@ internal object NetflixTokens {
     val textSecondary = Color(0xFFBDBDBD)
     val rating = Color(0xFF46D369)
 
-    // Motion
+    // Motion. Moves are critically damped springs: they keep their speed when retargeted
+    // (holding the D-pad, focus leaving mid-expand) instead of restarting like a tween would.
     val emphasized = CubicBezierEasing(0.2f, 0f, 0f, 1f)
-    const val ROW_SLIDE_MS = 220
-    const val EXPAND_MS = 280
-    const val META_FADE_MS = 180
-    const val ROW_META_MS = 260
-    const val EXPAND_DWELL_MS = 450L
-    const val BILLBOARD_FADE_MS = 600
+    const val SCROLL_STIFFNESS = 900f
+    const val EXPAND_STIFFNESS = 1100f
+    const val META_FADE_MS = 140
+    const val EXPAND_DWELL_MS = 220L
+    const val BILLBOARD_FADE_MS = 500
+    const val ACCENT_FADE_MS = 500
 }
 
 /** "★ 7.6 · 2024 · Action · 2h 29m", Netflix's one-line summary under a title. */

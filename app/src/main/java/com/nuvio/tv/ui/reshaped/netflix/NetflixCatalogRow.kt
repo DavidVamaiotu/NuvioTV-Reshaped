@@ -1,7 +1,8 @@
 package com.nuvio.tv.ui.reshaped.netflix
 
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -247,7 +248,7 @@ internal fun NetflixCatalogRow(
             @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
             object : BringIntoViewSpec {
                 override val scrollAnimationSpec: AnimationSpec<Float> =
-                    tween(NetflixTokens.ROW_SLIDE_MS, easing = NetflixTokens.emphasized)
+                    spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = NetflixTokens.SCROLL_STIFFNESS)
                 // Netflix keeps the focused title at the left edge and slides the row under it.
                 override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float =
                     offset - startPx
@@ -370,15 +371,11 @@ internal fun NetflixRowHeader(title: String, subtitle: String?) {
 
 /**
  * Metadata and synopsis of the wide tile, directly under it (the tile is pinned left, so this
- * never has to move sideways). The space opens only on the focused row.
+ * never has to move sideways). Every row keeps this space, so moving between rows never
+ * relayouts the page mid-scroll; only the text fades.
  */
 @Composable
 private fun NetflixRowDetails(rowHasFocus: Boolean, item: MetaPreview?, showImdbRatings: Boolean) {
-    val height by animateDpAsState(
-        targetValue = if (rowHasFocus) NetflixTokens.metaHeight else 0.dp,
-        animationSpec = tween(NetflixTokens.ROW_META_MS, easing = NetflixTokens.emphasized),
-        label = "netflixRowDetailsHeight"
-    )
     // Keep the last item while fading out so the text doesn't vanish mid-fade.
     var shown by remember { mutableStateOf<MetaPreview?>(null) }
     if (item != null) shown = item
@@ -387,19 +384,19 @@ private fun NetflixRowDetails(rowHasFocus: Boolean, item: MetaPreview?, showImdb
         animationSpec = tween(NetflixTokens.META_FADE_MS),
         label = "netflixRowDetailsAlpha"
     )
-    if (height <= 0.dp) return
-    val current = shown ?: return
-    val context = LocalContext.current
-    val tokens = remember(current.id, current.genres, current.releaseInfo, current.imdbRating, current.runtime, showImdbRatings) {
-        current.netflixMetaLine(context, showImdbRatings)
-    }
     Box(
         modifier = Modifier
             .padding(start = NetflixTokens.pageStart + 4.dp, top = 12.dp)
             .width(NetflixTokens.tileExpandedWidth)
-            .height((height - 12.dp).coerceAtLeast(0.dp))
+            .height(NetflixTokens.metaHeight - 12.dp)
             .graphicsLayer { this.alpha = alpha }
     ) {
+        val current = shown ?: return@Box
+        if (alpha <= 0f && item == null) return@Box
+        val context = LocalContext.current
+        val tokens = remember(current.id, current.genres, current.releaseInfo, current.imdbRating, current.runtime, showImdbRatings) {
+            current.netflixMetaLine(context, showImdbRatings)
+        }
         Column {
             NetflixMetaRow(tokens = tokens)
             val synopsis = current.description

@@ -3,6 +3,8 @@ package com.nuvio.tv.ui.reshaped.netflix
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -102,15 +104,16 @@ internal fun NetflixTile(
 
     val width by animateDpAsState(
         targetValue = if (expanded) NetflixTokens.tileExpandedWidth else NetflixTokens.tileWidth,
-        animationSpec = tween(NetflixTokens.EXPAND_MS, easing = NetflixTokens.emphasized),
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = NetflixTokens.EXPAND_STIFFNESS),
         label = "netflixTileWidth"
     )
-    // The artwork layer stays composed while the tile is wider than a poster, so collapsing
-    // fades it out over the shrinking width instead of popping back to the poster.
-    val showArtwork = expanded || width > NetflixTokens.tileWidth + 1.dp
+    // The artwork layer is composed as soon as the tile takes focus (invisible), so the wide
+    // image is already decoded when the dwell ends and the expansion never waits on it. It stays
+    // while the tile is wider than a poster, so collapsing fades it out instead of popping.
+    val showArtwork = isFocused || expanded || width > NetflixTokens.tileWidth + 1.dp
     val artworkAlpha by animateFloatAsState(
         targetValue = if (expanded) 1f else 0f,
-        animationSpec = tween(NetflixTokens.EXPAND_MS),
+        animationSpec = tween(NetflixTokens.META_FADE_MS + 60),
         label = "netflixTileArtwork"
     )
 

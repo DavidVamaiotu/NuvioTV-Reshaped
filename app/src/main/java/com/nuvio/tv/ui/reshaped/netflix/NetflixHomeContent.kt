@@ -2,7 +2,8 @@ package com.nuvio.tv.ui.reshaped.netflix
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.BringIntoViewSpec
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListPrefetchStrategy
 import androidx.compose.foundation.lazy.LazyListState
@@ -33,6 +36,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -172,7 +178,7 @@ private fun NetflixHomeContent(
         @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
         object : BringIntoViewSpec {
             override val scrollAnimationSpec: AnimationSpec<Float> =
-                tween(NetflixTokens.ROW_META_MS, easing = NetflixTokens.emphasized)
+                spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = NetflixTokens.SCROLL_STIFFNESS)
             override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float {
                 if (billboardFocused) return 0f
                 val distance = offset - topInsetPx
@@ -371,12 +377,37 @@ private fun NetflixHomeContent(
     val contentFocusRequester = LocalContentFocusRequester.current
     val isFastScrollingState = remember { mutableStateOf(false) }
 
+    // Accent glow behind the billboard (the colour of the featured title), fading away as the
+    // page scrolls to the rows. Colour and fade are read while drawing only: no recomposition.
+    val accentItem = if (heroVisible) uiState.heroItems.getOrNull(savedHeroIndex.intValue) else null
+    val accent = rememberNetflixAccent(accentItem?.let { it.background ?: it.landscapePoster ?: it.poster })
+    val glowFadePx = with(density) { NetflixTokens.billboardHeight.toPx() }
+    Box(modifier = Modifier.fillMaxSize().background(NetflixTokens.page)) {
+    if (heroVisible) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(NetflixTokens.billboardHeight + 220.dp)
+                .drawBehind {
+                    val fade = if (columnListState.firstVisibleItemIndex > 0) 0f
+                    else 1f - (columnListState.firstVisibleItemScrollOffset / glowFadePx).coerceIn(0f, 1f)
+                    val color = accent.value
+                    if (fade <= 0f || color.alpha <= 0f) return@drawBehind
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to color.copy(alpha = 0.78f * fade),
+                            0.55f to color.copy(alpha = 0.42f * fade),
+                            1f to Color.Transparent
+                        )
+                    )
+                }
+        )
+    }
     CompositionLocalProvider(LocalBringIntoViewSpec provides verticalSpec) {
         LazyColumn(
             state = columnListState,
             modifier = Modifier
                 .fillMaxSize()
-                .background(NetflixTokens.page)
                 .onFocusChanged { contentHasFocus.value = it.hasFocus }
                 .focusRequester(contentFocusRequester)
                 .focusRestorer()
@@ -632,6 +663,7 @@ private fun NetflixHomeContent(
                 }
             }
         }
+    }
     }
 }
 
