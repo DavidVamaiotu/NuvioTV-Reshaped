@@ -261,6 +261,26 @@ internal fun NetflixCatalogRow(
         }
     }
 
+    // Wide art for the titles focus is about to reach is fetched ahead, so a tile opens onto its
+    // art instead of an empty box; once focus is far from them they are dropped from memory again.
+    val preloadContext = LocalContext.current
+    LaunchedEffect(motion, preloadContext, motionDensity) {
+        netflixPreloadRowArt(
+            context = preloadContext,
+            density = motionDensity,
+            items = { latestItems },
+            window = {
+                when {
+                    // A held key glides past titles nobody will open: fetch nothing until it lands.
+                    motion.held.targetValue > 0f -> null
+                    rowHasFocus -> NetflixPreloadWindow(motion.position.targetValue.roundToInt(), focused = true)
+                    // Not focused: only the title that opens when focus comes down to this row.
+                    else -> NetflixPreloadWindow(motion.position.targetValue.roundToInt(), focused = false)
+                }
+            }
+        )
+    }
+
     Column(
         modifier = modifier.fillMaxWidth().then(
             if (blockingFocusExit.value) {

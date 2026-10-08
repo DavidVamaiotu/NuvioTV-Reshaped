@@ -36,8 +36,10 @@ internal object NetflixTokens {
     val contentTop = pillBand + 14.dp
     val listTopGap = contentTop - pillBand
 
-    val billboardHeight = 368.dp
-    val billboardCorner = 20.dp
+    // The billboard's text block; its artwork fills the page behind it, from the top of the screen
+    // (under the clear pill) down past the first row, and fades into the page.
+    val billboardHeight = 344.dp
+    val billboardBackdropHeight = 500.dp
     val billboardTextWidth = 440.dp
     val billboardLogoWidth = 300.dp
     val billboardLogoHeight = 110.dp
@@ -74,6 +76,13 @@ internal object NetflixTokens {
     const val META_FADE_MS = 140
     const val BILLBOARD_FADE_MS = 500
     const val ACCENT_FADE_MS = 500
+    /** Wide art that arrives after a tile has opened fades in over this long instead of popping. */
+    const val ART_ARRIVE_MS = 180
+    // Wide art preloading in the focused row: titles ahead/behind focus are fetched in advance and
+    // dropped from memory again once focus is more than PRELOAD_KEEP titles away.
+    const val PRELOAD_AHEAD = 2
+    const val PRELOAD_BEHIND = 1
+    const val PRELOAD_KEEP = 3
 }
 
 /** "★ 7.6 · 2024 · Action · 2h 29m", Netflix's one-line summary under a title. */
