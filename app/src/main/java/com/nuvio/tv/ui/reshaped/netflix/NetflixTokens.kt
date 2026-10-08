@@ -61,6 +61,13 @@ internal object NetflixTokens {
     const val SCROLL_STIFFNESS = 700f
     /** Beyond this many titles a focus jump (Back to start, restore) snaps instead of sliding. */
     const val MORPH_SNAP_DISTANCE = 4
+    // Holding Left/Right: tiles fold to posters and the row glides at a steady speed, then the
+    // landing title opens once the key is let go (or steps stop arriving).
+    const val HOLD_STEP_MS = 170L
+    const val HOLD_RELEASE_MS = 260L
+    const val HOLD_FOLD_STIFFNESS = 1400f
+    const val HOLD_GLIDE_STIFFNESS = 900f
+    const val HOLD_SNAP_DISTANCE = 12
     const val TRAILER_DWELL_MS = 1200L
     const val META_FADE_MS = 140
     const val BILLBOARD_FADE_MS = 500

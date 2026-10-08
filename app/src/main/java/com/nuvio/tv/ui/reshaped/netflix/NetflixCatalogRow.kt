@@ -37,6 +37,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import kotlin.math.roundToInt
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.layout
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.rememberCoroutineScope
@@ -244,7 +250,7 @@ internal fun NetflixCatalogRow(
         val posterPx = with(motionDensity) { NetflixTokens.tileWidth.toPx() }
         val widePx = with(motionDensity) { NetflixTokens.tileExpandedWidth.toPx() }
         val gapPx = with(motionDensity) { NetflixTokens.tileGap.toPx() }
-        snapshotFlow { motion.position.value to motion.openness.value }.collect { (p, _) ->
+        snapshotFlow { Triple(motion.position.value, motion.openness.value, motion.held.value) }.collect { (p, _, _) ->
             if (p < 0f) return@collect
             val index = kotlin.math.floor(p).toInt()
             val fraction = p - index
@@ -298,6 +304,17 @@ internal fun NetflixCatalogRow(
                             rowHasFocus = it.hasFocus
                             motion.setOpen(it.hasFocus, motionScope)
                         }
+                    }
+                    // Holding Left/Right folds the row to posters (see NetflixRowMotion); never consumes keys.
+                    .onPreviewKeyEvent { event ->
+                        val key = event.key
+                        if (key == Key.DirectionLeft || key == Key.DirectionRight) {
+                            when (event.type) {
+                                KeyEventType.KeyDown -> if (event.nativeKeyEvent.repeatCount > 0) motion.hold(motionScope)
+                                KeyEventType.KeyUp -> motion.release(motionScope)
+                            }
+                        }
+                        false
                     }
                     .focusRequester(rowFocusRequester)
                     .focusRestorer {
@@ -411,6 +428,8 @@ internal fun NetflixRowHeader(title: String, subtitle: String?) {
 @Composable
 private fun NetflixRowDetails(motion: NetflixRowMotion, item: MetaPreview?, showImdbRatings: Boolean) {
     val openness = { motion.openness.value }
+    // The space stays while a key is held (no rows jumping up and down); only the text fades.
+    val textAlpha = { motion.openness.value * (1f - motion.held.value) }
     val isOpen by remember(motion) { derivedStateOf { motion.openness.value > 0.001f } }
     if (!isOpen) return
     Box(
@@ -422,7 +441,7 @@ private fun NetflixRowDetails(motion: NetflixRowMotion, item: MetaPreview?, show
                 layout(placeable.width, h) { placeable.place(0, 0) }
             }
             .clipToBounds()
-            .graphicsLayer { alpha = openness() }
+            .graphicsLayer { alpha = textAlpha() }
     ) {
         Crossfade(
             targetState = item,
