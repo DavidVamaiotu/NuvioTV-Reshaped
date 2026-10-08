@@ -1,9 +1,1 @@
-- Live TV: the programme on now is highlighted as soon as a channel's programme list opens (no more ▶ ◀ to find it).
-- Live TV catch-up: Start over plays from the start of the programme, also when it plays as HLS (it opened at the live point before, and could jump back to live).
-- Live TV catch-up: when the provider's HLS replay fails (error 404), the same replay plays in TS instead of stopping.
-- Live TV catch-up: Xtream channels added through an M3U link that isn't get.php now get Xtream replays.
-- Live TV guide: a guide that failed to update or was cut off now says "update failed, retrying" next to the source, and is tried again after 5 minutes instead of waiting for the next refresh.
-- Live TV guide: channels with many short programmes (news, kids) now show more of what's coming up.
-- Live TV guide: the last programme in a guide without an end time is no longer dropped.
-- Live TV guide: a playlist's tvg-shift is applied, so channels with shifted guide times line up.
-- Live TV guide: more channel names find their guide ("UK - BBC One", "BBC One (UK)", "1080"/"HD+" tags, accents).
+- Live TV catch-up: holding ◀ in the rewind bar now stops at the start of a programme instead of racing through the programme before it to its start. Press ◀ again to go on into the programme before (10 seconds at a time, faster when held).
