@@ -926,6 +926,8 @@ object LiveTvRepository {
                     } else {
                         // The source keeps the channels it had.
                         _uiState.update { it.copy(sourceErrors = it.sourceErrors + (source.id to reason), isLoaded = true) }
+                        // Reload asked for the guide again too: it still comes, with the channels kept.
+                        if (epgKey == null && loaded.isNotEmpty()) publish()
                     }
                 }
             }

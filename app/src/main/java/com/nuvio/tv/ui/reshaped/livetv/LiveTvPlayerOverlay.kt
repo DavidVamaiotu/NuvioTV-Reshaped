@@ -304,7 +304,9 @@ internal class LiveTvPlayerState(
                 // A replay the player cannot seek in (TS, most providers' kind) moves by asking for
                 // another replay instead; one that seeks (HLS) seeks like a film.
                 in SCRUB_KEYS -> {
-                    if (replaySeeks()) return false
+                    // ◀ at the very start of one that seeks (a programme started over, which
+                    // began early) reaches back past its start with the rewind bar.
+                    if (replaySeeks() && !(event.keyCode in BACK_SCRUB_KEYS && atReplayStart())) return false
                     val channel = currentChannel() ?: return false
                     if (down && event.repeatCount == 0) openScrub(channel, if (event.keyCode in BACK_SCRUB_KEYS) -1 else 1)
                     channel.catchup != null
@@ -458,6 +460,10 @@ internal class LiveTvPlayerState(
     /** Whether the replay playing can be sought in by the player itself (HLS with a length). */
     private fun replaySeeks(): Boolean =
         controller._exoPlayer?.let { it.isCurrentMediaItemSeekable && it.duration != androidx.media3.common.C.TIME_UNSET } == true
+
+    /** Whether the replay playing is within a few seconds of its own start: the player's bar can go no further back. */
+    private fun atReplayStart(): Boolean =
+        controller._exoPlayer?.currentPosition?.let { it < REPLAY_START_MARGIN_MS } == true
 
     /** Where the picture is in the channel's time: now when live, else the replay's position. */
     private fun playheadMs(now: Long): Long {
@@ -726,6 +732,7 @@ internal class LiveTvPlayerState(
         const val INFO_MS = 6_000L
         /** After ◀▶ are let go, the rewind bar waits this long for another press before playing from there. */
         const val SCRUB_SETTLE_MS = 1_200L
+        const val REPLAY_START_MARGIN_MS = 5_000L
         val SCRUB_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD)
         val BACK_SCRUB_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_MEDIA_REWIND)
         val OK_KEYS = intArrayOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER)
