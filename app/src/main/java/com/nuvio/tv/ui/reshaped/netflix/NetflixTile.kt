@@ -106,8 +106,10 @@ internal fun NetflixTile(
 
     val context = LocalContext.current
     val density = LocalDensity.current
-    val posterSize = remember(density) {
-        with(density) { NetflixTokens.tileWidth.roundToPx() to NetflixTokens.tileHeight.roundToPx() }
+    val collapsedWidth = item.netflixCollapsedWidth()
+    val expandedWidth = item.netflixExpandedWidth()
+    val posterSize = remember(density, collapsedWidth) {
+        with(density) { collapsedWidth.roundToPx() to NetflixTokens.tileHeight.roundToPx() }
     }
     val artworkSize = remember(density) {
         with(density) { NetflixTokens.tileExpandedWidth.roundToPx() to NetflixTokens.tileHeight.roundToPx() }
@@ -130,7 +132,7 @@ internal fun NetflixTile(
         modifier = modifier
             .layout { measurable, _ ->
                 val e = expansion()
-                val w = (NetflixTokens.tileWidth + (NetflixTokens.tileExpandedWidth - NetflixTokens.tileWidth) * e).roundToPx()
+                val w = (collapsedWidth + (expandedWidth - collapsedWidth) * e).roundToPx()
                 val h = NetflixTokens.tileHeight.roundToPx()
                 val placeable = measurable.measure(Constraints.fixed(w, h))
                 layout(w, h) { placeable.place(0, 0) }
@@ -214,7 +216,7 @@ internal fun NetflixTile(
                 )
             }
 
-            if (showArtwork) {
+            if (showArtwork && item.netflixHasWideArtwork()) {
                 // Drawn at its final width and revealed by the widening tile, so the art never rescales.
                 Box(
                     modifier = Modifier

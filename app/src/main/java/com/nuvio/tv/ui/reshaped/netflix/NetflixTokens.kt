@@ -2,12 +2,14 @@ package com.nuvio.tv.ui.reshaped.netflix
 
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.content.Context
 import com.nuvio.tv.core.util.parseRuntimeMinutes
 import com.nuvio.tv.domain.model.ContentType
 import com.nuvio.tv.domain.model.MetaPreview
+import com.nuvio.tv.domain.model.PosterShape
 import com.nuvio.tv.ui.util.formatHeroRuntime
 import com.nuvio.tv.ui.util.localizedGenreLabel
 
@@ -91,3 +93,20 @@ internal fun MetaPreview.netflixMetaLine(context: Context, showRating: Boolean):
 internal const val NETFLIX_RATING_PREFIX = "★"
 
 private val YEAR = Regex("""(19|20)\d{2}""")
+
+/**
+ * A title's resting width, from the shape its add-on gives it (as Nuvio's own cards do): posters
+ * 2:3, square art (TV channels, logos) square, landscape art already 16:9.
+ */
+internal fun MetaPreview.netflixCollapsedWidth(): Dp = when (posterShape) {
+    PosterShape.POSTER -> NetflixTokens.tileWidth
+    PosterShape.SQUARE -> NetflixTokens.tileHeight
+    PosterShape.LANDSCAPE -> NetflixTokens.tileExpandedWidth
+}
+
+/** Wide art to open into; without any, the title keeps its own shape and only its details open. */
+internal fun MetaPreview.netflixHasWideArtwork(): Boolean =
+    !landscapePoster.isNullOrBlank() || !background.isNullOrBlank()
+
+internal fun MetaPreview.netflixExpandedWidth(): Dp =
+    if (netflixHasWideArtwork()) NetflixTokens.tileExpandedWidth else netflixCollapsedWidth()

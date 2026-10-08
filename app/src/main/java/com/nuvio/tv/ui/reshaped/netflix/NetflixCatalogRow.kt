@@ -246,14 +246,17 @@ internal fun NetflixCatalogRow(
     // edge, sliding by exactly its own (shrinking) width as focus moves on. Nothing recomposes.
     val motionDensity = LocalDensity.current
     LaunchedEffect(motion, listState, motionDensity) {
-        val posterPx = with(motionDensity) { NetflixTokens.tileWidth.toPx() }
-        val widePx = with(motionDensity) { NetflixTokens.tileExpandedWidth.toPx() }
         val gapPx = with(motionDensity) { NetflixTokens.tileGap.toPx() }
+        val seeAllPx = with(motionDensity) { NetflixTokens.tileWidth.toPx() }
         snapshotFlow { Triple(motion.position.value, motion.openness.value, motion.held.value) }.collect { (p, _, _) ->
             if (p < 0f) return@collect
             val index = kotlin.math.floor(p).toInt()
             val fraction = p - index
-            val width = posterPx + (widePx - posterPx) * expansionAt(index)
+            val item = latestItems.getOrNull(index)
+            val width = if (item == null) seeAllPx else with(motionDensity) {
+                val collapsed = item.netflixCollapsedWidth().toPx()
+                collapsed + (item.netflixExpandedWidth().toPx() - collapsed) * expansionAt(index)
+            }
             listState.requestScrollToItem(index, (fraction * (width + gapPx)).roundToInt())
         }
     }
