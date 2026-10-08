@@ -30,7 +30,7 @@ def probe(url):
     status, ctype, body = get(url)
     note = ""
     text = body.decode("utf-8", "replace")
-    if status == 200 and text.lstrip().startswith("#EXTM3U"):
+    if status == 200 and text.lstrip().startswith("#EXTM3U") and "#EXTINF:-1" not in text:
         live = "#EXT-X-ENDLIST" not in text and "#EXT-X-STREAM-INF" not in text
         kind = "master" if "#EXT-X-STREAM-INF" in text else ("live media" if live else "VOD media")
         note = kind
@@ -60,7 +60,7 @@ fmt = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
 fresh = []
 for u in urls:
     if "vbegin=" in u:
-        for back in (10, 60, 180, 600):
+        for back in (10, 60, 90, 120, 150, 180, 240):
             a = now - timedelta(minutes=back)
             fresh.append(re.sub(r"vbegin=[^&]+&vend=[^&]+", f"vbegin={fmt(a)}&vend={fmt(a + timedelta(minutes=5))}", u))
     else:
