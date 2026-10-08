@@ -30,21 +30,21 @@ WINDOW_END = day0 + timedelta(days=AHEAD_DAYS)
 
 # ---------------------------------------------------------------- streams
 LIVE = {
-    "akamai": "https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8",
+    "trt": "https://tv-trtworld.medya.trt.com.tr/master.m3u8",
     "usp": "https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8",
     "usp_scte": "https://demo.unified-streaming.com/k8s/live/stable/scte35.isml/.m3u8",
     "usp_http": "http://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8",
     "dash": "https://livesim2.dashif.org/livesim2/testpic_2s/Manifest.mpd",
     "dw": "https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8",
-    "aje": "https://live-hls-web-aje.getaj.net/AJE/index.m3u8",
+    "dw2": "https://dwamdstream104.akamaized.net/hls/live/2015530/dwstream104/index.m3u8",
     "redbull": "https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8",
 }
 VOD = {
     "bbb_hls": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
     "tos_hls": "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8",
     "bipbop_ts": "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8",
-    "sintel_mp4": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
-    "ed_mp4": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
+    "tos_mov": "https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov",
+    "trailer_mp4": "https://download.blender.org/durian/trailer/sintel_trailer-720p.mp4",
     "bbb_dash": "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd",
 }
 DEAD_STREAM = BASE + "missing/no-such-stream.m3u8"
@@ -170,15 +170,15 @@ def chan(g, cid, name, logo=None):
 
 
 # ---- 1 Live streams (one day back)
-for key, name in [("akamai", "Akamai Test Live"), ("usp", "Unified Streaming Live"), ("usp_scte", "Unified Streaming Ads Live"),
-                  ("usp_http", "Plain HTTP Live"), ("dash", "DASH Live Sim"), ("dw", "DW English"), ("aje", "Al Jazeera English"),
+for key, name in [("trt", "TRT World"), ("usp", "Unified Streaming Live"), ("usp_scte", "Unified Streaming Ads Live"),
+                  ("usp_http", "Plain HTTP Live"), ("dash", "DASH Live Sim"), ("dw", "DW English"), ("dw2", "DW Second Feed"),
                   ("redbull", "Red Bull TV")]:
     chan(main, f"live.{key}", name)
 
 # ---- 2 Catch-up
 CATCHUP = [
     ("cu.default", "Catch-up · Default 7 days (HLS film)"),
-    ("cu.mp4", "Catch-up · Default 3 days (MP4 film)"),
+    ("cu.mp4", "Catch-up · Default 3 days (MOV film)"),
     ("cu.append", "Catch-up · Append (live server)"),
     ("cu.shift", "Catch-up · Shift utc/lutc (live server)"),
     ("cu.flussonic", "Catch-up · Flussonic (should fail)"),
@@ -204,14 +204,11 @@ for cid, _ in CATCHUP:
             title = f"Midnight · {ro_day(a)}"
         main.programme(cid, a, b, title,
                        f"Aired {ro_day(a)}–{ro(b)}. Replays play a sample film." if i % 4 == 0 else None)
-# Real archive test: 5 minute programmes from 6 h ago to 2 h ahead, 30 minutes around them.
-hour = now.replace(minute=0, second=0, microsecond=0)
-for a, b in slots(30, day0 - timedelta(days=1), hour - timedelta(hours=6)):
-    main.programme("cu.dvr", a, b, f"Half hour {ro(a)}", "Too old for the server's archive: expect live or an error.")
-for a, b in slots(5, hour - timedelta(hours=6), hour + timedelta(hours=2)):
-    main.programme("cu.dvr", a, b, f"Minute block {ro(a)}", "The replay should show the server clock at the time in the title, if the server still keeps it.")
-for a, b in slots(30, hour + timedelta(hours=2), WINDOW_END):
-    main.programme("cu.dvr", a, b, f"Half hour {ro(a)}", None)
+# Real archive test: Unified Streaming keeps about 2 hours, so any block that started within
+# the last 2 hours replays for real (the stream's own clock shows the time); older ones fail.
+for a, b in slots(15, day0 - timedelta(days=1)):
+    main.programme("cu.dvr", a, b, f"Block {ro(a)}–{ro(b)}",
+                   "Replays for real if it started less than about 2 hours ago; older blocks fail.")
 
 # ---- 3 Guide time formats
 TIMING = [
@@ -360,26 +357,26 @@ def logo(n):
 
 A = [f'#EXTM3U url-tvg="{BASE}guide.xml.gz,{BASE}guide-extra.xml"\n']
 G1, G2, G3, G4, G5, G6 = "1 Live streams", "2 Catch-up", "3 Guide time formats", "4 Guide matching", "5 Guide shapes", "6 Links and headers"
-for key, name in [("akamai", "Akamai Test Live"), ("usp", "Unified Streaming Live"), ("usp_scte", "Unified Streaming Ads Live"),
-                  ("usp_http", "Plain HTTP Live"), ("dash", "DASH Live Sim"), ("dw", "DW English"), ("aje", "Al Jazeera English"),
+for key, name in [("trt", "TRT World"), ("usp", "Unified Streaming Live"), ("usp_scte", "Unified Streaming Ads Live"),
+                  ("usp_http", "Plain HTTP Live"), ("dash", "DASH Live Sim"), ("dw", "DW English"), ("dw2", "DW Second Feed"),
                   ("redbull", "Red Bull TV")]:
-    url = LIVE[key] if key == "akamai" else LIVE[key] + f"#live-{key}"
+    url = LIVE[key] if key == "trt" else LIVE[key] + f"#live-{key}"
     A.append(entry(name, url, **{"tvg-id": f"live.{key}", "tvg-logo": logo(f"live-{key}"), "group-title": G1}))
 
 def cu(name, cid, url, **c):
     A.append(entry(name, url, **{"tvg-id": cid, "tvg-logo": logo(cid.replace(".", "-")), "group-title": G2}, **c))
 
-cu("Catch-up · Default 7 days (HLS film)", "cu.default", LIVE["akamai"] + "?nuvio=cu1",
+cu("Catch-up · Default 7 days (HLS film)", "cu.default", LIVE["trt"] + "?nuvio=cu1",
    catchup="default", **{"catchup-days": "7", "catchup-source": VOD["bbb_hls"] + "?utc={utc}&end={utcend}&d={duration}"})
-cu("Catch-up · Default 3 days (MP4 film)", "cu.mp4", LIVE["usp"] + "?nuvio=cu2",
-   catchup="default", **{"catchup-days": "3", "catchup-source": VOD["sintel_mp4"] + "?start=${start}&dur={duration:60}"})
+cu("Catch-up · Default 3 days (MOV film)", "cu.mp4", LIVE["usp"] + "?nuvio=cu2",
+   catchup="default", **{"catchup-days": "3", "catchup-source": VOD["tos_mov"] + "?start=${start}&dur={duration:60}"})
 cu("Catch-up · Append (live server)", "cu.append", LIVE["dw"] + "?nuvio=cu3",
    catchup="append", **{"catchup-days": "2", "catchup-source": "&utc={utc}&lutc={lutc}"})
 cu("Catch-up · Shift utc/lutc (live server)", "cu.shift", LIVE["usp_scte"] + "?nuvio=cu4",
    catchup="shift", **{"catchup-days": "1"})
-cu("Catch-up · Flussonic (should fail)", "cu.flussonic", LIVE["akamai"] + "?nuvio=cu5",
+cu("Catch-up · Flussonic (should fail)", "cu.flussonic", LIVE["trt"] + "?nuvio=cu5",
    catchup="flussonic", **{"catchup-days": "1"})
-cu("Catch-up · tvg-rec 2 days", "cu.tvgrec", LIVE["aje"] + "?nuvio=cu6", **{"tvg-rec": "2"})
+cu("Catch-up · tvg-rec 2 days", "cu.tvgrec", LIVE["dw2"] + "?nuvio=cu6", **{"tvg-rec": "2"})
 cu("Catch-up · 14 days (app keeps 7)", "cu.14days", LIVE["redbull"] + "?nuvio=cu7",
    catchup="default", **{"catchup-days": "14", "catchup-source": VOD["tos_hls"] + "?from={utc}&to={utcend}"})
 cu("Catch-up · Date template (TS film)", "cu.formatted", LIVE["usp"] + "?nuvio=cu8",
@@ -414,7 +411,7 @@ M = [
     ("No Guide At All", {"tvg-id": "missing.none"}),
 ]
 for n, (name, attrs) in enumerate(M):
-    A.append(entry(name, LIVE["akamai"] + f"#m{n}", **{**attrs, "group-title": G4}))
+    A.append(entry(name, LIVE["trt"] + f"#m{n}", **{**attrs, "group-title": G4}))
 
 for n, (cid, name) in enumerate([("s.short", "Shapes · very short programmes"), ("s.long", "Shapes · 6 hour programmes"),
                                  ("s.gaps", "Shapes · gaps"), ("s.overlap", "Shapes · overlaps"), ("s.nostop", "Shapes · no stop times"),
@@ -422,21 +419,21 @@ for n, (cid, name) in enumerate([("s.short", "Shapes · very short programmes"),
                                  ("s.runsout", "Shapes · guide runs out in 3 h"), ("s.future", "Shapes · starts in 2 h")]):
     A.append(entry(name, LIVE["dw"] + f"#s{n}", **{"tvg-id": cid, "group-title": G5}))
 
-A.append(entry("Kodi pipe headers", LIVE["aje"] + "#h0|User-Agent=NuvioReshapedTest/1.0&Referer=https%3A%2F%2Fexample.com%2F",
+A.append(entry("Kodi pipe headers", LIVE["dw2"] + "#h0|User-Agent=NuvioReshapedTest/1.0&Referer=https%3A%2F%2Fexample.com%2F",
                **{"tvg-id": "h.pipe", "group-title": G6}))
 A.append('#EXTINF:-1 tvg-id="h.vlcopt" group-title="6 Links and headers",VLC options headers\n'
          '#EXTVLCOPT:http-user-agent=NuvioReshapedTest/1.0\n#EXTVLCOPT:http-referrer=https://example.com/\n'
-         f'{LIVE["aje"]}#h1\n')
+         f'{LIVE["dw2"]}#h1\n')
 A.append('#EXTINF:-1 tvg-id="h.exthttp" group-title="6 Links and headers",EXTHTTP headers\n'
          '#EXTHTTP:{"User-Agent":"Mozilla/5.0 (KHTML, like Gecko) NuvioTest","Origin":"https://example.com"}\n'
-         f'{LIVE["aje"]}#h2\n')
+         f'{LIVE["dw2"]}#h2\n')
 A.append('#EXTINF:-1 tvg-id="h.extgrp",Group from EXTGRP\n#EXTGRP:6 Links and headers\n' + LIVE["dw"] + "#h3\n")
 A.append(entry("News, Weather & Sport (comma in name)", LIVE["dw"] + "#h4", **{"tvg-id": "h.comma", "group-title": G6}))
 A.append(entry("A very long channel name that goes on and on to check how the guide column cuts it off", LIVE["dw"] + "#h5",
                **{"tvg-id": "h.long", "group-title": G6}))
 A.append(entry("Broken logo link", LIVE["redbull"] + "#h6", **{"tvg-id": "h.badlogo", "tvg-logo": BASE + "logos/missing.png", "group-title": G6}))
 A.append(entry("No logo", LIVE["redbull"] + "#h7", **{"tvg-id": "h.nologo", "group-title": G6}))
-A.append(entry("MP4 file as a channel", VOD["ed_mp4"], **{"tvg-id": "h.mp4", "tvg-logo": logo("h-mp4"), "group-title": G6}))
+A.append(entry("MP4 trailer as a channel", VOD["trailer_mp4"], **{"tvg-id": "h.mp4", "tvg-logo": logo("h-mp4"), "group-title": G6}))
 A.append(entry("HLS film as a channel", VOD["tos_hls"], **{"tvg-id": "h.vod", "tvg-logo": logo("h-vod"), "group-title": G6}))
 A.append(entry("DASH film as a channel", VOD["bbb_dash"], **{"tvg-id": "h.dashvod", "tvg-logo": logo("h-dashvod"), "group-title": G6}))
 A.append(entry("TS segments HLS (Apple)", VOD["bipbop_ts"], **{"tvg-id": "h.ts", "tvg-logo": logo("h-ts"), "group-title": G6}))
@@ -448,7 +445,7 @@ B.append(entry("Header Catch-up", LIVE["usp"] + "?nuvio=b1", **{"tvg-id": "b.hea
 B.append(entry("Own Five Days", LIVE["usp"] + "?nuvio=b2", **{"tvg-id": "b.days5", "catchup-days": "5", "group-title": "B Second source"}))
 B.append(entry("Catch-up Disabled", LIVE["usp"] + "?nuvio=b3", **{"tvg-id": "b.disabled", "catchup": "disabled", "group-title": "B Second source"}))
 B.append(entry("No Shift Here", LIVE["usp"] + "?nuvio=b4", **{"tvg-id": "b.noshift", "tvg-shift": "0", "catchup": "disabled", "group-title": "B Second source"}))
-B.append(entry("Same link as Akamai Test Live", LIVE["akamai"], **{"tvg-id": "shared.nolist", "tvg-shift": "0", "catchup": "disabled", "group-title": "B Second source"}))
+B.append(entry("Same link as TRT World", LIVE["trt"], **{"tvg-id": "shared.nolist", "tvg-shift": "0", "catchup": "disabled", "group-title": "B Second source"}))
 
 # ---- Playlist C: things that should fail cleanly (BOM, CRLF line ends)
 C = ['﻿#EXTM3U url-tvg="' + BASE + 'missing/no-such-guide.xml,' + BASE + 'guide-extra.xml"\n']

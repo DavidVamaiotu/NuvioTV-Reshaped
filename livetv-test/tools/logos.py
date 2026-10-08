@@ -5,8 +5,8 @@ from PIL import Image, ImageDraw, ImageFont
 out = sys.argv[1]; os.makedirs(out, exist_ok=True)
 FONT = "/usr/share/fonts/opentype/inter/Inter-SemiBold.otf"
 logos = {
-  "live-akamai": "AKAMAI", "live-usp": "USP", "live-usp_scte": "USP ADS", "live-usp_http": "HTTP", "live-dash": "DASH",
-  "live-dw": "DW", "live-aje": "AJE", "live-redbull": "RED BULL",
+  "live-trt": "TRT", "live-usp": "USP", "live-usp_scte": "USP ADS", "live-usp_http": "HTTP", "live-dash": "DASH",
+  "live-dw": "DW", "live-dw2": "DW 2", "live-redbull": "RED BULL",
   "cu-default": "CU 7D", "cu-mp4": "CU MP4", "cu-append": "APPEND", "cu-shift": "SHIFT", "cu-flussonic": "FLUSS",
   "cu-tvgrec": "TVG-REC", "cu-14days": "CU 14D", "cu-formatted": "DATES", "cu-dvr": "DVR", "cu-relative": "RELATIVE",
   "cu-dash": "CU DASH", "m-byname": "NAME", "guide-logo": "GUIDE", "h-mp4": "MP4", "h-vod": "HLS VOD",

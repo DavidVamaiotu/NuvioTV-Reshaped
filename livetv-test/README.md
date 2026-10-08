@@ -1,9 +1,10 @@
 # Live TV test playlists (Nuvio Reshaped TV)
 
-Free, legal test streams only: public test streams (Akamai, Unified Streaming, DASH-IF, Apple, Mux),
-broadcasters' own free streams (DW, Al Jazeera English, Red Bull TV) and the Blender open films.
-Catch-up replays play a sample film: these servers ignore the time in the link, so a replay
+Free, legal test streams only: public test streams (Unified Streaming, DASH-IF, Apple, Mux, Akamai DASH),
+broadcasters' own free streams (DW, TRT World, Red Bull TV) and the Blender open films.
+Most catch-up replays play a sample film: those servers ignore the time in the link, so a replay
 tests the app's catch-up flow (links, seeking, programme list, day labels), not the content.
+One channel ("Real archive") is a true archive: Unified Streaming keeps the last ~2 hours.
 Guide times are written for Romania time (Europe/Bucharest); titles say what you should see.
 
 Add as M3U sources (Live TV > Sources > Add; the phone setup page saves typing):
@@ -25,12 +26,12 @@ Every push runs `.github/workflows/livetv-test-check.yml`, which opens every lin
 
 **2 Catch-up** – past programmes show the catch-up mark; OK on a past one replays it.
 - Default 7 days (HLS film): reaches back 7 days (older days come from the saved archive); seek, Start over, programme list with day labels, midnight entries "Midnight · …".
-- Default 3 days (MP4 film): replay of a progressive MP4 seeks.
+- Default 3 days (MOV film): replay of a progressive file (Tears of Steel .mov) seeks.
 - Append / Shift / tvg-rec: link goes to a live server that ignores the time, so the replay is the live stream; it must not crash or loop; it starts from the beginning of what the server gives.
 - Flussonic: the replay link does not exist (404); expect a clean error, not a hang.
 - 14 days: only 7 days are offered.
 - Date template (TS film): replay of an HLS with TS segments.
-- Real archive, last minutes: Unified Streaming keeps a short archive; a 5-minute block from the last few minutes should replay what aired then; older ones fail or play live.
+- Real archive, last minutes: 15-minute blocks; one that started within the last ~2 hours replays for real (the picture's own clock shows that time, UTC); Start over on the block on now opens a growing replay; older blocks fail with a 404.
 - Relative template: the replay link is the live link plus `?archive=…`.
 - DASH film: replay of a DASH film.
 
@@ -48,12 +49,12 @@ off by that much and must show right.
 a channel whose guide starts 2 h after generation.
 
 **6 Links and headers** – Kodi `|User-Agent=…`, `#EXTVLCOPT`, `#EXTHTTP` all play; `#EXTGRP` group;
-comma and very long names; broken logo and no logo fall back cleanly; MP4, HLS, DASH films and an
-Apple TS stream as channels.
+comma and very long names; broken logo and no logo fall back cleanly; an MP4 trailer, HLS and DASH
+films and an Apple TS stream as channels.
 
 **Second source** – header catch-up (2 days) applies to "Header Catch-up"; "Own Five Days" offers 5;
 "Catch-up Disabled" offers none; header tvg-shift=1 corrects the guide ("Should be …"), "No Shift Here"
-overrides it; "Same link as Akamai Test Live" has no guide of its own and borrows Akamai's.
+overrides it; "Same link as TRT World" has no guide of its own and borrows TRT World's.
 
 **Broken things** – dead link, unknown host and web page fail cleanly; "##### SPORTS #####" and the
 duplicate are not listed; relative link resolves (then 404s); an entry without #EXTINF shows as
