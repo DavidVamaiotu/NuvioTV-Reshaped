@@ -1,1 +1,2 @@
-- Live TV catch-up: holding ◀ in the rewind bar now stops at the start of a programme instead of racing through the programme before it to its start. Press ◀ again to go on into the programme before (10 seconds at a time, faster when held).
+- Now built on Nuvio TV 1.1.0-beta.5, the same base as Beta 1.1.0-beta.5 (build 1), with all Tester Live TV changes on top.
+- Everything from Tester build 6 is included: a held ◀ in the rewind bar stops at the start of a programme.
