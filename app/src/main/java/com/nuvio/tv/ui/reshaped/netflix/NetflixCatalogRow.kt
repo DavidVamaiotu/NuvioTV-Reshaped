@@ -37,6 +37,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
@@ -72,7 +73,7 @@ import com.nuvio.tv.ui.util.localizedContentType
  * CatalogRowSection, so the row behaves exactly like Nuvio's; only the look differs:
  * the focused tile stays pinned at the left edge and its details appear underneath the row.
  */
-@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 internal fun NetflixCatalogRow(
     catalogRow: CatalogRow,
