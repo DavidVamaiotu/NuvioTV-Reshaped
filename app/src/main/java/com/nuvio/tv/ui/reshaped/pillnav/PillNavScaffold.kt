@@ -12,6 +12,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -82,9 +83,14 @@ internal fun PillNavScaffold(
 ) {
     val showBar = currentRoute in rootRoutes
     // Settings and Live TV keep the pill in their header band; every other root screen scrolls under it, so it tucks away.
+    // In the Netflix look the pill stays put on Home (whose page starts below its band) and on Search
+    // (Nuvio's own screen, moved down below the band here).
+    val netflixUi = com.nuvio.tv.ui.reshaped.netflix.rememberNetflixUiEnabled()
+    val netflixSearch = currentRoute == Screen.Search.route && netflixUi
+    val netflixHome = currentRoute == Screen.Home.route && netflixUi
     val autoHide = showBar && currentRoute != Screen.Settings.route &&
-        currentRoute != com.nuvio.tv.reshaped.livetv.LIVE_TV_ROUTE
-    val hiddenUnlessFocused = currentRoute == Screen.Search.route
+        currentRoute != com.nuvio.tv.reshaped.livetv.LIVE_TV_ROUTE && !netflixSearch && !netflixHome
+    val hiddenUnlessFocused = currentRoute == Screen.Search.route && !netflixSearch
     val state = remember { PillNavBarState() }
     // Liquid glass on capable TVs with Nuvio's blur setting on. The screen is recorded only while the pill is on
     // it, never during playback; the pill slides out over the last recording, which is then dropped.
@@ -206,6 +212,7 @@ internal fun PillNavScaffold(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .then(if (netflixSearch) Modifier.padding(top = PillNavTokens.barTopGap + PillNavTokens.barHeight) else Modifier)
                 .pillGlassSource(glassBackdrop?.takeIf { showBar })
                 .onPreviewKeyEvent { keyEvent ->
                     if (keyEvent.key == Key.Back) {
@@ -307,6 +314,8 @@ internal fun PillNavScaffold(
                 },
                 onExitUp = { focusManager.moveFocus(FocusDirection.Up) },
                 backdrop = glassBackdrop,
+                // The Netflix look uses clear glass: no grey or black body, just the bend, rim and lens.
+                clear = netflixUi,
             )
         }
     }

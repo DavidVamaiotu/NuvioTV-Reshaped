@@ -160,6 +160,7 @@ internal fun PillNavigationBar(
     onExitUp: () -> Unit,
     modifier: Modifier = Modifier,
     backdrop: PillGlassBackdrop? = null,
+    clear: Boolean = false,
 ) {
     val barFocused = state.hasFocus
     val hideTarget = if (hidden && !barFocused) 1f else 0f
@@ -194,6 +195,7 @@ internal fun PillNavigationBar(
     // Read only inside drawBehind below, so the focus colour fade redraws without recomposing every frame.
     val glassColor = animateColorAsState(
         targetValue = when {
+            clear -> Color.White.copy(alpha = if (barFocused) 0.10f else 0.05f)
             barFocused -> GlassFocusedColor.copy(alpha = if (frosted) 0.88f else 0.95f)
             else -> GlassBaseColor.copy(alpha = if (frosted) 0.80f else 0.90f)
         },
@@ -235,7 +237,7 @@ internal fun PillNavigationBar(
                     } else {
                         Modifier
                             .drawWithCache {
-                                val glass = StaticGlassPaint.create(this, accent, barFocused)
+                                val glass = StaticGlassPaint.create(this, accent, barFocused, clear)
                                 onDrawBehind {
                                     drawRoundRect(color = glassColor.value, cornerRadius = CornerRadius(size.minDimension / 2f))
                                     if (frosted) drawRoundRect(brush = FrostSheen, cornerRadius = CornerRadius(size.minDimension / 2f))
@@ -256,6 +258,7 @@ internal fun PillNavigationBar(
                     },
                     focus = { focusFraction.value },
                     tint = accent,
+                    veil = if (clear) 0f else 0.46f,
                     modifier = Modifier.matchParentSize(),
                 )
             }
@@ -317,6 +320,7 @@ internal fun PillNavigationBar(
                         },
                         activeProfileColorHex = activeProfileColorHex,
                         activeProfileAvatarImageUrl = activeProfileAvatarImageUrl,
+                        crispLabels = clear,
                     )
                 }
             }
@@ -335,6 +339,7 @@ private fun PillItem(
     onBounds: (Float, Float) -> Unit,
     activeProfileColorHex: String,
     activeProfileAvatarImageUrl: String?,
+    crispLabels: Boolean = false,
 ) {
     var focused by remember { mutableStateOf(false) }
     val scale = animateFloatAsState(
@@ -344,6 +349,9 @@ private fun PillItem(
     )
     val contentAlpha = if (focused || selected) 1f else PillNavTokens.unselectedAlpha
     val isTab = entry.kind == PillNavEntryKind.Tab
+    // Crisp labels: text drawn straight to the screen with its alpha in the colour, never through a scaled
+    // or faded layer, which TVs can rasterize at the wrong size and stretch. The lens shows focus instead.
+    val flatText = crispLabels && isTab
     Box(
         modifier = Modifier
             .fillMaxHeight()
@@ -356,18 +364,20 @@ private fun PillItem(
                 if (it.isFocused) onFocused()
             }
             .clickable(interactionSource = null, indication = null, onClick = onClick)
-            .graphicsLayer {
-                scaleX = scale.value
-                scaleY = scale.value
-                alpha = contentAlpha
-            }
+            .then(
+                if (flatText) Modifier else Modifier.graphicsLayer {
+                    scaleX = scale.value
+                    scaleY = scale.value
+                    alpha = contentAlpha
+                }
+            )
             .then(if (isTab) Modifier.padding(horizontal = PillNavTokens.itemHorizontalPadding) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
         when (entry.kind) {
             PillNavEntryKind.Tab -> Text(
                 text = entry.label,
-                color = Color.White,
+                color = if (flatText) Color.White.copy(alpha = contentAlpha) else Color.White,
                 fontSize = PillNavTokens.labelSize,
                 fontWeight = if (selected || focused) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
@@ -524,9 +534,9 @@ private val FrostSheen = Brush.verticalGradient(
 )
 
 /** Static glass edge: a rim lit from the top left with a dim echo bottom right, over a darker inner lens band. */
-private class StaticGlassPaint(val rim: Brush, val rimWidth: Float, val band: Brush, val bandWidth: Float) {
+private class StaticGlassPaint(val rim: Brush, val rimWidth: Float, val band: Brush?, val bandWidth: Float) {
     companion object {
-        fun create(scope: androidx.compose.ui.draw.CacheDrawScope, accent: Color, focused: Boolean): StaticGlassPaint {
+        fun create(scope: androidx.compose.ui.draw.CacheDrawScope, accent: Color, focused: Boolean, clear: Boolean = false): StaticGlassPaint {
             val light = if (focused) lerp(Color.White, accent, 0.35f) else Color.White
             val h = scope.size.height
             return StaticGlassPaint(
@@ -538,7 +548,8 @@ private class StaticGlassPaint(val rim: Brush, val rimWidth: Float, val band: Br
                     end = Offset(h * 3f, h),
                 ),
                 rimWidth = with(scope) { (if (focused) 1.5.dp else 1.dp).toPx() },
-                band = Brush.verticalGradient(
+                // Clear glass drops the dark inner band so the pill carries no grey or black tint.
+                band = if (clear) null else Brush.verticalGradient(
                     0f to Color.Transparent,
                     0.6f to Color.Black.copy(alpha = 0.06f),
                     1f to Color.Black.copy(alpha = 0.20f),
@@ -555,13 +566,15 @@ private fun DrawScope.drawStaticGlassEdge(paint: StaticGlassPaint) {
     val band = paint.bandWidth
     val rim = paint.rimWidth
     val inset = rim + band / 2f
-    drawRoundRect(
-        brush = paint.band,
-        topLeft = Offset(inset, inset),
-        size = Size(size.width - inset * 2f, size.height - inset * 2f),
-        cornerRadius = CornerRadius((size.height - inset * 2f) / 2f),
-        style = Stroke(band),
-    )
+    paint.band?.let { bandBrush ->
+        drawRoundRect(
+            brush = bandBrush,
+            topLeft = Offset(inset, inset),
+            size = Size(size.width - inset * 2f, size.height - inset * 2f),
+            cornerRadius = CornerRadius((size.height - inset * 2f) / 2f),
+            style = Stroke(band),
+        )
+    }
     drawRoundRect(
         brush = paint.rim,
         topLeft = Offset(rim / 2f, rim / 2f),
@@ -584,10 +597,11 @@ private fun LiquidPillGlass(
     lens: () -> Rect?,
     focus: () -> Float,
     tint: Color,
+    veil: Float,
     modifier: Modifier,
 ) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-    LiquidPillGlassApi33(backdrop, coordinates, transformTick, lens, focus, tint, modifier)
+    LiquidPillGlassApi33(backdrop, coordinates, transformTick, lens, focus, tint, veil, modifier)
 }
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -599,6 +613,7 @@ private fun LiquidPillGlassApi33(
     lens: () -> Rect?,
     focus: () -> Float,
     tint: Color,
+    veil: Float,
     modifier: Modifier,
 ) {
     val shader = backdrop.shader as RuntimeShader
@@ -617,6 +632,7 @@ private fun LiquidPillGlassApi33(
                     shader.setFloatUniform("lens", 0f, 0f, 0f, 0f)
                 }
                 shader.setFloatUniform("focus", focus())
+                shader.setFloatUniform("veil", veil)
                 renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "backdrop").asComposeRenderEffect()
             }
             .drawBehind {

@@ -1,2 +1,3 @@
-- Now built on Nuvio TV 1.1.0-beta.5, the same base as Beta 1.1.0-beta.5 (build 1), with all Tester Live TV changes on top.
-- Everything from Tester build 6 is included: a held ◀ in the rewind bar stops at the start of a programme.
+- New: Netflix-style Home, off by default (Settings > Nuvio Reshaped > Netflix-style Home). A rounded billboard on top with the featured title's colour behind it, and rows whose focused title widens into its wide artwork with its details underneath. Moving along a row slides the next card open as focus reaches it; holding ◀▶ glides over posters. Only the look changes: same rows, add-ons, actions and settings.
+- With it on, the pill menu is always on, stays at the top on Home and Search, and is clear glass with sharper labels.
+- Everything from Tester build 1 on Nuvio TV 1.1.0-beta.5 is included.

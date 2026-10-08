@@ -1,4 +1,4 @@
-package com.nuvio.tv.ui.reshaped.pillnav
+package com.nuvio.tv.ui.reshaped.netflix
 
 import android.content.Context
 import androidx.compose.runtime.Composable
@@ -9,10 +9,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Whether the top pill menu replaces the sidebar. Off by default, like the phone app. */
-internal object PillNavPreferences {
-    private const val PREFS = "nuvio_pill_nav_settings"
-    private const val KEY_ENABLED = "pill_nav_enabled"
+/** Whether Home uses the Netflix-style look. Purely visual; off by default. */
+internal object NetflixUiPreferences {
+    private const val PREFS = "nuvio_netflix_ui_settings"
+    private const val KEY_ENABLED = "netflix_ui_enabled"
 
     private val _enabled = MutableStateFlow(false)
     val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
@@ -39,11 +39,10 @@ internal object PillNavPreferences {
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 }
 
-/** The pill menu setting as Compose state, loaded on first use. */
+/** The Netflix-style setting as Compose state, loaded on first use. */
 @Composable
-internal fun rememberPillNavEnabled(): Boolean {
-    PillNavPreferences.ensureLoaded(LocalContext.current)
-    val enabled by PillNavPreferences.enabled.collectAsState()
-    // The Netflix-style Home is designed around the top menu, so it always brings it along.
-    return enabled || com.nuvio.tv.ui.reshaped.netflix.rememberNetflixUiEnabled()
+internal fun rememberNetflixUiEnabled(): Boolean {
+    NetflixUiPreferences.ensureLoaded(LocalContext.current)
+    val enabled by NetflixUiPreferences.enabled.collectAsState()
+    return enabled
 }

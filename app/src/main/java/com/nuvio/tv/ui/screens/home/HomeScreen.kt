@@ -364,7 +364,23 @@ fun HomeScreen(
                                 )
                         }
                     ) {
-                        when (uiState.homeLayout) {
+                        // Nuvio RS hook: Netflix-style Home (purely visual, off by default)
+                        if (com.nuvio.tv.ui.reshaped.netflix.rememberNetflixUiEnabled()) {
+                            com.nuvio.tv.ui.reshaped.netflix.NetflixHomeRoute(
+                                viewModel = viewModel,
+                                uiState = uiState,
+                                posterCardStyle = posterCardStyle,
+                                onNavigateToDetail = onNavigateToDetailStable,
+                                onContinueWatchingClick = onContinueWatchingClickStable,
+                                onContinueWatchingStartFromBeginning = onContinueWatchingStartFromBeginningStable,
+                                onContinueWatchingPlayManually = onContinueWatchingPlayManuallyStable,
+                                showContinueWatchingManualPlayOption = effectiveAutoplayEnabled,
+                                onNavigateToCatalogSeeAll = onNavigateToCatalogSeeAllStable,
+                                onNavigateToFolderDetail = onNavigateToFolderDetailStable,
+                                isCatalogItemWatched = isCatalogItemWatched,
+                                onCatalogItemLongPress = onCatalogItemLongPress
+                            )
+                        } else when (uiState.homeLayout) {
                             HomeLayout.CLASSIC -> ClassicHomeRoute(
                                 viewModel = viewModel,
                                 uiState = uiState,
