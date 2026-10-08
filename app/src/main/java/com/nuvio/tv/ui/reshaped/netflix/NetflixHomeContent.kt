@@ -101,6 +101,9 @@ internal fun NetflixHomeRoute(
 ) {
     val focusState by viewModel.focusState.collectAsStateWithLifecycle()
     val scrollToTopTrigger by viewModel.scrollToTopTrigger.collectAsStateWithLifecycle()
+    // Nuvio's Modern layout leaves its focused backdrop here for the detail screen; this look sets
+    // none, so a stale one must not carry over when the look is switched on over Modern.
+    LaunchedEffect(Unit) { com.nuvio.tv.ui.screens.home.HeroBackdropState.update(null) }
     NetflixHomeContent(
         uiState = uiState,
         posterCardStyle = posterCardStyle,
@@ -725,6 +728,7 @@ private suspend fun followRowToTop(
     var velocity by FloatHolderDelegate(velocityHolder)
     var lastFrame = 0L
     var elapsedNanos = 0L
+    var jumps = 0
     while (true) {
         val frame = withFrameNanos { it }
         val dt = if (lastFrame == 0L) 1f / 60f else ((frame - lastFrame) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
@@ -734,14 +738,33 @@ private suspend fun followRowToTop(
             velocity = 0f
             continue
         }
-        val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
-        if (info == null) {
-            // Far away (restored focus): jump there, then settle.
-            listState.scrollToItem(index)
-            velocity = 0f
-            continue
+        val layoutInfo = listState.layoutInfo
+        if (index >= layoutInfo.totalItemsCount) return // the row went away
+        val visible = layoutInfo.visibleItemsInfo
+        val info = visible.firstOrNull { it.index == index }
+        val error = if (info != null) {
+            info.offset.toFloat()
+        } else {
+            // Just off screen (the row above sits beyond the band): head for it with an estimate,
+            // so it glides in like any other row; real offsets take over once it shows.
+            val first = visible.firstOrNull()
+            val last = visible.lastOrNull()
+            if (first == null || last == null) return
+            val spacing = layoutInfo.mainAxisItemSpacing
+            val averageStep = visible.sumOf { it.size + spacing }.toFloat() / visible.size
+            val estimate = when {
+                index < first.index -> first.offset - (first.index - index) * averageStep
+                else -> last.offset + (index - last.index) * averageStep
+            }
+            if (kotlin.math.abs(index - (if (index < first.index) first.index else last.index)) > FOLLOW_MAX_GLIDE_ROWS) {
+                // Far away (restored focus): jump there, then settle.
+                if (++jumps > 2) return
+                listState.scrollToItem(index)
+                velocity = 0f
+                continue
+            }
+            estimate
         }
-        val error = info.offset.toFloat()
         if (elapsedNanos > FOLLOW_MIN_NANOS && kotlin.math.abs(error) < 0.5f && kotlin.math.abs(velocity) < 8f) {
             if (error != 0f) listState.scrollBy(error)
             return
@@ -753,6 +776,9 @@ private suspend fun followRowToTop(
         if (kotlin.math.abs(delta) > 0.5f && kotlin.math.abs(consumed) < 0.01f && elapsedNanos > FOLLOW_MIN_NANOS) return
     }
 }
+
+/** Beyond this many rows off screen, the follower jumps instead of gliding. */
+private const val FOLLOW_MAX_GLIDE_ROWS = 3
 
 /** The rows' details open and fold over about this long; keep following until then. */
 private const val FOLLOW_MIN_NANOS = 450_000_000L
