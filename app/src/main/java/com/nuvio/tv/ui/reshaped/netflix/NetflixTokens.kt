@@ -52,13 +52,17 @@ internal object NetflixTokens {
     val textSecondary = Color(0xFFBDBDBD)
     val rating = Color(0xFF46D369)
 
-    // Motion. Moves are critically damped springs: they keep their speed when retargeted
-    // (holding the D-pad, focus leaving mid-expand) instead of restarting like a tween would.
+    // Motion. One spring per row drives a fractional focus position; tile widths and the row's
+    // scroll are both read from it, so moving between titles is a single continuous morph.
+    // Critically damped: no bounce, and it keeps its speed when retargeted (held D-pad).
     val emphasized = CubicBezierEasing(0.2f, 0f, 0f, 1f)
-    const val SCROLL_STIFFNESS = 900f
-    const val EXPAND_STIFFNESS = 1100f
+    const val MORPH_STIFFNESS = 380f
+    const val OPEN_STIFFNESS = 420f
+    const val SCROLL_STIFFNESS = 700f
+    /** Beyond this many titles a focus jump (Back to start, restore) snaps instead of sliding. */
+    const val MORPH_SNAP_DISTANCE = 4
+    const val TRAILER_DWELL_MS = 1200L
     const val META_FADE_MS = 140
-    const val EXPAND_DWELL_MS = 220L
     const val BILLBOARD_FADE_MS = 500
     const val ACCENT_FADE_MS = 500
 }

@@ -1,9 +1,6 @@
 package com.nuvio.tv.ui.reshaped.netflix
 
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -22,7 +19,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -40,6 +36,12 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import kotlin.math.roundToInt
+import androidx.compose.ui.layout.layout
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.animation.Crossfade
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -224,8 +226,32 @@ internal fun NetflixCatalogRow(
         else if (showCatalogTypeSuffix && typeLabel.isNotEmpty()) "$formattedName - $typeLabel" else formattedName
     }
 
-    // The tile that is currently wide; its details sit under the row.
-    var expandedItem by remember { mutableStateOf<MetaPreview?>(null) }
+    // The focused title; its details sit under the row.
+    var focusedItem by remember { mutableStateOf<MetaPreview?>(null) }
+    val motionScope = rememberCoroutineScope()
+    val motion = remember(catalogRowKey) { NetflixRowMotion(listState.firstVisibleItemIndex) }
+    val latestItems by rememberUpdatedState(catalogRow.items)
+    val expansionAt: (Int) -> Float = remember(motion) {
+        { index ->
+            val item = latestItems.getOrNull(index)
+            if (item == null || item.id.startsWith("__placeholder_")) 0f else motion.expansionOf(index)
+        }
+    }
+    // The row's scroll follows the motion: the title at the motion's position sits at the left
+    // edge, sliding by exactly its own (shrinking) width as focus moves on. Nothing recomposes.
+    val motionDensity = LocalDensity.current
+    LaunchedEffect(motion, listState, motionDensity) {
+        val posterPx = with(motionDensity) { NetflixTokens.tileWidth.toPx() }
+        val widePx = with(motionDensity) { NetflixTokens.tileExpandedWidth.toPx() }
+        val gapPx = with(motionDensity) { NetflixTokens.tileGap.toPx() }
+        snapshotFlow { motion.position.value to motion.openness.value }.collect { (p, _) ->
+            if (p < 0f) return@collect
+            val index = kotlin.math.floor(p).toInt()
+            val fraction = p - index
+            val width = posterPx + (widePx - posterPx) * expansionAt(index)
+            listState.requestScrollToItem(index, (fraction * (width + gapPx)).roundToInt())
+        }
+    }
 
     Column(
         modifier = modifier.fillMaxWidth().then(
@@ -246,15 +272,12 @@ internal fun NetflixCatalogRow(
 
         val density = LocalDensity.current
         val defaultBringIntoViewSpec = LocalBringIntoViewSpec.current
-        val pinnedLeftSpec = remember(density, defaultBringIntoViewSpec) {
-            val startPx = with(density) { NetflixTokens.pageStart.toPx() }
+        // The row scrolls only through the motion above, never by focus' bring-into-view.
+        val pinnedLeftSpec = remember(defaultBringIntoViewSpec) {
             @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
             object : BringIntoViewSpec {
-                override val scrollAnimationSpec: AnimationSpec<Float> =
-                    spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = NetflixTokens.SCROLL_STIFFNESS)
-                // Netflix keeps the focused title at the left edge and slides the row under it.
-                override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float =
-                    offset - startPx
+                override val scrollAnimationSpec: AnimationSpec<Float> = defaultBringIntoViewSpec.scrollAnimationSpec
+                override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = 0f
             }
         }
         val usesPlaceholderShimmer = catalogRow.isLoading &&
@@ -271,8 +294,10 @@ internal fun NetflixCatalogRow(
                     .height(NetflixTokens.tileHeight)
                     .onFocusChanged {
                         rowHasFocusRef.value = it.hasFocus
-                        rowHasFocus = it.hasFocus
-                        if (!it.hasFocus) expandedItem = null
+                        if (rowHasFocus != it.hasFocus) {
+                            rowHasFocus = it.hasFocus
+                            motion.setOpen(it.hasFocus, motionScope)
+                        }
                     }
                     .focusRequester(rowFocusRequester)
                     .focusRestorer {
@@ -306,19 +331,18 @@ internal fun NetflixCatalogRow(
                         item = item,
                         isWatched = latestIsItemWatched(item),
                         focusRequester = requester,
+                        expansion = { expansionAt(index) },
                         placeholderShimmerOffsetState = placeholderShimmerOffsetState,
                         trailerEnabled = trailerEnabled,
                         trailerMuted = trailerMuted,
                         trailerUrl = trailerPreviewUrls[item.id],
                         trailerAudioUrl = trailerPreviewAudioUrls[item.id],
                         onFocused = {
+                            focusedItem = item.takeUnless { isPlaceholder }
+                            motion.focus(index, motionScope)
                             latestOnItemFocus(item)
                             lastFocusedItemIndex.intValue = index
                             latestOnItemFocused(index)
-                        },
-                        onExpandedChanged = { isExpanded ->
-                            if (isExpanded) expandedItem = item
-                            else if (expandedItem?.id == item.id) expandedItem = null
                         },
                         onClick = {
                             if (!isPlaceholder) latestOnItemClick(item.id, item.apiType, catalogRow.addonBaseUrl)
@@ -333,13 +357,20 @@ internal fun NetflixCatalogRow(
                 }
                 if (showSeeAll) {
                     item(key = "${catalogRow.type}_${catalogRow.catalogId}_see_all") {
-                        NetflixSeeAllTile(label = seeAllLabel ?: stringResource(R.string.action_see_all), onClick = onSeeAll)
+                        NetflixSeeAllTile(
+                            label = seeAllLabel ?: stringResource(R.string.action_see_all),
+                            onClick = onSeeAll,
+                            onFocused = {
+                                focusedItem = null
+                                motion.focus(catalogRow.items.size, motionScope)
+                            }
+                        )
                     }
                 }
             }
         }
 
-        NetflixRowDetails(rowHasFocus = rowHasFocus, item = expandedItem, showImdbRatings = showImdbRatings)
+        NetflixRowDetails(motion = motion, item = focusedItem, showImdbRatings = showImdbRatings)
     }
 }
 
@@ -373,57 +404,53 @@ internal fun NetflixRowHeader(title: String, subtitle: String?) {
 }
 
 /**
- * Metadata and synopsis of the wide tile, directly under it (the tile is pinned left, so this
- * never has to move sideways). The space opens together with the tile's widening, on the same
- * spring, and only while a tile is actually wide: a row with no details has no gap under it.
+ * Metadata and synopsis of the focused title, directly under the wide slot. The space opens
+ * with the row's openness (same spring as the tiles), so there is never an empty gap, and the
+ * text crossfades from title to title as focus slides along the row.
  */
 @Composable
-private fun NetflixRowDetails(rowHasFocus: Boolean, item: MetaPreview?, showImdbRatings: Boolean) {
-    val open = item != null && rowHasFocus
-    val height by animateDpAsState(
-        targetValue = if (open) NetflixTokens.metaHeight else 0.dp,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = NetflixTokens.EXPAND_STIFFNESS),
-        label = "netflixRowDetailsHeight"
-    )
-    // Keep the last item while closing so the text doesn't vanish mid-animation.
-    var shown by remember { mutableStateOf<MetaPreview?>(null) }
-    if (item != null) shown = item
-    val alpha by animateFloatAsState(
-        targetValue = if (open) 1f else 0f,
-        animationSpec = tween(NetflixTokens.META_FADE_MS),
-        label = "netflixRowDetailsAlpha"
-    )
-    if (height <= 0.dp) return
-    val current = shown ?: return
-    val context = LocalContext.current
-    val tokens = remember(current.id, current.genres, current.releaseInfo, current.imdbRating, current.runtime, showImdbRatings) {
-        current.netflixMetaLine(context, showImdbRatings)
-    }
+private fun NetflixRowDetails(motion: NetflixRowMotion, item: MetaPreview?, showImdbRatings: Boolean) {
+    val openness = { motion.openness.value }
+    val isOpen by remember(motion) { derivedStateOf { motion.openness.value > 0.001f } }
+    if (!isOpen) return
     Box(
         modifier = Modifier
-            .width(NetflixTokens.tileExpandedWidth + NetflixTokens.pageStart)
-            .height(height)
+            .layout { measurable, constraints ->
+                val full = NetflixTokens.metaHeight.roundToPx()
+                val h = (full * openness()).roundToInt()
+                val placeable = measurable.measure(constraints.copy(minHeight = full, maxHeight = full))
+                layout(placeable.width, h) { placeable.place(0, 0) }
+            }
             .clipToBounds()
-            .graphicsLayer { this.alpha = alpha }
+            .graphicsLayer { alpha = openness() }
     ) {
-        // Laid out at full size and revealed by the growing box, so the text never reflows.
-        Column(
-            modifier = Modifier
-                .wrapContentHeight(align = Alignment.Top, unbounded = true)
-                .padding(start = NetflixTokens.pageStart + 4.dp, top = 12.dp)
-                .width(NetflixTokens.tileExpandedWidth)
-        ) {
-            NetflixMetaRow(tokens = tokens)
-            val synopsis = current.description
-            if (!synopsis.isNullOrBlank()) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = synopsis,
-                    color = NetflixTokens.textSecondary,
-                    fontSize = NetflixTokens.synopsisSize,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
+        Crossfade(
+            targetState = item,
+            animationSpec = tween(NetflixTokens.META_FADE_MS),
+            label = "netflixRowDetails"
+        ) { current ->
+            if (current == null) return@Crossfade
+            val context = LocalContext.current
+            val tokens = remember(current.id, current.genres, current.releaseInfo, current.imdbRating, current.runtime, showImdbRatings) {
+                current.netflixMetaLine(context, showImdbRatings)
+            }
+            Column(
+                modifier = Modifier
+                    .padding(start = NetflixTokens.pageStart + 4.dp, top = 12.dp)
+                    .width(NetflixTokens.tileExpandedWidth)
+            ) {
+                NetflixMetaRow(tokens = tokens)
+                val synopsis = current.description
+                if (!synopsis.isNullOrBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = synopsis,
+                        color = NetflixTokens.textSecondary,
+                        fontSize = NetflixTokens.synopsisSize,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }
@@ -447,11 +474,14 @@ internal fun NetflixMetaRow(tokens: List<String>) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun NetflixSeeAllTile(label: String, onClick: () -> Unit) {
+private fun NetflixSeeAllTile(label: String, onClick: () -> Unit, onFocused: () -> Unit) {
     val shape = remember { RoundedCornerShape(NetflixTokens.tileCorner) }
     Card(
         onClick = onClick,
-        modifier = Modifier.width(NetflixTokens.tileWidth).height(NetflixTokens.tileHeight),
+        modifier = Modifier
+            .width(NetflixTokens.tileWidth)
+            .height(NetflixTokens.tileHeight)
+            .onFocusChanged { if (it.isFocused) onFocused() },
         shape = CardDefaults.shape(shape = shape),
         colors = CardDefaults.colors(
             containerColor = NetflixTokens.tilePlaceholder,

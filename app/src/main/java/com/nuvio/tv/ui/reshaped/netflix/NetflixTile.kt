@@ -1,11 +1,6 @@
 package com.nuvio.tv.ui.reshaped.netflix
 
 import android.view.KeyEvent as AndroidKeyEvent
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +20,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -59,8 +60,11 @@ import com.nuvio.tv.ui.util.rememberLongPressKeyTracker
 import kotlinx.coroutines.delay
 
 /**
- * A Netflix-style title tile: a poster that, after a short dwell with focus, widens into the
- * title's 16:9 artwork. Only the focused tile ever animates; every other tile is a static image.
+ * A Netflix-style title tile. Its width is not its own state: the row hands it [expansion]
+ * (0 = poster, 1 = wide), derived from the row's one moving focus position. While focus slides
+ * from one title to the next, the old tile narrows and the new one widens in the same motion,
+ * so the next card is already opening before focus arrives. Width is applied in the layout
+ * phase and the artwork fade in the draw phase: the motion never recomposes the tile.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -68,8 +72,8 @@ internal fun NetflixTile(
     item: MetaPreview,
     isWatched: Boolean,
     focusRequester: FocusRequester,
+    expansion: () -> Float,
     onFocused: () -> Unit,
-    onExpandedChanged: (Boolean) -> Unit,
     onClick: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
@@ -82,40 +86,23 @@ internal fun NetflixTile(
     val isPlaceholder = item.poster == PLACEHOLDER_IMAGE_URL
     val shape = remember { RoundedCornerShape(NetflixTokens.tileCorner) }
     var isFocused by remember { mutableStateOf(false) }
-    var expanded by remember { mutableStateOf(false) }
     var longPressTriggered by remember { mutableStateOf(false) }
     val longPressKeyTracker = rememberLongPressKeyTracker()
     val lifecycleOwner = LocalLifecycleOwner.current
-    val latestOnExpandedChanged by rememberUpdatedState(onExpandedChanged)
 
-    // Dwell before widening, so holding the D-pad glides along posters instead of
-    // expanding every one it passes.
-    LaunchedEffect(isFocused, item.id) {
-        if (!isFocused || isPlaceholder) {
-            expanded = false
-            return@LaunchedEffect
-        }
-        delay(NetflixTokens.EXPAND_DWELL_MS)
-        if (isFocused && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-            expanded = true
+    // Recomposes only when the tile crosses into or out of view of the motion, not per frame.
+    val latestExpansion = rememberUpdatedState(expansion)
+    val showArtwork by remember { derivedStateOf { latestExpansion.value() > 0.01f } }
+    // Trailers wait for the tile to settle, like Netflix's previews.
+    var trailerArmed by remember { mutableStateOf(false) }
+    if (trailerEnabled) {
+        LaunchedEffect(isFocused, item.id) {
+            trailerArmed = false
+            if (!isFocused || isPlaceholder) return@LaunchedEffect
+            delay(NetflixTokens.TRAILER_DWELL_MS)
+            trailerArmed = lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         }
     }
-    LaunchedEffect(expanded) { latestOnExpandedChanged(expanded) }
-
-    val width by animateDpAsState(
-        targetValue = if (expanded) NetflixTokens.tileExpandedWidth else NetflixTokens.tileWidth,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = NetflixTokens.EXPAND_STIFFNESS),
-        label = "netflixTileWidth"
-    )
-    // The artwork layer is composed as soon as the tile takes focus (invisible), so the wide
-    // image is already decoded when the dwell ends and the expansion never waits on it. It stays
-    // while the tile is wider than a poster, so collapsing fades it out instead of popping.
-    val showArtwork = isFocused || expanded || width > NetflixTokens.tileWidth + 1.dp
-    val artworkAlpha by animateFloatAsState(
-        targetValue = if (expanded) 1f else 0f,
-        animationSpec = tween(NetflixTokens.META_FADE_MS + 60),
-        label = "netflixTileArtwork"
-    )
 
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -141,8 +128,13 @@ internal fun NetflixTile(
             if (longPressTriggered) longPressTriggered = false else onClick()
         },
         modifier = modifier
-            .width(width)
-            .height(NetflixTokens.tileHeight)
+            .layout { measurable, _ ->
+                val e = expansion()
+                val w = (NetflixTokens.tileWidth + (NetflixTokens.tileExpandedWidth - NetflixTokens.tileWidth) * e).roundToPx()
+                val h = NetflixTokens.tileHeight.roundToPx()
+                val placeable = measurable.measure(Constraints.fixed(w, h))
+                layout(w, h) { placeable.place(0, 0) }
+            }
             .focusRequester(focusRequester)
             .onFocusChanged { state ->
                 if (state.isFocused != isFocused) {
@@ -223,7 +215,14 @@ internal fun NetflixTile(
             }
 
             if (showArtwork) {
-                Box(modifier = Modifier.fillMaxSize().graphicsLayer { alpha = artworkAlpha }) {
+                // Drawn at its final width and revealed by the widening tile, so the art never rescales.
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .wrapContentWidth(align = Alignment.Start, unbounded = true)
+                        .requiredWidth(NetflixTokens.tileExpandedWidth)
+                        .graphicsLayer { alpha = ((expansion() - 0.15f) / 0.6f).coerceIn(0f, 1f) }
+                ) {
                     if (!artworkUrl.isNullOrBlank()) {
                         val artworkModel = remember(artworkUrl, artworkSize) {
                             ImageRequest.Builder(context)
@@ -242,12 +241,12 @@ internal fun NetflixTile(
                     if (!artworkHasTitle) {
                         NetflixTileTitle(item = item, modifier = Modifier.align(Alignment.BottomStart))
                     }
-                    if (trailerEnabled && expanded && isFocused && trailerUrl != null) {
+                    if (trailerEnabled && trailerArmed && isFocused && trailerUrl != null) {
                         NetflixTileTrailer(
                             trailerUrl = trailerUrl,
                             trailerAudioUrl = trailerAudioUrl,
                             muted = trailerMuted,
-                            onEnded = { expanded = false }
+                            onEnded = { trailerArmed = false }
                         )
                     }
                 }
