@@ -102,7 +102,8 @@ internal fun LiveTvProgrammeColumn(
     LaunchedEffect(channel.guideKey) { LiveTvRepository.requestHistory(channel) }
     // The programme that has (or is to get) the focus, by its key: it stays the same programme
     // when older days are read in above it.
-    var focusKey by remember(channel.guideKey) { mutableStateOf<String?>(null) }
+    // What is on now has it from the first frame, so its row is ready to take the focus at once.
+    var focusKey by remember(channel.guideKey) { mutableStateOf(keys.getOrNull(startIndex)) }
     var focusedKey by remember(channel.guideKey) { mutableStateOf<String?>(null) }
     val rowFocus = remember { FocusRequester() }
     val dayFocus = remember { FocusRequester() }
@@ -119,10 +120,12 @@ internal fun LiveTvProgrammeColumn(
         focusKey = key
         val row = layout.rowOf(index)
         if (listState.layoutInfo.visibleItemsInfo.none { it.index == row }) listState.scrollToItem((row - 1).coerceAtLeast(0))
-        // The row must be composed before it can take focus.
-        repeat(10) {
-            if (runCatching { rowFocus.requestFocus() }.isSuccess) return
+        // The row must be composed (and hold [rowFocus]) before it can take the focus: tried
+        // until it has it (the panel's slide in takes a moment), since a request before then does nothing.
+        repeat(30) {
+            runCatching { rowFocus.requestFocus() }
             delay(16)
+            if (focusedKey == key) return
         }
     }
     LaunchedEffect(Unit) {
