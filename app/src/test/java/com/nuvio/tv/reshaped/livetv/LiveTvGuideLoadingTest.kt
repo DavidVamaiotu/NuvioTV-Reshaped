@@ -391,7 +391,12 @@ class LiveTvGuideLoadingTest {
         assertEquals(liveTvNameKey("Tele 7"), liveTvNameKey("T\u00e9l\u00e9 7"))
         assertEquals(liveTvNameKey("BBC One"), liveTvNameKey("BBC One HD 1080"))
         assertEquals(liveTvNameKey("ZDF"), liveTvNameKey("ZDF HD+"))
-        // A channel an hour later is another channel.
+        // Guide keys are saved (the catch-up archive): they keep the form they had.
+        assertEquals(liveTvGuideKey(null, "UK - BBC One (UK) 1080 HD"), liveTvGuideKey(null, "UK - BBC One (UK) 1080"))
+        assertTrue(liveTvGuideKey(null, "UK - BBC One (UK) 1080").endsWith("ukbbconeuk1080"))
+        assertTrue(liveTvGuideKey(null, "T\u00e9l\u00e9 7").endsWith("t\u00e9l\u00e97"))
+        // A region, or a channel an hour later, is another channel.
+        assertFalse(liveTvNameKey("BBC One") == liveTvNameKey("BBC One (East)"))
         assertFalse(liveTvNameKey("Channel 4") == liveTvNameKey("Channel 4 (+1)"))
         assertFalse(liveTvNameKey("Channel 4") == liveTvNameKey("Channel 4 +1"))
     }

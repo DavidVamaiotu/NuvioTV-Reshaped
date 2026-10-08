@@ -54,7 +54,9 @@ internal object LiveTvListCache {
     fun read(file: File, source: LiveTvSource): Entry? = runCatching {
         if (!file.isFile) return null
         DataInputStream(GZIPInputStream(file.inputStream().buffered(64 * 1024), 64 * 1024).buffered(64 * 1024)).use { input ->
-            if (input.readInt() != VERSION || input.readUTF() != key(source)) return null
+            // A list saved before guide shifts were kept (version 1) is read too, without them.
+            val version = input.readInt()
+            if (version !in 1..VERSION || input.readUTF() != key(source)) return null
             val savedAtMs = input.readLong()
             val epgUrls = List(input.readInt()) { input.readUTF() }
             val groupOrder = List(input.readInt()) { input.readUTF() }
@@ -80,7 +82,7 @@ internal object LiveTvListCache {
                     headers = headerSets[input.readInt()],
                     tvgName = input.readOptional(),
                     catchup = input.readInt().let { if (it < 0) null else catchups[it] },
-                    guideShiftMinutes = input.readInt(),
+                    guideShiftMinutes = if (version >= 2) input.readInt() else 0,
                 )
             }
             Entry(channels, epgUrls, groupOrder, savedAtMs)

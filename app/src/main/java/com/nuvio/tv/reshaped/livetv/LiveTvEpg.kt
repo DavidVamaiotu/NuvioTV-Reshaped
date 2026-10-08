@@ -938,6 +938,8 @@ private val NAME_NOISE = hashSetOf(
     "hd", "fhd", "uhd", "sd", "hq", "4k", "8k", "hevc", "h265", "h264", "1080p", "1080i", "720p", "576p", "50fps", "60fps",
     "1080", "720", "2160", "hd+",
 )
+/** Of [NAME_NOISE], the words a channel's guide key ([liveTvGuideKey]) keeps, as it did before they were matched. */
+private val NAME_NOISE_IN_KEYS = hashSetOf("1080", "720", "2160", "hd+")
 
 /** The leading country tag of [name] in lower case ("uk" for "UK: BBC One"), or null. */
 internal fun liveTvNameTag(name: String): String? {
@@ -949,24 +951,43 @@ internal fun liveTvNameTag(name: String): String? {
 /** A leading country tag: "UK:", "UK |", "|UK|", "[UK]", "(UK)", "UK - ". */
 private val NAME_TAG = Regex("""^\s*(?:[\[(|]\s*[A-Za-z]{2,3}\s*[\])|]|[A-Za-z]{2,3}\s*[:|]|[A-Z]{2}\s+-\s+)\s*""")
 private val NAME_TAG_ENDS = charArrayOf(':', '|', ']', ')', '-')
-/** Words in brackets after the name ("BBC One (UK)", "RTL [Multi-Audio]"); not "(+1)", which is another channel. */
-private val NAME_BRACKETED = Regex("""\s*[\[(][A-Za-z\s\-]*[\])]""")
+/** [NAME_TAG] without "UK - ", for guide keys: see [liveTvGuideKey]. */
+private val KEY_NAME_TAG = Regex("""^\s*(?:[\[(|]\s*[A-Za-z]{2,3}\s*[\])|]|[A-Za-z]{2,3}\s*[:|])\s*""")
+/**
+ * A country code or audio note in brackets after the name ("BBC One (UK)", "RTL [Multi-Audio]"). Not
+ * a region ("BBC One (East)") nor "(+1)": those are other channels, with guides of their own.
+ */
+private val NAME_BRACKETED = Regex("""\s*[\[(]\s*(?:[A-Za-z]{2,3}|multi[\s\-]?(?:audio|sub|lang)|backup|vip)\s*[\])]""", RegexOption.IGNORE_CASE)
 
 /**
  * A channel name reduced for matching a playlist's name with a guide's: lower case, no country
  * tag, no quality words, letters and digits only ("UK: BBC One HD" and "BBC One" are both "bbcone").
  */
-internal fun liveTvNameKey(raw: String): String {
-    val name = raw.folded()
+internal fun liveTvNameKey(raw: String): String = nameKey(raw, forGuideKey = false)
+
+/**
+ * [liveTvNameKey], or with [forGuideKey] the form a channel's guide key has always had: keys are
+ * saved (the catch-up archive), so finding more guides by name must not change them.
+ */
+private fun nameKey(raw: String, forGuideKey: Boolean): String {
+    val name = if (forGuideKey) raw.composed() else raw.folded()
     // Every tag ends in one of these: most names have none and skip the pattern (it runs per channel and per guide name).
-    val tagless = if (name.indexOfAny(NAME_TAG_ENDS) < 0) name else NAME_TAG.replaceFirst(name, "")
-    val untagged = if (tagless.indexOf('(') < 0 && tagless.indexOf('[') < 0) tagless else NAME_BRACKETED.replace(tagless, " ").ifBlank { tagless }
+    val tagless = when {
+        name.indexOfAny(NAME_TAG_ENDS) < 0 -> name
+        forGuideKey -> KEY_NAME_TAG.replaceFirst(name, "")
+        else -> NAME_TAG.replaceFirst(name, "")
+    }
+    val untagged = if (forGuideKey || (tagless.indexOf('(') < 0 && tagless.indexOf('[') < 0)) {
+        tagless
+    } else {
+        NAME_BRACKETED.replace(tagless, " ").ifBlank { tagless }
+    }
     val out = StringBuilder(untagged.length)
     var word = StringBuilder()
     fun flush() {
         if (word.isNotEmpty()) {
             val token = word.toString()
-            if (token !in NAME_NOISE) out.append(token)
+            if (token !in NAME_NOISE || (forGuideKey && token in NAME_NOISE_IN_KEYS)) out.append(token)
             word = StringBuilder()
         }
     }
@@ -1003,7 +1024,7 @@ private fun String.composed(): String =
 
 /** The key a channel's guide is kept under: its guide id in lower case, else its name. */
 internal fun liveTvGuideKey(tvgId: String?, name: String, sourceId: String = ""): String {
-    val key = tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase() ?: (NAME_KEY_PREFIX + liveTvNameKey(name))
+    val key = tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase() ?: (NAME_KEY_PREFIX + nameKey(name, forGuideKey = true))
     return if (sourceId.isEmpty()) key else "$sourceId/$key"
 }
 

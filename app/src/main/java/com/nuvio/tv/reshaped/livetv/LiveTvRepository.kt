@@ -65,7 +65,7 @@ object LiveTvRepository {
     private const val EPG_MIN_READ_GAP_MS = 60L * 60 * 1000
     /** A guide that could not be read is tried again sooner. */
     private const val EPG_RETRY_MS = 30L * 60 * 1000
-    /** A guide that failed or broke off is tried again this soon first, then less often up to [EPG_RETRY_MS]. */
+    /** A guide that failed or broke off is tried again this soon once, then every [EPG_RETRY_MS]. */
     private const val EPG_FIRST_RETRY_MS = 5L * 60 * 1000
     /** Added to a guide's rank for a channel it matched only by name (see startEpg). */
     private const val NAME_MATCH_RANK = 1_000_000
@@ -1682,7 +1682,7 @@ object LiveTvRepository {
             var shown: LiveTvSchedule = keptSchedule
             var nextReadAtMs = 0L
             var firstRead = true
-            // Reads in a row with a guide that failed or broke off: each waits longer to try again.
+            // Reads in a row with a guide that failed or broke off: only the first retry comes sooner.
             var retries = 0
             // The guide links whose last read failed or broke off: their sources say so.
             var retryingLinks: Set<String> = emptySet()
@@ -1802,14 +1802,16 @@ object LiveTvRepository {
                                 if (force && epgGeneration == generation) forceGuideDownload = false
                                 // A guide that failed, or broke off part way, keeps what it showed before.
                                 schedule = if ((failed || partial) && previous.isNotEmpty()) HashMap(previous).apply { putAll(loaded) } else loaded
-                                val retryMs = minOf(EPG_RETRY_MS, EPG_FIRST_RETRY_MS shl retries.coerceAtMost(3))
+                                // Every guide is read again on a retry: one sooner retry, then the usual wait,
+                                // so a link that stays down costs weak TVs no more than one extra read.
+                                val retryMs = if (retries == 0) EPG_FIRST_RETRY_MS else EPG_RETRY_MS
                                 val regular = if (loaded.isEmpty()) {
-                                    nowMs + retryMs
+                                    nowMs + EPG_RETRY_MS
                                 } else {
                                     nextScheduleReadAt(loaded, truncated, nowMs, EPG_MIN_READ_GAP_MS, EPG_DOWNLOAD_MS)
                                 }
-                                nextReadAtMs = if (failed || partial || loaded.isEmpty()) minOf(regular, nowMs + retryMs) else regular
-                                retries = if (failed || partial || loaded.isEmpty()) retries + 1 else 0
+                                nextReadAtMs = if (failed || partial) minOf(regular, nowMs + retryMs) else regular
+                                retries = if (failed || partial) retries + 1 else 0
                                 retryingLinks = failedLinks + partialLinks
                                 val shownLogos = if (failed || partial) HashMap(previousLogos).apply { putAll(logos) } else logos
                                 publishGuide(schedule, shownLogos, nowMs, failedLinks)
