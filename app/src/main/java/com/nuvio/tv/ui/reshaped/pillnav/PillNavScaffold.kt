@@ -83,7 +83,8 @@ internal fun PillNavScaffold(
     val showBar = currentRoute in rootRoutes
     // Settings and Live TV keep the pill in their header band; every other root screen scrolls under it, so it tucks away.
     // Netflix-style Search keeps its content below the pill's band, so there the pill stays put too.
-    val netflixSearch = currentRoute == Screen.Search.route && com.nuvio.tv.ui.reshaped.netflix.rememberNetflixUiEnabled()
+    val netflixUi = com.nuvio.tv.ui.reshaped.netflix.rememberNetflixUiEnabled()
+    val netflixSearch = currentRoute == Screen.Search.route && netflixUi
     val autoHide = showBar && currentRoute != Screen.Settings.route &&
         currentRoute != com.nuvio.tv.reshaped.livetv.LIVE_TV_ROUTE && !netflixSearch
     val hiddenUnlessFocused = currentRoute == Screen.Search.route && !netflixSearch
@@ -309,6 +310,8 @@ internal fun PillNavScaffold(
                 },
                 onExitUp = { focusManager.moveFocus(FocusDirection.Up) },
                 backdrop = glassBackdrop,
+                // The Netflix look uses clear glass: no grey or black body, just the bend, rim and lens.
+                clear = netflixUi,
             )
         }
     }

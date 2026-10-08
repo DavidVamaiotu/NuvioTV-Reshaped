@@ -15,6 +15,8 @@ uniform float outset;
 uniform half3 tint;
 uniform float4 lens;
 uniform float focus;
+// How much of the dark glass body is mixed in: 0.46 normally, 0 for clear glass (Netflix look).
+uniform float veil;
 
 // TVs draw the pill over the sharp screen (no blur pass), so each sample is a small 4-tap soften:
 // enough to keep the labels readable, far cheaper than a blur.
@@ -78,7 +80,7 @@ half4 main(float2 position) {
     );
     half luminance = dot(color, half3(0.2126, 0.7152, 0.0722));
     color = clamp(mix(half3(luminance), color, 1.45), 0.0, 1.0);
-    color = mix(color, mix(half3(28.0, 28.0, 30.0) / 255.0, tint, 0.08), 0.46);
+    color = mix(color, mix(half3(28.0, 28.0, 30.0) / 255.0, tint, 0.08), veil);
 
     // Thickness: the glass darkens slightly towards its lower rim, and the selected lens is a touch brighter.
     color *= 1.0 - 0.14 * pow(edge, 3.0) * max(normal.y, 0.0);
