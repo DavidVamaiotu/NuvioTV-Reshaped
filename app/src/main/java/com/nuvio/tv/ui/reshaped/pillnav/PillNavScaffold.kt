@@ -82,9 +82,11 @@ internal fun PillNavScaffold(
 ) {
     val showBar = currentRoute in rootRoutes
     // Settings and Live TV keep the pill in their header band; every other root screen scrolls under it, so it tucks away.
+    // Netflix-style Search keeps its content below the pill's band, so there the pill stays put too.
+    val netflixSearch = currentRoute == Screen.Search.route && com.nuvio.tv.ui.reshaped.netflix.rememberNetflixUiEnabled()
     val autoHide = showBar && currentRoute != Screen.Settings.route &&
-        currentRoute != com.nuvio.tv.reshaped.livetv.LIVE_TV_ROUTE
-    val hiddenUnlessFocused = currentRoute == Screen.Search.route
+        currentRoute != com.nuvio.tv.reshaped.livetv.LIVE_TV_ROUTE && !netflixSearch
+    val hiddenUnlessFocused = currentRoute == Screen.Search.route && !netflixSearch
     val state = remember { PillNavBarState() }
     // Liquid glass on capable TVs with Nuvio's blur setting on. The screen is recorded only while the pill is on
     // it, never during playback; the pill slides out over the last recording, which is then dropped.

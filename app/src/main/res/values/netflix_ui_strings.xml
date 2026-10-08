@@ -4,4 +4,9 @@
     <string name="settings_netflix_ui_description">A billboard on top and rows whose focused title widens to show its details. Only the look changes; rows, settings and actions stay the same.</string>
     <string name="settings_pill_nav_forced_by_netflix_ui">Always on while Netflix-style Home is on.</string>
     <string name="netflix_ui_view_details">View Details</string>
+    <string name="netflix_ui_search_hint">Search titles</string>
+    <string name="netflix_ui_search_results">Movies &amp; TV</string>
+    <string name="netflix_ui_search_explore">Explore</string>
+    <string name="netflix_ui_search_searching">Searching…</string>
+    <string name="netflix_ui_search_no_results">No results for “%1$s”</string>
 </resources>

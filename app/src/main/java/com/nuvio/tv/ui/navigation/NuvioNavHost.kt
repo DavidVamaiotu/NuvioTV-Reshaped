@@ -1122,6 +1122,23 @@ private fun PlaybackNavHost(
         composable(Screen.Search.route) { backStackEntry ->
             val searchViewModel: com.nuvio.tv.ui.screens.search.SearchViewModel =
                 androidx.hilt.navigation.compose.hiltViewModel(backStackEntry)
+            // Nuvio RS hook: Netflix-style Search (same view model, only the look differs)
+            if (com.nuvio.tv.ui.reshaped.netflix.rememberNetflixUiEnabled()) {
+                com.nuvio.tv.ui.reshaped.netflix.NetflixSearchScreen(
+                    viewModel = searchViewModel,
+                    onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
+                        navController.navigate(
+                            Screen.Detail.createRoute(
+                                itemId = itemId,
+                                itemType = itemType,
+                                addonBaseUrl = addonBaseUrl,
+                                heroBackdropUrl = HeroBackdropState.consumeAndClear()
+                            )
+                        )
+                    }
+                )
+                return@composable
+            }
             SearchScreen(
                 viewModel = searchViewModel,
                 onNavigateToDetail = { itemId, itemType, addonBaseUrl ->
