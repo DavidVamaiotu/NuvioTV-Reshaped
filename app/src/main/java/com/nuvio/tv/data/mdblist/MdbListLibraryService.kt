@@ -105,7 +105,8 @@ class MdbListLibraryService(
                 if (!shouldRefresh(scope, intent)) return@runIfNeeded
                 loadState.value = LibraryLoadState(scope, refreshing = true, attemptedAt = now())
                 sync.mutate(scope) { previous ->
-                    val library = MdbListLibraryRemote(api, scope).synchronize(previous.library, previous.accountId, now())
+                    val library = MdbListLibraryRemote(api, scope).synchronize(previous.library, previous.accountId, now(),
+                        reloadItems = intent == TrackingRefreshIntent.USER_INITIATED)
                     previous.copy(library = library) to Unit
                 }
                 loadState.value = LibraryLoadState(scope)

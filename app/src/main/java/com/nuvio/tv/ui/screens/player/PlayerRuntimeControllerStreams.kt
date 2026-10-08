@@ -1742,6 +1742,7 @@ internal fun PlayerRuntimeController.cancelNextEpisodePreload() {
 internal fun PlayerRuntimeController.playNextEpisode(userInitiated: Boolean = false) {
     val nextVideo = nextEpisodeVideo ?: return
     val type = contentType ?: return
+    nextEpisodePreloadTriggered = false
 
     val state = _uiState.value
     val nextInfo = state.nextEpisode ?: return

@@ -1938,6 +1938,8 @@
     <string name="library_sort_provider_order">Ordem do provedor</string>
     <string name="library_sort_added_desc">Adicionados ↓</string>
     <string name="library_sort_added_asc">Adicionados ↑</string>
+    <string name="library_sort_released_desc">Lançamento ↓</string>
+    <string name="library_sort_released_asc">Lançamento ↑</string>
     <string name="library_sort_title_asc">Título A-Z</string>
     <string name="library_sort_title_desc">Título Z-A</string>
     <string name="library_manage_lists">Gerenciar Listas</string>

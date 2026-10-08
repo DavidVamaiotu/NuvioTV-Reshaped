@@ -60,6 +60,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.graphics.Color
@@ -506,6 +507,7 @@ fun MetaDetailsScreen(
 
     val currentIsTrailerPlaying by rememberUpdatedState(uiState.isTrailerPlaying)
     val currentShowTrailerControls by rememberUpdatedState(uiState.showTrailerControls)
+    val trailerControllerFocusRequester = remember { FocusRequester() }
     var trailerSeekOverlayVisible by remember { mutableStateOf(false) }
     val trailerSeekOverlayState = remember { TrailerSeekOverlayState() }
     var trailerSeekToken by remember { mutableIntStateOf(0) }
@@ -515,6 +517,12 @@ fun MetaDetailsScreen(
         { position: Long, duration: Long ->
             trailerSeekOverlayState.positionMs = position
             trailerSeekOverlayState.durationMs = duration
+        }
+    }
+
+    LaunchedEffect(uiState.isTrailerPlaying, uiState.showTrailerControls) {
+        if (uiState.isTrailerPlaying && uiState.showTrailerControls) {
+            trailerControllerFocusRequester.requestFocusAfterFrames()
         }
     }
 
@@ -1031,7 +1039,11 @@ fun MetaDetailsScreen(
                         }
                     },
                     onTrailerProgressChanged = onTrailerProgressChanged,
-                    onTrailerEnded = { viewModel.onEvent(MetaDetailsEvent.OnTrailerEnded) },
+                    onTrailerEnded = {
+                        restorePlayFocusAfterTrailerBackToken += 1
+                        isTrailerPaused = false
+                        viewModel.onEvent(MetaDetailsEvent.OnTrailerEnded)
+                    },
                     onTrailerButtonClick = { viewModel.onEvent(MetaDetailsEvent.OnTrailerButtonClick) },
                     onSharedTrailerSelected = { viewModel.onEvent(MetaDetailsEvent.OnSharedTrailerSelected(it)) },
                     onDismissSharedTrailer = { viewModel.onEvent(MetaDetailsEvent.OnDismissSharedTrailer) },
@@ -1125,6 +1137,15 @@ fun MetaDetailsScreen(
                     color = NuvioTheme.colors.TextPrimary
                 )
             }
+        }
+
+        if (uiState.isTrailerPlaying && uiState.showTrailerControls) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(trailerControllerFocusRequester)
+                    .focusable()
+            )
         }
 
         TrailerSeekOverlayHost(

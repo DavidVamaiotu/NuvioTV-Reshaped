@@ -202,7 +202,10 @@ fun TrailerPlayer(
         val player = trailerPlayer ?: return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) {
+                if (playbackState == Player.STATE_ENDED &&
+                    currentIsPlaying &&
+                    player.playWhenReady
+                ) {
                     currentOnEnded()
                 }
             }
@@ -262,8 +265,8 @@ fun TrailerPlayer(
                     (LayoutInflater.from(ctx).inflate(R.layout.trailer_player_view, null) as PlayerView).apply {
                         playerViewRef.value = this
                         player = trailerPlayer
-                        isFocusable = true
-                        isFocusableInTouchMode = true
+                        isFocusable = false
+                        isFocusableInTouchMode = false
                         setOnKeyListener { _, keyCode, event ->
                             currentOnRemoteKey(keyCode, event.action, event.repeatCount)
                         }

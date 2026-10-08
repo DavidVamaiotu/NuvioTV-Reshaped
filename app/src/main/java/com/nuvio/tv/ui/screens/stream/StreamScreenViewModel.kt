@@ -514,12 +514,32 @@ class StreamScreenViewModel @Inject constructor(
 
                 val allStreams = mergedAddonStreams.flatMap { it.streams }
                 val availableAddons = mergedAddonStreams.map { it.addonName }
+
+                // Early binge group match: if we have a persisted binge group, try to
+                // match it immediately on every emission without waiting for all addons.
+                val earlyBingeGroupMatch = if (!autoPlayHandledForSession && !resolvedAutoPlayTarget && persistedBingeGroup != null) {
+                    StreamAutoPlaySelector.selectAutoPlayStream(
+                        streams = allStreams,
+                        mode = playerSettings.streamAutoPlayMode,
+                        regexPattern = playerSettings.streamAutoPlayRegex,
+                        source = playerSettings.streamAutoPlaySource,
+                        installedAddonNames = installedAddonOrder.toSet(),
+                        selectedAddons = playerSettings.streamAutoPlaySelectedAddons,
+                        selectedPlugins = playerSettings.streamAutoPlaySelectedPlugins,
+                        preferredBingeGroup = persistedBingeGroup,
+                        preferBingeGroupInSelection = true,
+                        bingeGroupOnly = true
+                    )
+                } else null
+
                 // Auto-select only after all addons have responded or the
                 // configured timeout has elapsed. This gives slower addons a
                 // chance to return higher-quality streams before the selector
                 // picks from whatever is available.
                 val shouldAutoSelect = !autoPlayHandledForSession && !resolvedAutoPlayTarget && isAllLoaded
-                val selectedAutoPlayStream = if (!shouldAutoSelect) {
+                val selectedAutoPlayStream = if (earlyBingeGroupMatch != null) {
+                    earlyBingeGroupMatch
+                } else if (!shouldAutoSelect) {
                     null
                 } else {
                     StreamAutoPlaySelector.selectAutoPlayStream(
