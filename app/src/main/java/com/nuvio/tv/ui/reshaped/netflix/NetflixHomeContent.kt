@@ -447,7 +447,7 @@ private fun NetflixHomeContent(
                         null
                     },
                 ),
-            contentPadding = PaddingValues(top = if (heroVisible) 56.dp else NetflixTokens.focusTopInset, bottom = 120.dp),
+            contentPadding = PaddingValues(top = NetflixTokens.contentTop, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(NetflixTokens.rowGap)
         ) {
             if (heroVisible) {

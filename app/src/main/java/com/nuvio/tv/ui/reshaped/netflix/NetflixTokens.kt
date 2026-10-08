@@ -28,9 +28,13 @@ internal object NetflixTokens {
     val ringWidth = 2.5.dp
     val metaHeight = 92.dp
     val rowEndPadding = 520.dp
-    val focusTopInset = 64.dp
+    // The pill menu floats in the top 56dp band. Content starts below it, and a focused row's
+    // tile lands low enough that its header stays clear of the pill when it slides back in.
+    val pillBand = 56.dp
+    val contentTop = pillBand + 14.dp
+    val focusTopInset = contentTop + 44.dp
 
-    val billboardHeight = 380.dp
+    val billboardHeight = 368.dp
     val billboardCorner = 20.dp
     val billboardTextWidth = 440.dp
     val billboardLogoWidth = 300.dp
