@@ -629,13 +629,24 @@ internal class LiveTvPlayerState(
     }
 
     private fun playReplay(channel: LiveTvChannel, replay: LiveTvReplay) {
-        LiveTvPlaybackRegistry.register(
-            PlayerMediaSourceFactory.normalizePlaybackRequest(replay.playback.streamUrl, replay.playback.headers).url,
-            listUrl = channel.streamUrl,
-            catchup = true,
-            window = replay.window,
-        )
+        val url = PlayerMediaSourceFactory.normalizePlaybackRequest(replay.playback.streamUrl, replay.playback.headers).url
+        LiveTvPlaybackRegistry.register(url, listUrl = channel.streamUrl, catchup = true, window = replay.window)
+        replayFallback = replay.fallback?.let { url to it }
         controller.switchToSourceStream(channel.toStream(replay.playback))
+    }
+
+    /** The replay playing (its player URL) and the other link to play should the provider fail it. */
+    private var replayFallback: Pair<String, LiveTvReplay>? = null
+
+    /** Plays the other link of the replay at [url] when the provider failed it; whether it did. */
+    internal fun playReplayFallback(url: String): Boolean {
+        val (failed, fallback) = replayFallback ?: return false
+        if (failed != url) return false
+        val channel = currentChannel() ?: return false
+        replayFallback = null
+        switchJob?.cancel()
+        playReplay(channel, fallback)
+        return true
     }
 
     /** The programme the title shows while a replay plays. */

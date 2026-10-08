@@ -41,7 +41,8 @@ import com.nuvio.tv.reshaped.sync.ReshapedSync
  * added. A source that fails to load keeps the channels it had.
  */
 /** A replay link of a channel and the time it plays. */
-class LiveTvReplay(val playback: LiveTvChannel, val window: LiveTvReplayWindow)
+/** A replay to play; an HLS one carries the TS replay of the same time, for a panel that then fails it ([fallback]). */
+class LiveTvReplay(val playback: LiveTvChannel, val window: LiveTvReplayWindow, val fallback: LiveTvReplay? = null)
 
 object LiveTvRepository {
     private const val TAG = "LiveTv"
@@ -64,6 +65,8 @@ object LiveTvRepository {
     private const val EPG_MIN_READ_GAP_MS = 60L * 60 * 1000
     /** A guide that could not be read is tried again sooner. */
     private const val EPG_RETRY_MS = 30L * 60 * 1000
+    /** A guide that failed or broke off is tried again this soon first, then less often up to [EPG_RETRY_MS]. */
+    private const val EPG_FIRST_RETRY_MS = 5L * 60 * 1000
     /** Added to a guide's rank for a channel it matched only by name (see startEpg). */
     private const val NAME_MATCH_RANK = 1_000_000
     /** A held ▲ moving a playlist channel is saved once it pauses this long. */
@@ -733,8 +736,7 @@ object LiveTvRepository {
         val now = LiveTvClock.nowEpochMs()
         // Only an Xtream panel answers its /timeshift/ form; other "shift" servers take ?utc=.
         val source = _uiState.value.sources.firstOrNull { it.id == channel.sourceId }
-        val xtreamPanel = source == null || source.type == LiveTvSourceType.Xtream ||
-            (source.type == LiveTvSourceType.M3u && xtreamGuideUrlFor(source.url) != null)
+        val xtreamPanel = isXtreamPanel(channel, source)
         val panelLink = LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup, xtreamPanel)
         // A panel's /timeshift/ link names whole minutes: the replay starts on the minute, and its
         // window says so, so the position shown (and a rewind from it) matches what plays.
@@ -756,16 +758,21 @@ object LiveTvRepository {
         } else {
             null
         }
-        val link = hlsLink
-            ?: LiveTvCatchupLinks.link(channel.streamUrl, catchup, startMs, stop, now, zone, xtreamPanel)
-            ?: return null
+        val tsLink = LiveTvCatchupLinks.link(channel.streamUrl, catchup, startMs, stop, now, zone, xtreamPanel)
+        val link = hlsLink ?: tsLink ?: return null
         // A link that stays the same for a later end names none, and plays on to live by itself.
-        val bounded = hlsLink != null ||
-            link != LiveTvCatchupLinks.link(channel.streamUrl, catchup, startMs, stop + 120_000L, now, zone, xtreamPanel)
-        val window = LiveTvReplayWindow(startMs, stop, bounded)
+        val tsBounded = tsLink != null &&
+            tsLink != LiveTvCatchupLinks.link(channel.streamUrl, catchup, startMs, stop + 120_000L, now, zone, xtreamPanel)
+        val window = LiveTvReplayWindow(startMs, stop, hlsLink != null || tsBounded)
         LiveTvPlaybackRegistry.register(link, listUrl = channel.streamUrl, catchup = true, window = window)
         recordRecentChannel(channel)
-        return LiveTvReplay(channel.copy(streamUrl = link), window)
+        // The panel's playlist answered, yet its parts can still fail (one being recorded): the TS replay then plays.
+        val fallback = if (hlsLink != null && tsLink != null) {
+            LiveTvReplay(channel.copy(streamUrl = tsLink), LiveTvReplayWindow(startMs, stop, tsBounded))
+        } else {
+            null
+        }
+        return LiveTvReplay(channel.copy(streamUrl = link), window, fallback)
     }
 
     /**
@@ -1181,6 +1188,15 @@ object LiveTvRepository {
         saveMoved(moved, store)
     }
 
+    /**
+     * Whether [channel] comes from an Xtream panel, which answers its own /timeshift/ replays: an
+     * Xtream source, an M3U from its get.php, or any list whose links are a panel's /live/ links.
+     */
+    private fun isXtreamPanel(channel: LiveTvChannel, source: LiveTvSource?): Boolean =
+        source == null || source.type == LiveTvSourceType.Xtream ||
+            (source.type == LiveTvSourceType.M3u &&
+                (xtreamGuideUrlFor(source.url) != null || LiveTvCatchupLinks.isXtreamLiveLink(channel.streamUrl)))
+
     /** The server, user and password of an Xtream source, or of an M3U get.php link. */
     private fun xtreamLoginOf(source: LiveTvSource): Triple<String, String, String>? = when (source.type) {
         LiveTvSourceType.Xtream -> source.xtream.takeIf { it.isConfigured }?.let { Triple(it.serverUrl, it.username, it.password) }
@@ -1564,8 +1580,7 @@ object LiveTvRepository {
         if (earliest - reach < HISTORY_GAP_MS) return archived
         // An Xtream panel lists each channel's whole catch-up, which its guide file often does not.
         val source = _uiState.value.sources.firstOrNull { it.id == channel.sourceId }
-        val xtreamPanel = source == null || source.type == LiveTvSourceType.Xtream ||
-            (source.type == LiveTvSourceType.M3u && xtreamGuideUrlFor(source.url) != null)
+        val xtreamPanel = isXtreamPanel(channel, source)
         if (!LiveTvCatchupLinks.needsPanelZone(channel.streamUrl, catchup, xtreamPanel)) return archived
         val (server, user, pass) = LiveTvCatchupLinks.xtreamLogin(channel.streamUrl) ?: return archived
         val streamId = LiveTvCatchupLinks.xtreamStreamId(channel.streamUrl) ?: return archived
@@ -1667,6 +1682,10 @@ object LiveTvRepository {
             var shown: LiveTvSchedule = keptSchedule
             var nextReadAtMs = 0L
             var firstRead = true
+            // Reads in a row with a guide that failed or broke off: each waits longer to try again.
+            var retries = 0
+            // The guide links whose last read failed or broke off: their sources say so.
+            var retryingLinks: Set<String> = emptySet()
             // Until then what is on now stays as it is: the minute tick skips working it out again.
             var changeAtMs = 0L
             var lastTickMs = 0L
@@ -1675,7 +1694,7 @@ object LiveTvRepository {
                 shown = filled
                 if (epgGeneration == generation) keptSchedule = filled
                 val current = currentProgrammes(filled, guideKeys, nowMs)
-                val guides = failedLinks?.let { guideStates(sourceLinks, it, filled, channels) }
+                val guides = failedLinks?.let { guideStates(sourceLinks, it, retryingLinks, filled, channels) }
                 _uiState.update { state ->
                     if (epgGeneration != generation) {
                         state
@@ -1721,6 +1740,7 @@ object LiveTvRepository {
                             val logos = HashMap<String, String>()
                             val truncated = HashSet<String>()
                             val failedLinks = HashSet<String>()
+                            val partialLinks = HashSet<String>()
                             var partial = false
                             val scheduleRanks = HashMap<String, Int>()
                             val logoRanks = HashMap<String, Int>()
@@ -1743,7 +1763,10 @@ object LiveTvRepository {
                                         failedLinks += epgUrl
                                         return@publish
                                     }
-                                    if (!guide.complete) partial = true
+                                    if (!guide.complete) {
+                                        partial = true
+                                        partialLinks += epgUrl
+                                    }
                                     if (guide.refreshFailed) failedLinks += epgUrl
                                     // A guide that has the channel's guide id beats one that only found its name, so
                                     // an id the viewer assigned in the playlist is what shows (as in other players);
@@ -1779,12 +1802,15 @@ object LiveTvRepository {
                                 if (force && epgGeneration == generation) forceGuideDownload = false
                                 // A guide that failed, or broke off part way, keeps what it showed before.
                                 schedule = if ((failed || partial) && previous.isNotEmpty()) HashMap(previous).apply { putAll(loaded) } else loaded
+                                val retryMs = minOf(EPG_RETRY_MS, EPG_FIRST_RETRY_MS shl retries.coerceAtMost(3))
                                 val regular = if (loaded.isEmpty()) {
-                                    nowMs + EPG_RETRY_MS
+                                    nowMs + retryMs
                                 } else {
                                     nextScheduleReadAt(loaded, truncated, nowMs, EPG_MIN_READ_GAP_MS, EPG_DOWNLOAD_MS)
                                 }
-                                nextReadAtMs = if (failed || partial) minOf(regular, nowMs + EPG_RETRY_MS) else regular
+                                nextReadAtMs = if (failed || partial || loaded.isEmpty()) minOf(regular, nowMs + retryMs) else regular
+                                retries = if (failed || partial || loaded.isEmpty()) retries + 1 else 0
+                                retryingLinks = failedLinks + partialLinks
                                 val shownLogos = if (failed || partial) HashMap(previousLogos).apply { putAll(logos) } else logos
                                 publishGuide(schedule, shownLogos, nowMs, failedLinks)
                                 // A guide that broke off part way is not saved as the kept programmes.
@@ -1939,6 +1965,7 @@ object LiveTvRepository {
     private fun guideStates(
         sourceLinks: Map<String, List<String>>,
         failedLinks: Set<String>,
+        retryingLinks: Set<String>,
         schedule: LiveTvSchedule,
         channels: List<LiveTvChannel>,
     ): Map<String, LiveTvSourceGuide> {
@@ -1949,7 +1976,8 @@ object LiveTvRepository {
             when {
                 links.isEmpty() -> LiveTvSourceGuide.None
                 count == 0 && links.all(failedLinks::contains) -> LiveTvSourceGuide.Failed
-                else -> LiveTvSourceGuide(LiveTvSourceGuide.State.Loaded, count)
+                // Shown, but from an older or incomplete read: it is being tried again.
+                else -> LiveTvSourceGuide(LiveTvSourceGuide.State.Loaded, count, retrying = links.any(retryingLinks::contains))
             }
         }
     }

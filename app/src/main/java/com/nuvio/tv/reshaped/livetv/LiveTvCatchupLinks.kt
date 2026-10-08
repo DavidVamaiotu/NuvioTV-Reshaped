@@ -28,6 +28,12 @@ internal object LiveTvCatchupLinks {
     fun xtreamStreamId(liveUrl: String): String? =
         XTREAM_LIVE.find(liveUrl.substringBefore('?'))?.groupValues?.get(4)
 
+    /** Whether [liveUrl] is an Xtream panel's own live link (".../live/user/pass/id.ts"), whatever list it came in. */
+    fun isXtreamLiveLink(liveUrl: String): Boolean {
+        val match = XTREAM_LIVE.find(liveUrl.substringBefore('?')) ?: return false
+        return liveUrl.regionMatches(match.groupValues[1].length, "/live/", 0, 6, ignoreCase = true)
+    }
+
     /** The panel login an Xtream live link carries: server, user, password. */
     fun xtreamLogin(liveUrl: String): Triple<String, String, String>? =
         XTREAM_LIVE.find(liveUrl.substringBefore('?'))?.destructured?.let { (host, user, pass) ->

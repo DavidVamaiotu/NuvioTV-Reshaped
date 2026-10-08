@@ -405,7 +405,11 @@ private fun LiveTvSourceRow(
                 LiveTvSourceGuide.State.None -> stringResource(R.string.live_tv_source_guide_none)
                 LiveTvSourceGuide.State.Loading -> stringResource(R.string.live_tv_source_guide_loading)
                 LiveTvSourceGuide.State.Failed -> stringResource(R.string.live_tv_source_guide_failed)
-                LiveTvSourceGuide.State.Loaded -> stringResource(R.string.live_tv_source_guide_loaded, guide.channels)
+                LiveTvSourceGuide.State.Loaded -> if (guide.retrying) {
+                    stringResource(R.string.live_tv_source_guide_retrying, guide.channels)
+                } else {
+                    stringResource(R.string.live_tv_source_guide_loaded, guide.channels)
+                }
             }
             val summary = stringResource(R.string.live_tv_source_summary, kind, channelCount)
             Text(

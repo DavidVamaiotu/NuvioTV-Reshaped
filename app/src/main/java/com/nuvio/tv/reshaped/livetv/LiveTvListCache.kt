@@ -16,7 +16,7 @@ import java.util.zip.GZIPOutputStream
  * Portals (Stalker) are not saved: their lists carry a session that is renewed on each load.
  */
 internal object LiveTvListCache {
-    private const val VERSION = 1
+    private const val VERSION = 2
     private const val DIR = "live_tv_lists"
 
     /** What a provider gave, before the list tags the channels with their source. */
@@ -80,6 +80,7 @@ internal object LiveTvListCache {
                     headers = headerSets[input.readInt()],
                     tvgName = input.readOptional(),
                     catchup = input.readInt().let { if (it < 0) null else catchups[it] },
+                    guideShiftMinutes = input.readInt(),
                 )
             }
             Entry(channels, epgUrls, groupOrder, savedAtMs)
@@ -136,6 +137,7 @@ internal object LiveTvListCache {
                     out.writeInt(headerIndex.getValue(channel.headers))
                     out.writeOptional(channel.tvgName)
                     out.writeInt(channel.catchup?.let(catchupIndex::getValue) ?: -1)
+                    out.writeInt(channel.guideShiftMinutes)
                 }
             }
             if (!temp.renameTo(file)) {

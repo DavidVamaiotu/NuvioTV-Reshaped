@@ -3,7 +3,9 @@ package com.nuvio.tv.ui.reshaped.livetv
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.exoplayer.ExoPlayer
+import com.nuvio.tv.reshaped.livetv.LiveEdgeRecovery
 import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import kotlinx.coroutines.flow.update
 
@@ -18,6 +20,9 @@ internal fun LiveTvReplayFollow(state: LiveTvPlayerState) {
     LaunchedEffect(state) {
         val controller = state.player
         var watched: ExoPlayer? = null
+        // The replay whose start was checked: a provider's replay playlist that is still growing
+        // (no end mark, as for a programme started over) opens at its live edge, not its start.
+        var startChecked: String? = null
         val endGuard = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState != Player.STATE_ENDED) return
@@ -28,6 +33,7 @@ internal fun LiveTvReplayFollow(state: LiveTvPlayerState) {
                 state.continueReplay(window)
             }
         }
+        LiveEdgeRecovery.replayFallback = state::playReplayFallback
         try {
             controller.playbackTimeline.collect { timeline ->
                 if (LiveTvPlaybackRegistry.replayWindow(controller.currentStreamUrl) == null) return@collect
@@ -37,10 +43,30 @@ internal fun LiveTvReplayFollow(state: LiveTvPlayerState) {
                     player?.addListener(endGuard)
                     watched = player
                 }
+                val playing = controller.currentStreamUrl
+                if (player != null && playing != startChecked && player.hasLoadedWindow()) {
+                    startChecked = playing
+                    // Its position at the edge would also read as the replay's end: followed only from the start.
+                    if (player.isCurrentMediaItemDynamic && player.currentPosition > LIVE_EDGE_START_MS) {
+                        player.seekTo(0L)
+                        return@collect
+                    }
+                }
                 state.followReplay(timeline.currentPosition, timeline.duration)
             }
         } finally {
+            if (LiveEdgeRecovery.replayFallback == state::playReplayFallback) LiveEdgeRecovery.replayFallback = null
             watched?.removeListener(endGuard)
         }
     }
+}
+
+/** A replay found this far in when it first plays was opened at its live edge. */
+private const val LIVE_EDGE_START_MS = 10_000L
+
+/** Whether the player has read what it plays (a playlist's own window, not the stand-in it shows first). */
+private fun ExoPlayer.hasLoadedWindow(): Boolean {
+    val timeline = currentTimeline
+    if (timeline.isEmpty || currentMediaItemIndex >= timeline.windowCount) return false
+    return !timeline.getWindow(currentMediaItemIndex, Timeline.Window()).isPlaceholder
 }

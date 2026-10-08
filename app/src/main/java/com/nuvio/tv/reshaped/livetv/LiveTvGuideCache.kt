@@ -31,7 +31,7 @@ internal object LiveTvGuideCache {
         key = key * 31 + channels
         key = key * 31 + window.pastMs
         key = key * 31 + window.aheadMs
-        key = key * 31 + window.maxPast * 1_000 + window.maxAhead
+        key = key * 31 + window.maxPast * 1_000 + window.maxAhead + window.maxShortAhead * 100_000L
         key = key * 31 + window.catchupPastMs + window.maxCatchupPast
         key = key * 31 + window.detailsMs + window.maxDescription * 1_000L + window.detailsPerChannel
         key = key * 31 + window.detailsBudgetChars + window.maxCatchupProgrammes

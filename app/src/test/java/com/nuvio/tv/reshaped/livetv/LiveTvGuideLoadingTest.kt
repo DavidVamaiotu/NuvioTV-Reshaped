@@ -343,4 +343,56 @@ class LiveTvGuideLoadingTest {
         assertTrue(guide.complete)
         assertEquals(2, guide.schedule.getValue(selected.guideKey).size)
     }
+
+    @Test fun aGuideMovedByTvgShiftKeepsItsProgrammesAtTheShiftedTime() {
+        val shifted = channel("one").copy(guideShiftMinutes = 60)
+        val guide = read("""
+            <tv>
+              <programme channel="shared" start="20261002070000 +0000" stop="20261002080000 +0000"><title>Shown an hour later</title></programme>
+            </tv>
+        """.trimIndent(), listOf(shifted))
+        val programme = guide.schedule.getValue(shifted.guideKey).single()
+        assertEquals(Instant.parse("2026-10-02T08:00:00Z").toEpochMilli(), programme.startEpochMs)
+        assertFalse(liveTvGuideMatchingKey(listOf(shifted)) == liveTvGuideMatchingKey(listOf(channel("one"))))
+    }
+
+    @Test fun aLastProgrammeWithoutStopIsKept() {
+        val one = channel("one")
+        val guide = read("""
+            <tv>
+              <programme channel="shared" start="20261002070000 +0000"><title>Earlier</title></programme>
+              <programme channel="shared" start="20261002080000 +0000"><title>On now</title></programme>
+            </tv>
+        """.trimIndent(), listOf(one))
+        assertEquals(listOf("Earlier", "On now"), guide.schedule.getValue(one.guideKey).map { it.title })
+    }
+
+    @Test fun channelsOfShortProgrammesKeepMoreAhead() {
+        val one = channel("one")
+        val xml = buildString {
+            append("<tv>")
+            var t = Instant.parse("2026-10-02T08:00:00Z").toEpochMilli()
+            val fmt = java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss Z").withZone(java.time.ZoneOffset.UTC)
+            repeat(80) {
+                append("<programme channel=\"shared\" start=\"${fmt.format(Instant.ofEpochMilli(t))}\" stop=\"${fmt.format(Instant.ofEpochMilli(t + 15 * 60_000L))}\"><title>Short $it</title></programme>")
+                t += 15 * 60_000L
+            }
+            append("</tv>")
+        }
+        val guide = readXmlTvGuide(xml.byteInputStream(), LiveTvGuideRequest.from(listOf(one)), now, LiveTvGuideWindow.Regular, ::KXmlParser)
+        val ahead = guide.schedule.getValue(one.guideKey).count { it.stopEpochMs > now }
+        assertEquals(LiveTvGuideWindow.Regular.maxShortAhead, ahead)
+    }
+
+    @Test fun moreChannelNameFormsMatch() {
+        assertEquals(liveTvNameKey("BBC One"), liveTvNameKey("UK - BBC One"))
+        assertEquals(liveTvNameKey("BBC One"), liveTvNameKey("BBC One (UK)"))
+        assertEquals(liveTvNameKey("RTL"), liveTvNameKey("RTL FHD [Multi-Audio]"))
+        assertEquals(liveTvNameKey("Tele 7"), liveTvNameKey("T\u00e9l\u00e9 7"))
+        assertEquals(liveTvNameKey("BBC One"), liveTvNameKey("BBC One HD 1080"))
+        assertEquals(liveTvNameKey("ZDF"), liveTvNameKey("ZDF HD+"))
+        // A channel an hour later is another channel.
+        assertFalse(liveTvNameKey("Channel 4") == liveTvNameKey("Channel 4 (+1)"))
+        assertFalse(liveTvNameKey("Channel 4") == liveTvNameKey("Channel 4 +1"))
+    }
 }
