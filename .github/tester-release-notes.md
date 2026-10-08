@@ -1,4 +1,3 @@
-- Live TV catch-up: a full week (up to what the provider replays, 7 days at most) on every TV, low-memory TVs included. Past days are kept on storage instead of in memory, and are read only for the channels you scroll back on.
-- Live TV catch-up: days the provider's guide file no longer lists stay available, as long as the provider still replays them.
-- Live TV catch-up (Xtream): when the guide file only goes back a day, the older days are asked from the provider itself.
-- Memory use of the guide is back to what it was before Tester build 2.
+- Live TV: a channel's programme list in the player (▶ on a channel) now shows the days: a label where each day starts, and a day column (▶ to reach it, OK to jump to that day).
+- Live TV catch-up: a programme started over (or replayed) can be rewound past its start into the programme before, also when it plays as HLS (press ◀ at its start).
+- Live TV: "Reload channels and guide" downloads the guide again even when a source fails to reload.
