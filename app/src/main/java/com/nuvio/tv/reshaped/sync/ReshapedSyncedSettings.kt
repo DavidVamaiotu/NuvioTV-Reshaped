@@ -55,6 +55,7 @@ internal object ReshapedSyncedSettings {
         bool(TV, "autosync", { AutoSyncPreferences.ensureLoaded(it); AutoSyncPreferences.enabled.value }, AutoSyncPreferences::setEnabled),
         bool(TV, "seek_previews", { LocalSeekPreviewSettings.enabled(it).value }, LocalSeekPreviewSettings::setEnabled),
         bool(TV, "pill_nav", { PillNavPreferences.ensureLoaded(it); PillNavPreferences.enabled.value }, PillNavPreferences::setEnabled),
+        bool(TV, "netflix_ui", { com.nuvio.tv.ui.reshaped.netflix.NetflixUiPreferences.ensureLoaded(it); com.nuvio.tv.ui.reshaped.netflix.NetflixUiPreferences.enabled.value }, com.nuvio.tv.ui.reshaped.netflix.NetflixUiPreferences::setEnabled),
         bool(TV, "connection_fit", { ConnectionSpeedEstimator.ensureLoaded(it); ConnectionSpeedEstimator.enabled.value }, ConnectionSpeedEstimator::setEnabled),
         Setting(
             TV, "seekr_key",
