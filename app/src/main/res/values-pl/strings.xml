@@ -3425,4 +3425,20 @@
     <string name="autosync_toast_failed_no_reference">Synchronizacja nie powiodła się: wideo nie zawiera osadzonych napisów do porównania.</string>
     <string name="autosync_toast_failed_unsupported">Synchronizacja nie powiodła się: ten format napisów nie jest obsługiwany.</string>
     <string name="autosync_label_synced">Zsynchronizowane automatycznie</string>
+
+    <string name="layout_detail_group_episodes">Odcinki</string>
+    <string name="layout_detail_group_metadata">Metadane</string>
+    <string name="layout_detail_group_trailers">Zwiastuny</string>
+    <string name="layout_trailer_pause_on_scroll">Pauza przy przewijaniu</string>
+    <string name="layout_trailer_pause_on_scroll_sub">Wstrzymaj zwiastun podczas przewijania i wznów po powrocie na górę.</string>
+    <string name="layout_trailer_play_in_background">Odtwarzaj w tle</string>
+    <string name="layout_trailer_play_in_background_sub">Odtwarzaj zwiastun w miejscu tła, gdy strona jest widoczna.</string>
+    <string name="library_sort_released_asc">Premiera ↑</string>
+    <string name="library_sort_released_desc">Premiera ↓</string>
+    <string name="mdblist_library_lists">Listy biblioteki</string>
+    <string name="mdblist_library_lists_description">Wybierz, które listy MDBList mają się pojawiać w Bibliotece i w Zarządzaj listami. Lista \"Do obejrzenia\" jest zawsze widoczna.</string>
+    <string name="mdblist_library_lists_empty">Nie znaleziono jeszcze list na Twoim koncie MDBList. Zsynchronizuj, aby je załadować.</string>
+    <string name="mdblist_library_lists_summary">%1$d z %2$d widocznych</string>
+    <string name="tracking_mdblist_features_subtitle">Ustawienia specyficzne dla MDBList</string>
+    <string name="tracking_mdblist_features_title">Funkcje MDBList</string>
 </resources>

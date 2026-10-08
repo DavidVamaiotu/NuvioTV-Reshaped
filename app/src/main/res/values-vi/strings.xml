@@ -824,7 +824,7 @@
     <string name="dv7_mode_auto">Tự động (khuyến nghị)</string>
     <string name="dv7_mode_auto_desc">Tự động nhận diện màn hình và chọn chế độ phù hợp nhất. Nếu gặp sự cố khi phát, vui lòng thử lớp nền HDR10.</string>
     <string name="dv7_mode_hdr10_base_layer">Lớp nền HDR10</string>
-    <string name="dv7_mode_hdr10_base_layer_desc">Bỏ qua dữ liệu nâng cao Dolby Vision. Có thể giúp trên các thiết bị hỗ trợ HDR nhưng gặp vấn đề với DV Profile 7.</string>
+    <string name="dv7_mode_hdr10_base_layer_desc">Bỏ qua dữ liệu nâng cao Dolby Vision. Có thể giúp ích trên các thiết bị hỗ trợ HDR nhưng gặp vấn đề với DV Profile 7.</string>
     <string name="dv7_mode_dv81_libdovi">Chuyển đổi sang DV8.1</string>
     <string name="dv7_mode_dv81_libdovi_desc">Chuyển DV7 sang DV8.1 một lớp. Yêu cầu thiết bị hiển thị hỗ trợ Dolby Vision.</string>
     <string name="dv7_mode_off">Tắt (gốc)</string>
@@ -1076,7 +1076,7 @@
     <string name="layout_trailer_play_in_background_sub">Phát trailer thay cho phông nền trong khi trang vẫn hiển thị.</string>
     <string name="layout_trailer_pause_on_scroll">Tạm dừng khi cuộn</string>
     <string name="layout_trailer_pause_on_scroll_sub">Tạm dừng trailer khi cuộn xuống và tiếp tục phát khi quay lại đầu trang.</string>
-    <string name="layout_detail_group_episodes">Các tập</string>
+    <string name="layout_detail_group_episodes">Tập phim</string>
     <string name="layout_detail_group_trailers">Trailer</string>
     <string name="layout_detail_group_metadata">Siêu dữ liệu</string>
     <string name="layout_prefer_external_meta">Ưu tiên siêu dữ liệu từ tiện ích bên ngoài</string>
@@ -1240,6 +1240,12 @@
     <string name="mdblist_dialog_placeholder">Nhập mã khóa API của MDBList</string>
     <string name="mdblist_not_set">Chưa đặt</string>
     <string name="mdblist_invalid_api_key">Mã khóa API của MDBList không hợp lệ</string>
+    <string name="mdblist_library_lists">Danh sách Thư viện</string>
+    <string name="mdblist_library_lists_description">Chọn danh sách MDBList nào xuất hiện trong Thư viện và trong quản lý danh sách. Danh sách Theo dõi luôn được hiển thị.</string>
+    <string name="mdblist_library_lists_empty">Không tìm thấy danh sách nào trong tài khoản MDBList của bạn. Đồng bộ để tải chúng.</string>
+    <string name="mdblist_library_lists_summary">%1$d trong số %2$d được hiển thị</string>
+    <string name="tracking_mdblist_features_title">Tính năng MDBList</string>
+    <string name="tracking_mdblist_features_subtitle">Cài đặt riêng cho MDBList</string>
 
     <string name="debrid_title">Dịch vụ liên kết</string>
     <string name="debrid_subtitle">Kết nối tài khoản để truy cập liên kết và thư viện nội dung</string>
@@ -2068,6 +2074,8 @@
     <string name="library_sort_provider_order">Thứ tự nhà cung cấp</string>
     <string name="library_sort_added_desc">Đã thêm ↓</string>
     <string name="library_sort_added_asc">Đã thêm ↑</string>
+    <string name="library_sort_released_desc">Đã phát hành ↓</string>
+    <string name="library_sort_released_asc">Đã phát hành ↑</string>
     <string name="library_sort_title_asc">Tên A-Z</string>
     <string name="library_sort_title_desc">Tên Z-A</string>
     <string name="library_error_sort_failed">Không thể tải thứ tự sắp xếp. Đang hiển thị theo thứ tự của nhà cung cấp.</string>
@@ -3354,7 +3362,7 @@
     <string name="autosync_tolerance_off">Tắt</string>
     <string name="autosync_tolerance_value">%1$d ms</string>
     <string name="autosync_thorough_title">Tìm kiếm tự động đồng bộ chính xác</string>
-    <string name="autosync_thorough_description">Tiếp tục so sánh các phụ đề khác với bản nhúng sẵn để tìm ra bản khớp chính xác hơn trước khi đồng bộ hóa. Khi tắt, ứng dụng sẽ sử dụng bản khớp chuẩn đầu tiên trước. Chỉ những bản khớp có độ tin cậy cao mới được áp dụng</string>
+    <string name="autosync_thorough_description">Tiếp tục so sánh các phụ đề khác với bản nhúng sẵn để tìm bản khớp hơn trước khi đồng bộ. Khi tắt, bản khớp đầu tiên sẽ được dùng ngay. Chỉ bản khớp có độ tin cậy cao mới được áp dụng</string>
     <string name="autosync_toast_failed">Đồng bộ thất bại: Tự động đồng bộ không thể khớp phụ đề này với video.</string>
     <string name="autosync_toast_failed_no_reference">Đồng bộ thất bại: video này không có phụ đề nhúng sẵn để so sánh.</string>
     <string name="autosync_toast_failed_unsupported">Đồng bộ thất bại: Tự động đồng bộ không hỗ trợ đồng bộ định dạng phụ đề này.</string>

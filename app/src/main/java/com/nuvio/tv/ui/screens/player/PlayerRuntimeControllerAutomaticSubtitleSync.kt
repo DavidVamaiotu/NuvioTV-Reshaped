@@ -79,6 +79,8 @@ internal fun PlayerRuntimeController.autoSyncExtractorsFactory(
         sourceKey = url,
         factory = AudioSyncTaps.wrapExtractors(delegate, url),
     )
+    AutoSyncPreferences.ensureLoaded(context)
+    if (!AutoSyncPreferences.isEnabled(context)) return tapped
     val factory = AutoSyncExtractorsFactory(delegate = tapped, sourceKey = url)
     prefetchAutoSyncIndex(url, headers)
     return factory
@@ -188,6 +190,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                 AutomaticSubtitleSync.downloadSubtitleBody(
                     url = selectedUrl,
                     headers = selectedSubtitle.headers.orEmpty(),
+                    languageHint = selectedSubtitle.lang,
                 )
             } catch (cancel: CancellationException) {
                 throw cancel

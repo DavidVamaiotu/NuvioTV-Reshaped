@@ -1570,6 +1570,8 @@
     <string name="library_sort_trakt_order">Ordem do Trakt</string>
     <string name="library_sort_added_desc">Adicionado ↓</string>
     <string name="library_sort_added_asc">Adicionado ↑</string>
+    <string name="library_sort_released_desc">Lançamento ↓</string>
+    <string name="library_sort_released_asc">Lançamento ↑</string>
     <string name="library_sort_title_asc">Título A-Z</string>
     <string name="library_sort_title_desc">Título Z-A</string>
     <string name="library_manage_lists">Gerir Listas</string>
