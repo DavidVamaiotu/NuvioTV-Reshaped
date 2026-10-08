@@ -503,15 +503,21 @@ internal class LiveTvPlayerState(
         stepScrub(direction, 0)
     }
 
-    /** Moves the picked time; ◀ at the bar's start reaches back to the show before. */
+    /**
+     * Moves the picked time; ◀ at the bar's start reaches back to the show before. A held ◀ stops
+     * at the start of a show (it would race on through the show before): a fresh press goes on.
+     */
     private fun stepScrub(direction: Int, repeatCount: Int) {
         val bar = scrub ?: return
         val now = LiveTvClock.nowEpochMs()
-        if (direction < 0 && bar.targetMs <= bar.fromMs) {
-            val earlier = LiveTvScrubSteps.rangeStart(LiveTvRepository.schedule(bar.channel.guideKey), bar.fromMs - 1, earliestMs(bar.channel, now))
+        val schedule = LiveTvRepository.schedule(bar.channel.guideKey)
+        if (direction < 0 && bar.targetMs <= bar.fromMs && repeatCount == 0) {
+            val earlier = LiveTvScrubSteps.rangeStart(schedule, bar.fromMs - 1, earliestMs(bar.channel, now))
             if (earlier < bar.fromMs) bar.fromMs = earlier
         }
-        bar.targetMs = (bar.targetMs + direction * LiveTvScrubSteps.stepMs(repeatCount)).coerceIn(bar.fromMs, now)
+        var target = bar.targetMs + direction * LiveTvScrubSteps.stepMs(repeatCount)
+        if (direction < 0 && repeatCount > 0) target = LiveTvScrubSteps.heldBackTo(schedule, bar.targetMs, target)
+        bar.targetMs = target.coerceIn(bar.fromMs, now)
         // A key held down again keeps the bar up.
         scrubJob?.cancel()
         scrubJob = null
