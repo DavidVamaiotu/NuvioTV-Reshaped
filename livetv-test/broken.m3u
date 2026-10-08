@@ -1,0 +1,18 @@
+﻿#EXTM3U url-tvg="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/missing/no-such-guide.xml,https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/guide-extra.xml"
+#EXTINF:-1 group-title="C Broken",Dead link (404)
+https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/missing/no-such-stream.m3u8
+#EXTINF:-1 group-title="C Broken",Unknown host
+https://nuvio-reshaped-test.invalid/live.m3u8
+#EXTINF:-1 group-title="C Broken",Web page, not a stream
+https://example.com/
+#EXTINF:-1 group-title="C Broken",##### SPORTS #####
+https://example.com/heading-should-be-hidden
+#EXTINF:-1 group-title="C Broken",Duplicate of the dead link (hidden)
+https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/missing/no-such-stream.m3u8
+#EXTINF:-1 group-title="C Broken",Relative link
+streams/relative.m3u8
+https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8#noextinf
+#EXTINF:-1 tvg-id="x.second" group-title="C Broken",Second Guide Channel (guide still loads)
+https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8#c1
+#EXTINF:-1 tvg-id="x.second" catchup="default" catchup-days="1" catchup-source="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/missing/no-such-stream.m3u8?utc={utc}" group-title="C Broken",Catch-up to a dead link
+https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8?nuvio=c2

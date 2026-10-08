@@ -1,0 +1,17 @@
+name: Live TV test playlist check
+# Only on this test-playlist branch: checks every stream and catch-up link the playlists use.
+on:
+  push:
+    branches: [claude/project-thread-5lm00k]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check links
+        run: |
+          python3 livetv-test/tools/check.py livetv-test/tools/check-urls.txt \
+            "https://raw.githubusercontent.com/${{ github.repository }}/refs/heads/${{ github.ref_name }}/livetv-test/" | tee -a "$GITHUB_STEP_SUMMARY"

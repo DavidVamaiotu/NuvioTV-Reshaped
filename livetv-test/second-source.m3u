@@ -1,0 +1,11 @@
+#EXTM3U x-tvg-url="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/guide-b.xml" catchup="default" catchup-days="2" catchup-source="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8?utc={utc}" tvg-shift="1"
+#EXTINF:-1 tvg-id="b.header" group-title="B Second source",Header Catch-up
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8?nuvio=b1
+#EXTINF:-1 tvg-id="b.days5" catchup-days="5" group-title="B Second source",Own Five Days
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8?nuvio=b2
+#EXTINF:-1 tvg-id="b.disabled" catchup="disabled" group-title="B Second source",Catch-up Disabled
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8?nuvio=b3
+#EXTINF:-1 tvg-id="b.noshift" tvg-shift="0" catchup="disabled" group-title="B Second source",No Shift Here
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8?nuvio=b4
+#EXTINF:-1 tvg-id="shared.nolist" tvg-shift="0" catchup="disabled" group-title="B Second source",Same link as Akamai Test Live
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8

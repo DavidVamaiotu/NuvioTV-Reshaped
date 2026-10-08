@@ -1,0 +1,137 @@
+#EXTM3U url-tvg="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/guide.xml.gz,https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/guide-extra.xml"
+#EXTINF:-1 tvg-id="live.akamai" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/live-akamai.png" group-title="1 Live streams",Akamai Test Live
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8
+#EXTINF:-1 tvg-id="live.usp" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/live-usp.png" group-title="1 Live streams",Unified Streaming Live
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#live-usp
+#EXTINF:-1 tvg-id="live.usp_scte" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/live-usp_scte.png" group-title="1 Live streams",Unified Streaming Ads Live
+https://demo.unified-streaming.com/k8s/live/stable/scte35.isml/.m3u8#live-usp_scte
+#EXTINF:-1 tvg-id="live.usp_http" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/live-usp_http.png" group-title="1 Live streams",Plain HTTP Live
+http://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#live-usp_http
+#EXTINF:-1 tvg-id="live.dash" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/live-dash.png" group-title="1 Live streams",DASH Live Sim
+https://livesim2.dashif.org/livesim2/testpic_2s/Manifest.mpd#live-dash
+#EXTINF:-1 tvg-id="live.dw" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/live-dw.png" group-title="1 Live streams",DW English
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#live-dw
+#EXTINF:-1 tvg-id="live.aje" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/live-aje.png" group-title="1 Live streams",Al Jazeera English
+https://live-hls-web-aje.getaj.net/AJE/index.m3u8#live-aje
+#EXTINF:-1 tvg-id="live.redbull" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/live-redbull.png" group-title="1 Live streams",Red Bull TV
+https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8#live-redbull
+#EXTINF:-1 tvg-id="cu.default" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-default.png" group-title="2 Catch-up" catchup="default" catchup-days="7" catchup-source="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8?utc={utc}&end={utcend}&d={duration}",Catch-up · Default 7 days (HLS film)
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8?nuvio=cu1
+#EXTINF:-1 tvg-id="cu.mp4" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-mp4.png" group-title="2 Catch-up" catchup="default" catchup-days="3" catchup-source="https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4?start=${start}&dur={duration:60}",Catch-up · Default 3 days (MP4 film)
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8?nuvio=cu2
+#EXTINF:-1 tvg-id="cu.append" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-append.png" group-title="2 Catch-up" catchup="append" catchup-days="2" catchup-source="&utc={utc}&lutc={lutc}",Catch-up · Append (live server)
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8?nuvio=cu3
+#EXTINF:-1 tvg-id="cu.shift" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-shift.png" group-title="2 Catch-up" catchup="shift" catchup-days="1",Catch-up · Shift utc/lutc (live server)
+https://demo.unified-streaming.com/k8s/live/stable/scte35.isml/.m3u8?nuvio=cu4
+#EXTINF:-1 tvg-id="cu.flussonic" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-flussonic.png" group-title="2 Catch-up" catchup="flussonic" catchup-days="1",Catch-up · Flussonic (should fail)
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8?nuvio=cu5
+#EXTINF:-1 tvg-id="cu.tvgrec" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-tvgrec.png" group-title="2 Catch-up" tvg-rec="2",Catch-up · tvg-rec 2 days
+https://live-hls-web-aje.getaj.net/AJE/index.m3u8?nuvio=cu6
+#EXTINF:-1 tvg-id="cu.14days" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-14days.png" group-title="2 Catch-up" catchup="default" catchup-days="14" catchup-source="https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8?from={utc}&to={utcend}",Catch-up · 14 days (app keeps 7)
+https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8?nuvio=cu7
+#EXTINF:-1 tvg-id="cu.formatted" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-formatted.png" group-title="2 Catch-up" catchup="default" catchup-days="7" catchup-source="https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8?day={Y}-{m}-{d}&at={H}{M}{S}&utcdate={utc:Y-m-dTH:M:SZ}&ago={offset:60}",Catch-up · Date template (TS film)
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8?nuvio=cu8
+#EXTINF:-1 tvg-id="cu.dvr" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-dvr.png" group-title="2 Catch-up" catchup="append" catchup-days="1" catchup-source="?vbegin={utc:Y-m-dTH:M:SZ}&vend={utcend:Y-m-dTH:M:SZ}",Catch-up · Real archive, last minutes
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8
+#EXTINF:-1 tvg-id="cu.relative" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-relative.png" group-title="2 Catch-up" catchup="default" catchup-days="1" catchup-source="?archive={utc}-{duration}",Catch-up · Relative template
+https://demo.unified-streaming.com/k8s/live/stable/scte35.isml/.m3u8
+#EXTINF:-1 tvg-id="cu.dash" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/cu-dash.png" group-title="2 Catch-up" catchup="default" catchup-days="2" catchup-source="https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd?utc={utc}",Catch-up · DASH film
+https://livesim2.dashif.org/livesim2/testpic_2s/Manifest.mpd?nuvio=cu11
+#EXTINF:-1 tvg-id="tz.offset" group-title="3 Guide time formats",Time · +0300 offset
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t0
+#EXTINF:-1 tvg-id="tz.utc" group-title="3 Guide time formats",Time · +0000
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t1
+#EXTINF:-1 tvg-id="tz.z" group-title="3 Guide time formats",Time · Z suffix
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t2
+#EXTINF:-1 tvg-id="tz.colon" group-title="3 Guide time formats",Time · +03:00 colon
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t3
+#EXTINF:-1 tvg-id="tz.nospace" group-title="3 Guide time formats",Time · no space +0300
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t4
+#EXTINF:-1 tvg-id="tz.noseconds" group-title="3 Guide time formats",Time · no seconds
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t5
+#EXTINF:-1 tvg-id="tz.fraction" group-title="3 Guide time formats",Time · .000 fraction
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t6
+#EXTINF:-1 tvg-id="tz.region" group-title="3 Guide time formats",Time · Europe/Bucharest name
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t7
+#EXTINF:-1 tvg-id="tz.local" group-title="3 Guide time formats",Time · no offset (TV time)
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t8
+#EXTINF:-1 tvg-id="tz.newyork" group-title="3 Guide time formats",Time · New York -0400
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t9
+#EXTINF:-1 tvg-id="tz.shift2" group-title="3 Guide time formats" tvg-shift="+2",Time · tvg-shift +2
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t10
+#EXTINF:-1 tvg-id="tz.shiftm15" group-title="3 Guide time formats" tvg-shift="-1.5",Time · tvg-shift -1.5
+https://demo.unified-streaming.com/k8s/live/stable/live.isml/.m3u8#t11
+#EXTINF:-1 tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/m-byname.png" group-title="4 Guide matching",RO: Matching Name HD
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m0
+#EXTINF:-1 tvg-name="Alias Guide Name" group-title="4 Guide matching",Some Shown Name
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m1
+#EXTINF:-1 group-title="4 Guide matching",Télé Ünïcode
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m2
+#EXTINF:-1 tvg-id="één.be" group-title="4 Guide matching",Een (accented id)
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m3
+#EXTINF:-1 tvg-id="m.idwins" group-title="4 Guide matching",Matching Decoy
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m4
+#EXTINF:-1 group-title="4 Guide matching",Plus Channel +1
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m5
+#EXTINF:-1 group-title="4 Guide matching",UK: Country News
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m6
+#EXTINF:-1 tvg-id="CaseTest.ID" group-title="4 Guide matching",Case Test
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m7
+#EXTINF:-1 tvg-id="m.logo" group-title="4 Guide matching",Logo From Guide
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m8
+#EXTINF:-1 tvg-id="" group-title="4 Guide matching",Empty Id Channel
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m9
+#EXTINF:-1 tvg-id="noelement.test" group-title="4 Guide matching",No Channel Element
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m10
+#EXTINF:-1 tvg-id="x.interleaved" group-title="4 Guide matching",Interleaved Channel
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m11
+#EXTINF:-1 tvg-id="x.second" group-title="4 Guide matching",Second Guide Channel
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m12
+#EXTINF:-1 tvg-id="missing.none" group-title="4 Guide matching",No Guide At All
+https://cph-p2p-msl.akamaized.net/hls/live/2000341/test/master.m3u8#m13
+#EXTINF:-1 tvg-id="s.short" group-title="5 Guide shapes",Shapes · very short programmes
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#s0
+#EXTINF:-1 tvg-id="s.long" group-title="5 Guide shapes",Shapes · 6 hour programmes
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#s1
+#EXTINF:-1 tvg-id="s.gaps" group-title="5 Guide shapes",Shapes · gaps
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#s2
+#EXTINF:-1 tvg-id="s.overlap" group-title="5 Guide shapes",Shapes · overlaps
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#s3
+#EXTINF:-1 tvg-id="s.nostop" group-title="5 Guide shapes",Shapes · no stop times
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#s4
+#EXTINF:-1 tvg-id="s.repeat" group-title="5 Guide shapes",Shapes · same show repeated
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#s5
+#EXTINF:-1 tvg-id="s.details" group-title="5 Guide shapes",Shapes · rich details
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#s6
+#EXTINF:-1 tvg-id="s.runsout" group-title="5 Guide shapes",Shapes · guide runs out in 3 h
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#s7
+#EXTINF:-1 tvg-id="s.future" group-title="5 Guide shapes",Shapes · starts in 2 h
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#s8
+#EXTINF:-1 tvg-id="h.pipe" group-title="6 Links and headers",Kodi pipe headers
+https://live-hls-web-aje.getaj.net/AJE/index.m3u8#h0|User-Agent=NuvioReshapedTest/1.0&Referer=https%3A%2F%2Fexample.com%2F
+#EXTINF:-1 tvg-id="h.vlcopt" group-title="6 Links and headers",VLC options headers
+#EXTVLCOPT:http-user-agent=NuvioReshapedTest/1.0
+#EXTVLCOPT:http-referrer=https://example.com/
+https://live-hls-web-aje.getaj.net/AJE/index.m3u8#h1
+#EXTINF:-1 tvg-id="h.exthttp" group-title="6 Links and headers",EXTHTTP headers
+#EXTHTTP:{"User-Agent":"Mozilla/5.0 (KHTML, like Gecko) NuvioTest","Origin":"https://example.com"}
+https://live-hls-web-aje.getaj.net/AJE/index.m3u8#h2
+#EXTINF:-1 tvg-id="h.extgrp",Group from EXTGRP
+#EXTGRP:6 Links and headers
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#h3
+#EXTINF:-1 tvg-id="h.comma" group-title="6 Links and headers",News, Weather & Sport (comma in name)
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#h4
+#EXTINF:-1 tvg-id="h.long" group-title="6 Links and headers",A very long channel name that goes on and on to check how the guide column cuts it off
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8#h5
+#EXTINF:-1 tvg-id="h.badlogo" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/missing.png" group-title="6 Links and headers",Broken logo link
+https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8#h6
+#EXTINF:-1 tvg-id="h.nologo" group-title="6 Links and headers",No logo
+https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8#h7
+#EXTINF:-1 tvg-id="h.mp4" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/h-mp4.png" group-title="6 Links and headers",MP4 file as a channel
+https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4
+#EXTINF:-1 tvg-id="h.vod" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/h-vod.png" group-title="6 Links and headers",HLS film as a channel
+https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8
+#EXTINF:-1 tvg-id="h.dashvod" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/h-dashvod.png" group-title="6 Links and headers",DASH film as a channel
+https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd
+#EXTINF:-1 tvg-id="h.ts" tvg-logo="https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/refs/heads/claude/project-thread-5lm00k/livetv-test/logos/h-ts.png" group-title="6 Links and headers",TS segments HLS (Apple)
+https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8
