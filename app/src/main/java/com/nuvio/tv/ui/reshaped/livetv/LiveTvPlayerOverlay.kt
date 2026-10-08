@@ -142,8 +142,12 @@ internal class LiveTvPlayerState(
     internal var panelReturnUrl: String? = null
         private set
 
+    /** Whether the day column beside the programmes has the focus (▶ from the programmes). */
+    var programmeDaysFocused by mutableStateOf(false)
+
     private fun openProgrammes() {
         val url = panelFocusedUrl ?: currentListUrl
+        programmeDaysFocused = false
         programmesChannel = panelChannels.firstOrNull { it.streamUrl == url } ?: return
     }
 
@@ -151,6 +155,7 @@ internal class LiveTvPlayerState(
     internal fun closeProgrammes() {
         val channel = programmesChannel ?: return
         panelReturnUrl = channel.streamUrl
+        programmeDaysFocused = false
         programmesChannel = null
     }
 
@@ -228,15 +233,25 @@ internal class LiveTvPlayerState(
         if (panelOpen && programmesChannel != null) {
             return when (event.keyCode) {
                 // Back to the channels, on the channel whose programmes these are.
+                // From the days, back to the programmes first.
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE -> {
-                    if (!down) closeProgrammes()
+                    if (!down) {
+                        if (programmeDaysFocused) programmeDaysFocused = false else closeProgrammes()
+                    }
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    if (down && event.repeatCount == 0) closeProgrammes()
+                    if (down && event.repeatCount == 0) {
+                        if (programmeDaysFocused) programmeDaysFocused = false else closeProgrammes()
+                    }
                     true
                 }
-                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> true
+                // ▶ to the day column, when the programmes span more than one day.
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (down && event.repeatCount == 0) programmeDaysFocused = true
+                    true
+                }
+                KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> true
                 else -> false // the list handles the rest
             }
         }

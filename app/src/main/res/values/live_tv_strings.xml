@@ -92,6 +92,10 @@
     <string name="live_tv_player_channels">Channels</string>
     <string name="live_tv_player_categories_hint">◀ Categories  ·  ▶ Guide</string>
     <string name="live_tv_player_programmes_hint">◀ Channels  ·  OK Watch</string>
+    <string name="live_tv_player_programmes_days_hint">◀ Channels  ·  ▶ Days  ·  OK Watch</string>
+    <string name="live_tv_day_today">Today</string>
+    <string name="live_tv_day_yesterday">Yesterday</string>
+    <string name="live_tv_day_tomorrow">Tomorrow</string>
     <string name="live_tv_player_hint">▲▼ Switch channel  ·  ◀ Channel list  ·  OK Info</string>
     <string name="live_tv_info_hint">OK Controls  ·  ◀ Channel list  ·  ▲▼ Switch channel</string>
     <string name="live_tv_info_hint_start_over">OK Controls  ·  Hold OK Start over  ·  ◀ Channel list  ·  ▲▼ Switch channel</string>
