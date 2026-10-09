@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -189,20 +190,29 @@ private fun NetflixHomeContent(
             override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = 0f
         }
     }
-    // Lazy index of the focused row (-1: the billboard or nothing).
-    val focusedListIndex = remember { mutableIntStateOf(-1) }
+    // Lazy key of the focused row (null: the billboard or nothing). Followed by key, not index:
+    // rows that finish loading empty vanish from the page, shifting every index below them.
+    val focusedListKey = remember { mutableStateOf<Any?>(null) }
+    // The page's item keys as last composed, for finding a followed row that is off screen.
+    val listKeys = remember { mutableStateOf<List<Any>>(emptyList()) }
 
     val isFastScrollingState = remember { mutableStateOf(false) }
     LaunchedEffect(columnListState) {
         // Shared across targets, so a held Down keeps gliding instead of stopping at every row.
         val velocity = floatArrayOf(0f)
-        snapshotFlow { focusedListIndex.intValue }.collectLatest { target ->
-            if (target < 0) {
+        snapshotFlow { focusedListKey.value }.collectLatest { target ->
+            if (target == null) {
                 velocity[0] = 0f
                 return@collectLatest
             }
             try {
-                followRowToTop(columnListState, target, velocity, isFastScrolling = { isFastScrollingState.value })
+                followRowToTop(
+                    columnListState,
+                    target,
+                    indexOf = { listKeys.value.indexOf(target) },
+                    velocityHolder = velocity,
+                    isFastScrolling = { isFastScrollingState.value }
+                )
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 // Another scroll (held D-pad, scroll to top) took over; wait for the next row.
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
@@ -271,6 +281,9 @@ private fun NetflixHomeContent(
     val visibleHomeRows = remember(uiState.homeRows, uiState.catalogRows) {
         netflixHomeRows(uiState.homeRows, uiState.catalogRows)
     }
+    // Each row's lazy key: its catalog's own key, numbered only when a catalog repeats, so a row
+    // keeps its key (and its focus and scroll) when rows above it come or go.
+    val homeRowKeys = remember(visibleHomeRows) { netflixRowKeys(visibleHomeRows) }
     val visibleRowKeys = remember(visibleHomeRows) {
         visibleHomeRows.mapTo(mutableSetOf()) { row ->
             when (row) {
@@ -428,7 +441,13 @@ private fun NetflixHomeContent(
     val heroCount = if (heroVisible) 1 else 0
     val cwCount = if (uiState.continueWatchingEnabled && uiState.continueWatchingItems.isNotEmpty()) 1 else 0
     val upcomingCount = if (uiState.continueWatchingEnabled && uiState.upcomingItems.isNotEmpty()) 1 else 0
-    val rowsStart = heroCount + cwCount + upcomingCount
+    val pageKeys = buildList<Any> {
+        if (heroVisible) add(HERO_KEY)
+        if (cwCount > 0) add(CW_KEY)
+        if (upcomingCount > 0) add(UPCOMING_KEY)
+        addAll(homeRowKeys)
+    }
+    SideEffect { listKeys.value = pageKeys }
     CompositionLocalProvider(LocalBringIntoViewSpec provides verticalSpec) {
         LazyColumn(
             state = columnListState,
@@ -461,7 +480,7 @@ private fun NetflixHomeContent(
                             k == null -> null
                             k == HERO_KEY -> heroFocusRequester
                             rowFocusRequesters.containsKey(k) -> rowFocusRequesters[k]
-                            else -> rowFocusRequesters[k.substringBeforeLast('_')]
+                            else -> rowFocusRequesters[k.substringBeforeLast('#')]
                         }
                         val requester = target?.let { requesterForKey(it.key as? String) }
                             ?: visibleItems.firstNotNullOfOrNull { requesterForKey(it.key as? String) }
@@ -489,7 +508,7 @@ private fun NetflixHomeContent(
                         onActiveIndexChanged = { savedHeroIndex.intValue = it },
                         onFocused = { item ->
                             billboardFocused = true
-                            focusedListIndex.intValue = -1
+                            focusedListKey.value = null
                             snapshot.rowIndex = -2
                             snapshot.itemIndex = 0
                             snapshot.rowKey = HERO_KEY
@@ -528,7 +547,7 @@ private fun NetflixHomeContent(
                             snapshot.rowIndex = -1
                             snapshot.itemIndex = itemIndex
                             snapshot.rowKey = CW_KEY
-                            focusedListIndex.intValue = heroCount
+                            focusedListKey.value = CW_KEY
                             activeRowKeyState.value = CW_KEY
                             cwFocusedIndex.intValue = itemIndex
                             onFocusedRowKeyChanged(null)
@@ -575,7 +594,7 @@ private fun NetflixHomeContent(
                             snapshot.rowIndex = -1
                             snapshot.itemIndex = itemIndex
                             snapshot.rowKey = UPCOMING_KEY
-                            focusedListIndex.intValue = heroCount + cwCount
+                            focusedListKey.value = UPCOMING_KEY
                             activeRowKeyState.value = UPCOMING_KEY
                             cwFocusedIndex.intValue = itemIndex
                             onFocusedRowKeyChanged(null)
@@ -591,13 +610,7 @@ private fun NetflixHomeContent(
 
             itemsIndexed(
                 items = visibleHomeRows,
-                key = { index, item ->
-                    when (item) {
-                        is HomeRow.Catalog -> "${item.row.stableKey()}_$index"
-                        is HomeRow.CollectionRow -> "collection_${item.collection.id}"
-                        is HomeRow.PlaceholderCatalog -> "${item.stableCatalogKey}_$index"
-                    }
-                },
+                key = { index, _ -> homeRowKeys[index] },
                 contentType = { _, item ->
                     when (item) {
                         is HomeRow.Catalog, is HomeRow.PlaceholderCatalog -> "netflix_row"
@@ -657,7 +670,7 @@ private fun NetflixHomeContent(
                                     snapshot.itemIndex = itemIndex
                                     snapshot.rowKey = catalogKey
                                     billboardFocused = false
-                                    focusedListIndex.intValue = rowsStart + index
+                                    focusedListKey.value = homeRowKeys.getOrNull(index)
                                     activeRowKeyState.value = catalogKey
                                     onFocusedRowKeyChanged(catalogKey)
                                     rowFocusedItemIndex[catalogKey] = itemIndex
@@ -686,7 +699,7 @@ private fun NetflixHomeContent(
                                 snapshot.rowIndex = index
                                 snapshot.itemIndex = itemIndex
                                 snapshot.rowKey = collectionKey
-                                focusedListIndex.intValue = rowsStart + index
+                                focusedListKey.value = homeRowKeys.getOrNull(index)
                                 activeRowKeyState.value = collectionKey
                                 onFocusedRowKeyChanged(null)
                                 rowFocusedItemIndex[collectionKey] = itemIndex
@@ -724,7 +737,8 @@ private fun ContinueWatchingItem.remove(onRemove: (String, Int?, Int?, Boolean) 
  */
 private suspend fun followRowToTop(
     listState: androidx.compose.foundation.lazy.LazyListState,
-    index: Int,
+    key: Any,
+    indexOf: () -> Int,
     velocityHolder: FloatArray,
     isFastScrolling: () -> Boolean,
 ) {
@@ -743,12 +757,13 @@ private suspend fun followRowToTop(
             continue
         }
         val layoutInfo = listState.layoutInfo
-        if (index >= layoutInfo.totalItemsCount) return // the row went away
         val visible = layoutInfo.visibleItemsInfo
-        val info = visible.firstOrNull { it.index == index }
+        val info = visible.firstOrNull { it.key == key }
         val error = if (info != null) {
             info.offset.toFloat()
         } else {
+            val index = indexOf()
+            if (index < 0 || index >= layoutInfo.totalItemsCount) return // the row went away
             // Just off screen (the row above sits beyond the band): head for it with an estimate,
             // so it glides in like any other row; real offsets take over once it shows.
             val first = visible.firstOrNull()
@@ -786,6 +801,21 @@ private const val FOLLOW_MAX_GLIDE_ROWS = 3
 
 /** The rows' details open and fold over about this long; keep following until then. */
 private const val FOLLOW_MIN_NANOS = 450_000_000L
+
+/** Lazy keys for [rows]: a catalog's own key, with "#n" added only to its repeats. */
+internal fun netflixRowKeys(rows: List<HomeRow>): List<String> {
+    val seen = HashMap<String, Int>()
+    return rows.map { row ->
+        val base = when (row) {
+            is HomeRow.Catalog -> row.row.stableKey()
+            is HomeRow.CollectionRow -> "collection_${row.collection.id}"
+            is HomeRow.PlaceholderCatalog -> row.stableCatalogKey
+        }
+        val repeat = seen.getOrDefault(base, 0)
+        seen[base] = repeat + 1
+        if (repeat == 0) base else "$base#$repeat"
+    }
+}
 
 private class FloatHolderDelegate(private val holder: FloatArray) {
     operator fun getValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>): Float = holder[0]
