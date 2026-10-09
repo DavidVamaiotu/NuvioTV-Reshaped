@@ -1,1 +1,1 @@
-- Netflix-style Home: fixed the page jumping between rows, mostly when scrolling down. Rows whose catalog loads empty or fails disappear from Home, and that made the page lose track of the row you were on. It now stays on your row whatever loads or disappears around it.
+- Netflix-style Home: fixed the page swinging and jumping between rows. When the TV was busy (frames slower than about 25 per second), the row-to-row scroll overshot further on every frame. It now follows the same smooth path however slow the frames are.
