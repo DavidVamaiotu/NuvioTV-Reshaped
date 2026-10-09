@@ -1,3 +1,3 @@
-- New: Netflix-style Home, off by default (Settings > Nuvio Reshaped > Netflix-style Home). A rounded billboard on top with the featured title's colour behind it, and rows whose focused title widens into its wide artwork with its details underneath. Moving along a row slides the next card open as focus reaches it; holding ◀▶ glides over posters. Only the look changes: same rows, add-ons, actions and settings.
-- With it on, the pill menu is always on, stays at the top on Home and Search, and is clear glass with sharper labels.
-- Everything from Tester build 1 on Nuvio TV 1.1.0-beta.5 is included.
+- Netflix-style Home: every add-on row now shows. With Nuvio's Modern layout set underneath, rows that weren't loaded yet were skipped; they now load as you scroll near them.
+- Netflix-style Home: the featured title's art fills the top of the screen behind the pill and fades into the rows.
+- Netflix-style Home: smoother moves between rows, and the next titles' wide art is loaded ahead so cards open onto their art instead of a grey box. The poster no longer stretches as a card widens.
