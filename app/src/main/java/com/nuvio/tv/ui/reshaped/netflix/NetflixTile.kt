@@ -1,14 +1,7 @@
 package com.nuvio.tv.ui.reshaped.netflix
 
-import android.view.KeyEvent as AndroidKeyEvent
 import android.content.Context
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.unit.Density
-import coil3.size.Scale
-import kotlinx.coroutines.launch
+import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -59,6 +52,8 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import coil3.size.Scale
+import androidx.compose.ui.unit.Density
 import com.nuvio.tv.domain.model.MetaPreview
 import com.nuvio.tv.domain.model.PLACEHOLDER_IMAGE_URL
 import com.nuvio.tv.ui.components.TrailerPlayer
@@ -120,7 +115,6 @@ internal fun NetflixTile(
         with(density) { collapsedWidth.roundToPx() to NetflixTokens.tileHeight.roundToPx() }
     }
     val artworkSize = remember(density) { netflixArtworkSizePx(density) }
-    val logoSize = remember(density) { netflixLogoSizePx(density) }
     val posterModel = remember(item.poster, posterSize) {
         ImageRequest.Builder(context)
             .data(item.poster)
@@ -131,7 +125,6 @@ internal fun NetflixTile(
     // landscapePoster usually carries the title baked into the art; a plain backdrop gets the logo on top.
     val artworkUrl = item.netflixArtworkUrl()
     val artworkHasTitle = !item.landscapePoster.isNullOrBlank()
-    val artScope = rememberCoroutineScope()
 
     Card(
         onClick = {
@@ -205,36 +198,12 @@ internal fun NetflixTile(
                 )
                 return@Box
             }
-            val wide = showArtwork && item.netflixHasWideArtwork()
-            val reveal = { netflixArtReveal(expansion()) }
-            // Wide art still loading when the tile opens fades in once it arrives, never pops.
-            // Forgotten when the tile folds, so a reopened tile waits for its art again.
-            val artArrived = if (wide) remember(artworkUrl) { Animatable(0f) } else null
-            if (wide && !item.poster.isNullOrBlank()) {
-                // Under everything while the tile opens: the poster's own colours, dimmed, at the
-                // final width, so the widening space is never an empty box if the art is late.
-                AsyncImage(
-                    model = posterModel,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .wrapContentWidth(align = Alignment.Start, unbounded = true)
-                        .requiredWidth(NetflixTokens.tileExpandedWidth)
-                        .graphicsLayer { alpha = reveal() * (1f - (artArrived?.value ?: 0f)) }
-                        .drawWithContent {
-                            drawContent()
-                            drawRect(Color.Black.copy(alpha = 0.55f))
-                        }
-                )
-            }
             if (!item.poster.isNullOrBlank()) {
-                // Always drawn at its own size at the left edge: the poster never stretches as the tile widens.
                 AsyncImage(
                     model = posterModel,
                     contentDescription = item.name,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxHeight().width(collapsedWidth)
+                    modifier = Modifier.fillMaxSize()
                 )
             } else {
                 Text(
@@ -248,52 +217,31 @@ internal fun NetflixTile(
                 )
             }
 
-            if (artArrived != null) {
+            if (showArtwork && item.netflixHasWideArtwork()) {
                 // Drawn at its final width and revealed by the widening tile, so the art never rescales.
                 Box(
                     modifier = Modifier
                         .fillMaxHeight()
                         .wrapContentWidth(align = Alignment.Start, unbounded = true)
                         .requiredWidth(NetflixTokens.tileExpandedWidth)
-                        .graphicsLayer { alpha = reveal() * artArrived.value }
+                        .graphicsLayer { alpha = ((expansion() - 0.15f) / 0.6f).coerceIn(0f, 1f) }
                 ) {
                     if (!artworkUrl.isNullOrBlank()) {
                         val artworkModel = remember(artworkUrl, artworkSize) {
                             netflixArtworkRequest(context, artworkUrl, artworkSize)
                         }
+                        // No backdrop of its own: until the art is there, the poster underneath shows.
                         AsyncImage(
                             model = artworkModel,
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
-                            onSuccess = {
-                                artScope.launch {
-                                    // Already in memory (preloaded) or arriving before the art shows: no fade.
-                                    if (netflixArtReveal(expansion()) < 0.05f) artArrived.snapTo(1f)
-                                    else artArrived.animateTo(1f, tween(NetflixTokens.ART_ARRIVE_MS))
-                                }
-                            },
                             modifier = Modifier.fillMaxSize()
                         )
                     }
                     if (!artworkHasTitle) {
-                        NetflixTileTitle(
-                            item = item,
-                            logoModel = item.logo?.takeIf { it.isNotBlank() }?.let { logo ->
-                                remember(logo, logoSize) { netflixLogoRequest(context, logo, logoSize) }
-                            },
-                            modifier = Modifier.align(Alignment.BottomStart)
-                        )
+                        NetflixTileTitle(item = item, modifier = Modifier.align(Alignment.BottomStart))
                     }
-                }
-                if (trailerEnabled && trailerArmed && isFocused && trailerUrl != null) {
-                    // Its own layer: a trailer plays even when the title's art failed to load.
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .wrapContentWidth(align = Alignment.Start, unbounded = true)
-                            .requiredWidth(NetflixTokens.tileExpandedWidth)
-                            .graphicsLayer { alpha = reveal() }
-                    ) {
+                    if (trailerEnabled && trailerArmed && isFocused && trailerUrl != null) {
                         NetflixTileTrailer(
                             trailerUrl = trailerUrl,
                             trailerAudioUrl = trailerAudioUrl,
@@ -313,7 +261,7 @@ internal fun NetflixTile(
 
 /** Logo (or the name when there is none) over a soft bottom shade, as on Netflix's wide tiles. */
 @Composable
-private fun NetflixTileTitle(item: MetaPreview, logoModel: ImageRequest?, modifier: Modifier = Modifier) {
+private fun NetflixTileTitle(item: MetaPreview, modifier: Modifier = Modifier) {
     val shade = remember {
         Brush.verticalGradient(0f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.72f))
     }
@@ -324,9 +272,9 @@ private fun NetflixTileTitle(item: MetaPreview, logoModel: ImageRequest?, modifi
             .background(shade)
     ) {
         var logoFailed by remember(item.logo) { mutableStateOf(false) }
-        if (logoModel != null && !logoFailed) {
+        if (!item.logo.isNullOrBlank() && !logoFailed) {
             AsyncImage(
-                model = logoModel,
+                model = item.logo,
                 contentDescription = item.name,
                 contentScale = ContentScale.Fit,
                 alignment = Alignment.BottomStart,
@@ -334,8 +282,8 @@ private fun NetflixTileTitle(item: MetaPreview, logoModel: ImageRequest?, modifi
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(start = 14.dp, bottom = 12.dp)
-                    .widthIn(max = NETFLIX_TILE_LOGO_WIDTH)
-                    .heightIn(max = NETFLIX_TILE_LOGO_HEIGHT)
+                    .widthIn(max = 200.dp)
+                    .heightIn(max = 64.dp)
             )
         } else {
             Text(
@@ -381,24 +329,12 @@ private fun isSelectKey(keyCode: Int): Boolean =
         keyCode == AndroidKeyEvent.KEYCODE_ENTER ||
         keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
 
-/**
- * How much of a tile's wide art shows at expansion [e]: nothing for the first moment of the
- * widening, then an ease-in-out ramp that is fully opaque a little before the tile is fully wide.
- */
-internal fun netflixArtReveal(e: Float): Float {
-    val t = ((e - 0.08f) / 0.62f).coerceIn(0f, 1f)
-    return t * t * (3f - 2f * t)
-}
-
 /** A tile's wide art: its landscape poster, else its backdrop. */
 internal fun MetaPreview.netflixArtworkUrl(): String? =
     landscapePoster?.takeIf { it.isNotBlank() } ?: background?.takeIf { it.isNotBlank() }
 
 internal fun netflixArtworkSizePx(density: Density): Pair<Int, Int> =
     with(density) { NetflixTokens.tileExpandedWidth.roundToPx() to NetflixTokens.tileHeight.roundToPx() }
-
-internal fun netflixLogoSizePx(density: Density): Pair<Int, Int> =
-    with(density) { NETFLIX_TILE_LOGO_WIDTH.roundToPx() to NETFLIX_TILE_LOGO_HEIGHT.roundToPx() }
 
 /**
  * The wide art request. The tile and the row's preloader build it here, identically and with
@@ -415,18 +351,3 @@ internal fun netflixArtworkRequest(context: Context, url: String, sizePx: Pair<I
 
 internal fun netflixArtworkCacheKey(url: String, sizePx: Pair<Int, Int>): String =
     "netflix_art_${url}_${sizePx.first}x${sizePx.second}"
-
-/** The logo drawn over a wide backdrop without a title, shared with the preloader like the art. */
-internal fun netflixLogoRequest(context: Context, url: String, sizePx: Pair<Int, Int>): ImageRequest =
-    ImageRequest.Builder(context)
-        .data(url)
-        .memoryCacheKey(netflixLogoCacheKey(url, sizePx))
-        .size(sizePx.first, sizePx.second)
-        .scale(Scale.FIT)
-        .build()
-
-internal fun netflixLogoCacheKey(url: String, sizePx: Pair<Int, Int>): String =
-    "netflix_logo_${url}_${sizePx.first}x${sizePx.second}"
-
-private val NETFLIX_TILE_LOGO_WIDTH = 200.dp
-private val NETFLIX_TILE_LOGO_HEIGHT = 64.dp
