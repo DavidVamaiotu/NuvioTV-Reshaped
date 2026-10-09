@@ -749,7 +749,7 @@ private suspend fun followRowToTop(
     var jumps = 0
     while (true) {
         val frame = withFrameNanos { it }
-        val dt = if (lastFrame == 0L) 1f / 60f else ((frame - lastFrame) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
+        val dt = if (lastFrame == 0L) 1f / 60f else ((frame - lastFrame) / 1_000_000_000f).coerceIn(0.001f, 0.1f)
         if (lastFrame != 0L) elapsedNanos += frame - lastFrame
         lastFrame = frame
         if (isFastScrolling()) {
@@ -788,8 +788,15 @@ private suspend fun followRowToTop(
             if (error != 0f) listState.scrollBy(error)
             return
         }
-        velocity += (omega * omega * error - 2f * omega * velocity) * dt
-        val delta = velocity * dt
+        // Exact step of the critically damped spring over dt. A plain Euler step here went
+        // unstable once frames took longer than about 40 ms (a busy TV): every step overshot
+        // further than the last, so the page swung up and down with growing jumps.
+        val decay = kotlin.math.exp(-omega * dt)
+        val errorRate = -velocity
+        val b = errorRate + omega * error
+        val nextError = (error + b * dt) * decay
+        velocity = -(errorRate - omega * b * dt) * decay
+        val delta = error - nextError
         val consumed = listState.scrollBy(delta)
         // Top or bottom of the page: nothing left to move.
         if (kotlin.math.abs(delta) > 0.5f && kotlin.math.abs(consumed) < 0.01f && elapsedNanos > FOLLOW_MIN_NANOS) return
