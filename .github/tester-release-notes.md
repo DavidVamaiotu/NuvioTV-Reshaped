@@ -1,3 +1,4 @@
 - Netflix-style Home: every add-on row now shows. With Nuvio's Modern layout set underneath, rows that weren't loaded yet were skipped; they now load as you scroll near them.
 - Netflix-style Home: the featured title's art fills the top of the screen behind the pill and fades into the rows.
 - Netflix-style Home: smoother moves between rows, and the next titles' wide art is loaded ahead so cards open onto their art instead of a grey box. The poster no longer stretches as a card widens.
+- Player: scrub previews show each frame at once instead of sliding to it, so fast scrubbing no longer leaves the strip off centre.
