@@ -247,17 +247,19 @@ private fun NetflixHomeContent(
     val contentHasFocus = remember { mutableStateOf(false) }
     val cwFocusedIndex = remember { mutableIntStateOf(-1) }
     val activeRowKeyState = remember { mutableStateOf<String?>(null) }
+    // The focused title's place in the active row, kept as state so Back's enabled flag below
+    // follows it without the whole page recomposing on every focus step.
+    val activeItemIndex = remember { mutableIntStateOf(0) }
     val cwPendingScrollToStart = remember { mutableIntStateOf(0) }
     val upcomingPendingScrollToStart = remember { mutableIntStateOf(0) }
 
     // Back inside a row returns to its first title before Back leaves Home (Nuvio's behaviour).
-    BackHandler(enabled = contentHasFocus.value && run {
-        val rowKey = activeRowKeyState.value ?: return@run false
-        val isCwRow = rowKey == CW_KEY || rowKey == UPCOMING_KEY
-        val itemIndex = if (isCwRow) cwFocusedIndex.intValue else (rowFocusedItemIndex[rowKey] ?: 0)
-        itemIndex > 0
-    }) {
+    val backReturnsToFirst by remember {
+        derivedStateOf { contentHasFocus.value && activeRowKeyState.value != null && activeItemIndex.intValue > 0 }
+    }
+    BackHandler(enabled = backReturnsToFirst) {
         val rowKey = activeRowKeyState.value ?: return@BackHandler
+        activeItemIndex.intValue = 0
         if (rowKey == CW_KEY || rowKey == UPCOMING_KEY) {
             cwFocusedIndex.intValue = 0
             snapshot.itemIndex = 0
@@ -278,7 +280,8 @@ private fun NetflixHomeContent(
     val shouldRequestInitialFocus = remember(focusState) {
         !focusState.hasSavedFocus && focusState.verticalScrollIndex == 0 && focusState.verticalScrollOffset == 0
     }
-    val visibleHomeRows = remember(uiState.homeRows, uiState.catalogRows) {
+    // catalogRows changes with every enrichment; it only matters while homeRows is still empty.
+    val visibleHomeRows = remember(uiState.homeRows, uiState.catalogRows.takeIf { uiState.homeRows.isEmpty() }) {
         netflixHomeRows(uiState.homeRows, uiState.catalogRows)
     }
     // Each row's lazy key: its catalog's own key, numbered only when a catalog repeats, so a row
@@ -340,20 +343,22 @@ private fun NetflixHomeContent(
     val latestOnItemFocus by rememberUpdatedState(onItemFocus)
     val latestOnRequestTrailerPreview by rememberUpdatedState(onRequestTrailerPreview)
 
-    var focusedCatalogItem by remember { mutableStateOf<MetaPreview?>(null) }
+    // Read in a flow, not in composition: a focus step must not recompose the whole page.
+    val focusedCatalogItem = remember { mutableStateOf<MetaPreview?>(null) }
+    val latestTrailerPreviewUrls = rememberUpdatedState(trailerPreviewUrls)
     if (uiState.focusedPosterBackdropTrailerEnabled) {
-        LaunchedEffect(focusedCatalogItem) {
-            val item = focusedCatalogItem ?: return@LaunchedEffect
-            if (trailerPreviewUrls.containsKey(item.id)) return@LaunchedEffect
-            delay(150)
-            if (focusedCatalogItem?.id != item.id) return@LaunchedEffect
-            latestOnRequestTrailerPreview(item)
+        LaunchedEffect(Unit) {
+            snapshotFlow { focusedCatalogItem.value }.collectLatest { item ->
+                if (item == null || latestTrailerPreviewUrls.value.containsKey(item.id)) return@collectLatest
+                delay(150)
+                latestOnRequestTrailerPreview(item)
+            }
         }
     }
     val handleMetaFocus: (MetaPreview) -> Unit = remember(uiState.focusedPosterBackdropTrailerEnabled) {
         { item ->
             billboardFocused = false
-            if (uiState.focusedPosterBackdropTrailerEnabled) focusedCatalogItem = item
+            if (uiState.focusedPosterBackdropTrailerEnabled) focusedCatalogItem.value = item
             latestOnItemFocus(item)
         }
     }
@@ -550,6 +555,7 @@ private fun NetflixHomeContent(
                             focusedListKey.value = CW_KEY
                             activeRowKeyState.value = CW_KEY
                             cwFocusedIndex.intValue = itemIndex
+                            activeItemIndex.intValue = itemIndex
                             onFocusedRowKeyChanged(null)
                         },
                         blurUnwatchedEpisodes = uiState.blurUnwatchedEpisodes,
@@ -597,6 +603,7 @@ private fun NetflixHomeContent(
                             focusedListKey.value = UPCOMING_KEY
                             activeRowKeyState.value = UPCOMING_KEY
                             cwFocusedIndex.intValue = itemIndex
+                            activeItemIndex.intValue = itemIndex
                             onFocusedRowKeyChanged(null)
                         },
                         cardWidth = cwCardWidth,
@@ -622,13 +629,16 @@ private fun NetflixHomeContent(
                     is HomeRow.Catalog -> {
                         val catalogRow = homeRow.row
                         val catalogKey = catalogRow.stableKey()
-                        val currentItemKeys = catalogRow.stableItemKeys()
+                        val currentItemKeys = remember(catalogRow.items) { catalogRow.stableItemKeys() }
                         rowFocusedItemIndex[catalogKey]?.let { storedIdx ->
                             previousRowItemKeys[catalogKey]
                                 ?.getOrNull(storedIdx)
                                 ?.let { currentItemKeys.indexOf(it) }
                                 ?.takeIf { it >= 0 && it != storedIdx }
-                                ?.let { rowFocusedItemIndex[catalogKey] = it }
+                                ?.let {
+                                    rowFocusedItemIndex[catalogKey] = it
+                                    if (activeRowKeyState.value == catalogKey) activeItemIndex.intValue = it
+                                }
                         }
                         previousRowItemKeys[catalogKey] = currentItemKeys
                         val shouldRestoreFocus = restoringFocus &&
@@ -672,6 +682,7 @@ private fun NetflixHomeContent(
                                     billboardFocused = false
                                     focusedListKey.value = homeRowKeys.getOrNull(index)
                                     activeRowKeyState.value = catalogKey
+                                    activeItemIndex.intValue = itemIndex
                                     onFocusedRowKeyChanged(catalogKey)
                                     rowFocusedItemIndex[catalogKey] = itemIndex
                                 }
@@ -701,6 +712,7 @@ private fun NetflixHomeContent(
                                 snapshot.rowKey = collectionKey
                                 focusedListKey.value = homeRowKeys.getOrNull(index)
                                 activeRowKeyState.value = collectionKey
+                                activeItemIndex.intValue = itemIndex
                                 onFocusedRowKeyChanged(null)
                                 rowFocusedItemIndex[collectionKey] = itemIndex
                             }

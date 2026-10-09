@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -231,8 +232,9 @@ internal fun NetflixCatalogRow(
         else if (showCatalogTypeSuffix && typeLabel.isNotEmpty()) "$formattedName - $typeLabel" else formattedName
     }
 
-    // The focused title; its details sit under the row.
-    var focusedItem by remember { mutableStateOf<MetaPreview?>(null) }
+    // The focused title; its details sit under the row. Read only by the details, so a step
+    // along the row recomposes them alone, not the whole row.
+    val focusedItem = remember { mutableStateOf<MetaPreview?>(null) }
     val motionScope = rememberCoroutineScope()
     val motion = remember(catalogRowKey) { NetflixRowMotion(listState.firstVisibleItemIndex) }
     val latestItems by rememberUpdatedState(catalogRow.items)
@@ -371,7 +373,7 @@ internal fun NetflixCatalogRow(
                         trailerUrl = trailerPreviewUrls[item.id],
                         trailerAudioUrl = trailerPreviewAudioUrls[item.id],
                         onFocused = {
-                            focusedItem = item.takeUnless { isPlaceholder }
+                            focusedItem.value = item.takeUnless { isPlaceholder }
                             motion.focus(index, motionScope)
                             latestOnItemFocus(item)
                             lastFocusedItemIndex.intValue = index
@@ -394,7 +396,7 @@ internal fun NetflixCatalogRow(
                             label = seeAllLabel ?: stringResource(R.string.action_see_all),
                             onClick = onSeeAll,
                             onFocused = {
-                                focusedItem = null
+                                focusedItem.value = null
                                 motion.focus(catalogRow.items.size, motionScope)
                             }
                         )
@@ -442,7 +444,7 @@ internal fun NetflixRowHeader(title: String, subtitle: String?) {
  * text crossfades from title to title as focus slides along the row.
  */
 @Composable
-private fun NetflixRowDetails(motion: NetflixRowMotion, item: MetaPreview?, showImdbRatings: Boolean) {
+private fun NetflixRowDetails(motion: NetflixRowMotion, item: State<MetaPreview?>, showImdbRatings: Boolean) {
     val openness = { motion.openness.value }
     // The space stays while a key is held (no rows jumping up and down); only the text fades.
     val textAlpha = { motion.openness.value * (1f - motion.held.value) }
@@ -460,7 +462,7 @@ private fun NetflixRowDetails(motion: NetflixRowMotion, item: MetaPreview?, show
             .graphicsLayer { alpha = textAlpha() }
     ) {
         Crossfade(
-            targetState = item,
+            targetState = item.value,
             animationSpec = tween(NetflixTokens.META_FADE_MS),
             label = "netflixRowDetails"
         ) { current ->
