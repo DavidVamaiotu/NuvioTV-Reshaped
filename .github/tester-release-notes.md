@@ -1,3 +1,1 @@
-- Netflix-style Home: back to the rounded billboard with its colour glow, now a little taller, and back to the earlier row animation. Build 3's full-screen hero and new animation made moving around jumpy and slower.
-- Netflix-style Home: kept from build 3: every add-on row shows (rows not loaded yet load as you scroll near them), and the next and previous titles' wide art is loaded ahead once you rest on a title, so cards open onto their art instead of a grey box.
-- Player: scrub previews still show each frame at once (from build 3).
+- Netflix-style Home: fixed the page jumping between rows, mostly when scrolling down. Rows whose catalog loads empty or fails disappear from Home, and that made the page lose track of the row you were on. It now stays on your row whatever loads or disappears around it.
