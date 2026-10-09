@@ -27,11 +27,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.runtime.IntState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -60,10 +55,9 @@ import com.nuvio.tv.R
 import com.nuvio.tv.domain.model.MetaPreview
 
 /**
- * The billboard at the top of Home: one featured title's logo, a one-line summary, a short
- * synopsis and a single "View Details" pill, laid over the page-wide artwork that
- * [NetflixBillboardBackdrop] draws behind the list. Left/Right on the pill steps through Nuvio's
- * hero titles, as the regular hero carousel does.
+ * The billboard at the top of Home: one featured title in a large rounded inset card with its
+ * logo, a one-line summary, a short synopsis and a single "View Details" pill. Left/Right on the
+ * pill steps through Nuvio's hero titles, as the regular hero carousel does.
  */
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -89,27 +83,27 @@ internal fun NetflixBillboard(
         if (focused) latestOnFocused(items[index])
     }
 
+    val shape = remember { RoundedCornerShape(NetflixTokens.billboardCorner) }
     Box(
         modifier = modifier
             .fillMaxWidth()
+            .padding(horizontal = NetflixTokens.pageStart)
             .height(NetflixTokens.billboardHeight)
+            .clip(shape)
+            .background(NetflixTokens.tilePlaceholder)
     ) {
         Crossfade(
             targetState = item,
             animationSpec = tween(NetflixTokens.BILLBOARD_FADE_MS),
-            label = "netflixBillboard",
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                // Leaves room for the pill and page dots below.
-                .padding(start = NetflixTokens.pageStart, bottom = 84.dp)
+            label = "netflixBillboard"
         ) { shown ->
-            NetflixBillboardText(item = shown, showImdbRatings = showImdbRatings)
+            NetflixBillboardPage(item = shown, showImdbRatings = showImdbRatings)
         }
 
         Column(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = NetflixTokens.pageStart, bottom = 18.dp)
+                .padding(start = 36.dp, bottom = 30.dp)
         ) {
             val pillShape = remember { RoundedCornerShape(50) }
             Surface(
@@ -171,145 +165,84 @@ internal fun NetflixBillboard(
 }
 
 @Composable
-private fun NetflixBillboardText(item: MetaPreview, showImdbRatings: Boolean) {
-    val context = LocalContext.current
-    Column(modifier = Modifier.width(NetflixTokens.billboardTextWidth)) {
-        var logoFailed by remember(item.logo) { mutableStateOf(false) }
-        if (!item.logo.isNullOrBlank() && !logoFailed) {
-            AsyncImage(
-                model = item.logo,
-                contentDescription = item.name,
-                contentScale = ContentScale.Fit,
-                alignment = Alignment.BottomStart,
-                onError = { logoFailed = true },
-                modifier = Modifier
-                    .widthIn(max = NetflixTokens.billboardLogoWidth)
-                    .heightIn(max = NetflixTokens.billboardLogoHeight)
-            )
-        } else {
-            Text(
-                text = item.name,
-                color = NetflixTokens.textPrimary,
-                fontSize = 34.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        Spacer(Modifier.height(14.dp))
-        val tokens = remember(item.id, item.genres, item.releaseInfo, item.imdbRating, item.runtime, showImdbRatings) {
-            item.netflixMetaLine(context, showImdbRatings)
-        }
-        NetflixMetaRow(tokens = tokens)
-        val synopsis = item.description
-        if (!synopsis.isNullOrBlank()) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = synopsis,
-                color = NetflixTokens.textPrimary.copy(alpha = 0.86f),
-                fontSize = NetflixTokens.synopsisSize,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-/**
- * The featured title's artwork, page-wide behind the list: it starts at the top of the screen
- * (under the clear pill), runs past the first row and fades into the page at the left and bottom,
- * tinted by the art's own accent colour. As the page scrolls to the rows it drifts up a little
- * slower than the rows and fades out; scroll is read while drawing only, so it never recomposes.
- *
- * [scrolledPx] is how far the billboard has scrolled up, or null once it is off the page.
- */
-@Composable
-internal fun NetflixBillboardBackdrop(
-    items: List<MetaPreview>,
-    activeIndex: IntState,
-    scrolledPx: () -> Float?,
-    modifier: Modifier = Modifier,
-) {
-    val item = items.getOrNull(activeIndex.intValue) ?: items.firstOrNull() ?: return
+private fun NetflixBillboardPage(item: MetaPreview, showImdbRatings: Boolean) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val screenWidthDp = LocalConfiguration.current.screenWidthDp
-    // Decoded no larger than 1280 px wide (what the old inset card used), however big the screen.
-    val sizePx = remember(density, screenWidthDp) {
-        val width = with(density) { screenWidthDp.dp.roundToPx() }.coerceIn(1, BACKDROP_MAX_WIDTH_PX)
-        val height = (width * NetflixTokens.billboardBackdropHeight.value / screenWidthDp.coerceAtLeast(1)).toInt()
-        width to height.coerceAtLeast(1)
+    val sizePx = remember(density) {
+        with(density) { (NetflixTokens.billboardHeight * (16f / 9f)).roundToPx() to NetflixTokens.billboardHeight.roundToPx() }
     }
-    val fadePx = with(density) { NetflixTokens.billboardHeight.toPx() }
-    val accent = rememberNetflixAccent(item.netflixBackdropUrl())
+    val backdrop = item.background ?: item.landscapePoster ?: item.poster
+    val model = remember(backdrop, sizePx) {
+        ImageRequest.Builder(context).data(backdrop).crossfade(false).size(sizePx.first, sizePx.second).build()
+    }
     val leftShade = remember {
         Brush.horizontalGradient(
-            0f to Color.Black.copy(alpha = 0.88f),
-            0.32f to Color.Black.copy(alpha = 0.6f),
-            0.62f to Color.Transparent
+            0f to Color.Black.copy(alpha = 0.82f),
+            0.45f to Color.Black.copy(alpha = 0.45f),
+            0.75f to Color.Transparent
         )
     }
-    // A light veil at the very top keeps the pill's labels readable over bright art.
-    val topShade = remember {
-        Brush.verticalGradient(0f to Color.Black.copy(alpha = 0.38f), 0.2f to Color.Transparent)
+    val bottomShade = remember {
+        Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.6f))
     }
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(NetflixTokens.billboardBackdropHeight)
-            .graphicsLayer {
-                val scrolled = scrolledPx()
-                if (scrolled == null) {
-                    alpha = 0f
-                } else {
-                    translationY = -scrolled * BACKDROP_PARALLAX
-                    alpha = 1f - (scrolled / fadePx).coerceIn(0f, 1f)
-                }
-            }
-    ) {
-        Crossfade(
-            targetState = item,
-            animationSpec = tween(NetflixTokens.BILLBOARD_FADE_MS),
-            label = "netflixBillboardBackdrop"
-        ) { shown ->
-            val url = shown.netflixBackdropUrl()
-            if (url != null) {
-                val model = remember(url, sizePx) {
-                    ImageRequest.Builder(context).data(url).crossfade(false).size(sizePx.first, sizePx.second).build()
-                }
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (!backdrop.isNullOrBlank()) {
+            AsyncImage(
+                model = model,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alignment = Alignment.TopCenter,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        Box(Modifier.fillMaxSize().background(leftShade))
+        Box(Modifier.fillMaxSize().background(bottomShade))
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                // Leaves room for the pill and page dots drawn over this page.
+                .padding(start = 36.dp, bottom = 96.dp)
+                .width(NetflixTokens.billboardTextWidth)
+        ) {
+            var logoFailed by remember(item.logo) { mutableStateOf(false) }
+            if (!item.logo.isNullOrBlank() && !logoFailed) {
                 AsyncImage(
-                    model = model,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    alignment = Alignment.TopCenter,
-                    modifier = Modifier.fillMaxSize()
+                    model = item.logo,
+                    contentDescription = item.name,
+                    contentScale = ContentScale.Fit,
+                    alignment = Alignment.BottomStart,
+                    onError = { logoFailed = true },
+                    modifier = Modifier
+                        .widthIn(max = NetflixTokens.billboardLogoWidth)
+                        .heightIn(max = NetflixTokens.billboardLogoHeight)
+                )
+            } else {
+                Text(
+                    text = item.name,
+                    color = NetflixTokens.textPrimary,
+                    fontSize = 34.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+            val tokens = remember(item.id, item.genres, item.releaseInfo, item.imdbRating, item.runtime, showImdbRatings) {
+                item.netflixMetaLine(context, showImdbRatings)
+            }
+            NetflixMetaRow(tokens = tokens)
+            val synopsis = item.description
+            if (!synopsis.isNullOrBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = synopsis,
+                    color = NetflixTokens.textPrimary.copy(alpha = 0.86f),
+                    fontSize = NetflixTokens.synopsisSize,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .drawBehind {
-                    drawRect(leftShade)
-                    drawRect(topShade)
-                    val tint = accent.value
-                    val glow = if (tint.alpha > 0f) lerp(tint, Color.Black, 0.45f).copy(alpha = 0.6f * tint.alpha) else Color.Transparent
-                    drawRect(
-                        Brush.verticalGradient(
-                            0.42f to Color.Transparent,
-                            0.74f to glow,
-                            1f to NetflixTokens.page
-                        )
-                    )
-                }
-        )
     }
 }
-
-private fun MetaPreview.netflixBackdropUrl(): String? =
-    background?.takeIf { it.isNotBlank() } ?: landscapePoster?.takeIf { it.isNotBlank() } ?: poster?.takeIf { it.isNotBlank() }
-
-private const val BACKDROP_MAX_WIDTH_PX = 1280
-
-/** The artwork drifts up at this fraction of the page's speed, so the text leaves it gently. */
-private const val BACKDROP_PARALLAX = 0.6f

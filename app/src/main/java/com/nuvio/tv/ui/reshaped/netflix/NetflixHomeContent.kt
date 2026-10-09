@@ -7,10 +7,13 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListPrefetchStrategy
@@ -34,6 +37,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -163,9 +169,7 @@ private fun NetflixHomeContent(
 ) {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
-    // A row coming into view brings its first screenful of titles with it (composed ahead in idle
-    // frame time), instead of composing most of them in the frame it appears.
-    val nestedPrefetchStrategy = remember { LazyListPrefetchStrategy(nestedPrefetchItemCount = NESTED_PREFETCH_TITLES) }
+    val nestedPrefetchStrategy = remember { LazyListPrefetchStrategy(nestedPrefetchItemCount = 2) }
     val columnListState = rememberLazyListState(
         initialFirstVisibleItemIndex = focusState.verticalScrollIndex,
         initialFirstVisibleItemScrollOffset = focusState.verticalScrollOffset,
@@ -356,16 +360,15 @@ private fun NetflixHomeContent(
         return
     }
 
-    val heroCount = if (heroVisible) 1 else 0
-    val cwCount = if (uiState.continueWatchingEnabled && uiState.continueWatchingItems.isNotEmpty()) 1 else 0
-    val upcomingCount = if (uiState.continueWatchingEnabled && uiState.upcomingItems.isNotEmpty()) 1 else 0
-    val rowsStart = heroCount + cwCount + upcomingCount
-
     // Lazy catalog loading, as in Nuvio's Classic layout, reading the sections above the rows as
-    // they are now (Continue Watching often arrives after the first rows), and two rows ahead.
+    // they are now (Continue Watching often arrives after the first rows).
     val latestOnRequestLazyCatalogLoad = rememberUpdatedState(onRequestLazyCatalogLoad)
     val latestVisibleHomeRows = rememberUpdatedState(visibleHomeRows)
-    val latestRowsStart = rememberUpdatedState(rowsStart)
+    val latestRowsOffset = rememberUpdatedState(
+        (if (heroVisible) 1 else 0) +
+            (if (uiState.continueWatchingEnabled && uiState.continueWatchingItems.isNotEmpty()) 1 else 0) +
+            (if (uiState.continueWatchingEnabled && uiState.upcomingItems.isNotEmpty()) 1 else 0)
+    )
     LaunchedEffect(columnListState) {
         snapshotFlow {
             val info = columnListState.layoutInfo
@@ -374,8 +377,8 @@ private fun NetflixHomeContent(
             if (lastVisible < 0) return@collectLatest
             delay(240)
             val rows = latestVisibleHomeRows.value
-            val rowsOffset = latestRowsStart.value
-            for (idx in firstVisible.coerceAtLeast(0)..(lastVisible + 2)) {
+            val rowsOffset = latestRowsOffset.value
+            for (idx in firstVisible.coerceAtLeast(0)..(lastVisible + 1)) {
                 val row = rows.getOrNull(idx - rowsOffset) ?: continue
                 if (row is HomeRow.Catalog && row.row.isLoading &&
                     row.row.items.firstOrNull()?.id?.startsWith("__placeholder_") == true
@@ -396,18 +399,36 @@ private fun NetflixHomeContent(
     val cwPosterPattern = patternForScreen(uiState.customPosterUrlPattern, CustomPosterScreen.CONTINUE_WATCHING, uiState.customPosterEnabledScreens)
     val contentFocusRequester = LocalContentFocusRequester.current
 
+    // Accent glow behind the billboard (the colour of the featured title), fading away as the
+    // page scrolls to the rows. Colour and fade are read while drawing only: no recomposition.
+    val accentItem = if (heroVisible) uiState.heroItems.getOrNull(savedHeroIndex.intValue) else null
+    val accent = rememberNetflixAccent(accentItem?.let { it.background ?: it.landscapePoster ?: it.poster })
+    val glowFadePx = with(density) { NetflixTokens.billboardHeight.toPx() }
     Box(modifier = Modifier.fillMaxSize().background(NetflixTokens.page)) {
     if (heroVisible) {
-        // The featured title's art, page-wide behind the list and the pill.
-        NetflixBillboardBackdrop(
-            items = uiState.heroItems,
-            activeIndex = savedHeroIndex,
-            scrolledPx = {
-                if (columnListState.firstVisibleItemIndex > 0) null
-                else columnListState.firstVisibleItemScrollOffset.toFloat()
-            }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(NetflixTokens.billboardHeight + 220.dp)
+                .drawBehind {
+                    val fade = if (columnListState.firstVisibleItemIndex > 0) 0f
+                    else 1f - (columnListState.firstVisibleItemScrollOffset / glowFadePx).coerceIn(0f, 1f)
+                    val color = accent.value
+                    if (fade <= 0f || color.alpha <= 0f) return@drawBehind
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            0f to color.copy(alpha = 0.78f * fade),
+                            0.55f to color.copy(alpha = 0.42f * fade),
+                            1f to Color.Transparent
+                        )
+                    )
+                }
         )
     }
+    val heroCount = if (heroVisible) 1 else 0
+    val cwCount = if (uiState.continueWatchingEnabled && uiState.continueWatchingItems.isNotEmpty()) 1 else 0
+    val upcomingCount = if (uiState.continueWatchingEnabled && uiState.upcomingItems.isNotEmpty()) 1 else 0
+    val rowsStart = heroCount + cwCount + upcomingCount
     CompositionLocalProvider(LocalBringIntoViewSpec provides verticalSpec) {
         LazyColumn(
             state = columnListState,
@@ -700,9 +721,6 @@ private fun ContinueWatchingItem.remove(onRemove: (String, Int?, Int?, Boolean) 
  * Moves the page so the row at [index] sits at the top line (offset 0, just under the pill band)
  * on a critically damped spring that follows the row's live position every frame: if rows above
  * fold their details while it moves, it never overshoots and bounces back.
- *
- * The whole move runs inside one scroll, not one scroll per frame, so the list's scroll state
- * flips once per move instead of every frame.
  */
 private suspend fun followRowToTop(
     listState: androidx.compose.foundation.lazy.LazyListState,
@@ -711,81 +729,57 @@ private suspend fun followRowToTop(
     isFastScrolling: () -> Boolean,
 ) {
     val omega = kotlin.math.sqrt(NetflixTokens.SCROLL_STIFFNESS)
+    var velocity by FloatHolderDelegate(velocityHolder)
+    var lastFrame = 0L
     var elapsedNanos = 0L
     var jumps = 0
     while (true) {
-        var next = FollowStep.Done
-        try {
-            listState.scroll {
-                var lastFrame = 0L
-                while (true) {
-                    val frame = withFrameNanos { it }
-                    val dt = if (lastFrame == 0L) 1f / 60f else ((frame - lastFrame) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
-                    if (lastFrame != 0L) elapsedNanos += frame - lastFrame
-                    lastFrame = frame
-                    if (isFastScrolling()) {
-                        // A held Up/Down drags the list itself; step aside until it lets go.
-                        next = FollowStep.WaitForFastScroll
-                        return@scroll
-                    }
-                    val layoutInfo = listState.layoutInfo
-                    if (index >= layoutInfo.totalItemsCount) return@scroll // the row went away
-                    val visible = layoutInfo.visibleItemsInfo
-                    val info = visible.firstOrNull { it.index == index }
-                    val error = if (info != null) {
-                        info.offset.toFloat()
-                    } else {
-                        // Just off screen (the row above sits beyond the band): head for it with an
-                        // estimate, so it glides in like any other row; real offsets take over once it shows.
-                        val first = visible.firstOrNull() ?: return@scroll
-                        val last = visible.last()
-                        val spacing = layoutInfo.mainAxisItemSpacing
-                        val averageStep = visible.sumOf { it.size + spacing }.toFloat() / visible.size
-                        val nearest = if (index < first.index) first.index else last.index
-                        if (kotlin.math.abs(index - nearest) > FOLLOW_MAX_GLIDE_ROWS) {
-                            // Far away (restored focus): jump there, then settle.
-                            next = FollowStep.Jump
-                            return@scroll
-                        }
-                        if (index < first.index) first.offset - (first.index - index) * averageStep
-                        else last.offset + (index - last.index) * averageStep
-                    }
-                    var velocity = velocityHolder[0]
-                    if (elapsedNanos > FOLLOW_MIN_NANOS && kotlin.math.abs(error) < 0.5f && kotlin.math.abs(velocity) < 8f) {
-                        if (error != 0f) scrollBy(error)
-                        return@scroll
-                    }
-                    velocity += (omega * omega * error - 2f * omega * velocity) * dt
-                    velocityHolder[0] = velocity
-                    val delta = velocity * dt
-                    val consumed = scrollBy(delta)
-                    // Top or bottom of the page: nothing left to move.
-                    if (kotlin.math.abs(delta) > 0.5f && kotlin.math.abs(consumed) < 0.01f && elapsedNanos > FOLLOW_MIN_NANOS) return@scroll
-                }
-            }
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            // Our own job was cancelled: stop. Otherwise another scroll took the list over; if it
-            // was a held Up/Down, pick the move up again once it ends, else leave it be.
-            kotlinx.coroutines.currentCoroutineContext().ensureActive()
-            if (!isFastScrolling()) return
-            next = FollowStep.WaitForFastScroll
+        val frame = withFrameNanos { it }
+        val dt = if (lastFrame == 0L) 1f / 60f else ((frame - lastFrame) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
+        if (lastFrame != 0L) elapsedNanos += frame - lastFrame
+        lastFrame = frame
+        if (isFastScrolling()) {
+            velocity = 0f
+            continue
         }
-        when (next) {
-            FollowStep.Done -> return
-            FollowStep.Jump -> {
+        val layoutInfo = listState.layoutInfo
+        if (index >= layoutInfo.totalItemsCount) return // the row went away
+        val visible = layoutInfo.visibleItemsInfo
+        val info = visible.firstOrNull { it.index == index }
+        val error = if (info != null) {
+            info.offset.toFloat()
+        } else {
+            // Just off screen (the row above sits beyond the band): head for it with an estimate,
+            // so it glides in like any other row; real offsets take over once it shows.
+            val first = visible.firstOrNull()
+            val last = visible.lastOrNull()
+            if (first == null || last == null) return
+            val spacing = layoutInfo.mainAxisItemSpacing
+            val averageStep = visible.sumOf { it.size + spacing }.toFloat() / visible.size
+            val estimate = when {
+                index < first.index -> first.offset - (first.index - index) * averageStep
+                else -> last.offset + (index - last.index) * averageStep
+            }
+            if (kotlin.math.abs(index - (if (index < first.index) first.index else last.index)) > FOLLOW_MAX_GLIDE_ROWS) {
+                // Far away (restored focus): jump there, then settle.
                 if (++jumps > 2) return
                 listState.scrollToItem(index)
-                velocityHolder[0] = 0f
+                velocity = 0f
+                continue
             }
-            FollowStep.WaitForFastScroll -> {
-                velocityHolder[0] = 0f
-                while (isFastScrolling()) withFrameNanos { }
-            }
+            estimate
         }
+        if (elapsedNanos > FOLLOW_MIN_NANOS && kotlin.math.abs(error) < 0.5f && kotlin.math.abs(velocity) < 8f) {
+            if (error != 0f) listState.scrollBy(error)
+            return
+        }
+        velocity += (omega * omega * error - 2f * omega * velocity) * dt
+        val delta = velocity * dt
+        val consumed = listState.scrollBy(delta)
+        // Top or bottom of the page: nothing left to move.
+        if (kotlin.math.abs(delta) > 0.5f && kotlin.math.abs(consumed) < 0.01f && elapsedNanos > FOLLOW_MIN_NANOS) return
     }
 }
-
-private enum class FollowStep { Done, Jump, WaitForFastScroll }
 
 /** Beyond this many rows off screen, the follower jumps instead of gliding. */
 private const val FOLLOW_MAX_GLIDE_ROWS = 3
@@ -793,32 +787,20 @@ private const val FOLLOW_MAX_GLIDE_ROWS = 3
 /** The rows' details open and fold over about this long; keep following until then. */
 private const val FOLLOW_MIN_NANOS = 450_000_000L
 
-/** Titles of a row composed ahead when the row is about to scroll into view: about one screenful. */
-private const val NESTED_PREFETCH_TITLES = 6
+private class FloatHolderDelegate(private val holder: FloatArray) {
+    operator fun getValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>): Float = holder[0]
+    operator fun setValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>, value: Float) { holder[0] = value }
+}
 
 /**
  * Nuvio's home rows, shaped the way this look draws them whatever Nuvio layout is set underneath.
- * Under Modern (Nuvio's default) catalogs not loaded yet arrive as placeholders and per-title
- * updates land in catalogRows only, so placeholders become the same loading rows Classic gets
- * (which load as they near the screen) and each row takes its latest catalog data, as Modern does.
+ * Under Modern (Nuvio's default) catalogs not loaded yet arrive as placeholders; they become the
+ * same loading rows Classic gets, which load as they near the screen.
  */
 internal fun netflixHomeRows(homeRows: List<HomeRow>, catalogRows: List<CatalogRow>): List<HomeRow> {
     if (homeRows.isEmpty()) return catalogRows.filter { it.items.isNotEmpty() }.map { HomeRow.Catalog(it) }
-    val latestByKey = catalogRows.associateBy { it.stableKey() }
-    return homeRows.mapNotNull { row ->
-        when (row) {
-            is HomeRow.Catalog -> {
-                val latest = latestByKey[row.row.stableKey()] ?: row.row
-                when {
-                    latest.items.isEmpty() -> null
-                    latest === row.row -> row
-                    else -> HomeRow.Catalog(latest)
-                }
-            }
-            is HomeRow.PlaceholderCatalog -> HomeRow.Catalog(row.toLoadingRow())
-            is HomeRow.CollectionRow -> row
-        }
-    }
+    if (homeRows.none { it is HomeRow.PlaceholderCatalog }) return homeRows
+    return homeRows.map { row -> if (row is HomeRow.PlaceholderCatalog) HomeRow.Catalog(row.toLoadingRow()) else row }
 }
 
 /** The same eight shimmering placeholders Nuvio's pipeline builds for Classic. */
