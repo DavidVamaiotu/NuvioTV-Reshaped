@@ -2,7 +2,6 @@ package com.nuvio.tv.ui.screens.player.seekpreview
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -36,7 +35,6 @@ private val MinFrameWidth = 240.dp
 private val MaxFrameWidth = 400.dp
 private val FrameGapAboveBar = 10.dp
 private const val LingerAfterScrubMs = 1500L
-private const val SlideMs = 220
 
 /**
  * The scrub-time preview, Netflix style, above the progress bar: the frame of the cue the scrub
@@ -161,18 +159,9 @@ fun SeekPreviewThumbnailHost(
             seekPreview.onPreviewCueResolved(
                 SeekPreviewCue(center.cueStartMs - offset, center.cueEndMs - offset)
             )
-            if (!visible) {
-                scope.launch { slide.snapTo(0f) }
-            } else if (steps != null && steps != 0) {
-                scope.launch {
-                    val start = (slide.value + steps)
-                        .coerceIn(-FilmstripSideFrames.toFloat(), FilmstripSideFrames.toFloat())
-                    slide.snapTo(start)
-                    slide.animateTo(0f, tween(SlideMs, easing = FastOutSlowInEasing))
-                }
-            } else if (steps == null) {
-                scope.launch { slide.snapTo(0f) }
-            }
+            // Each step shows the next frame at once. Sliding it there lagged behind a held scrub,
+            // every repeat restarting the slide, so the strip sat off centre until release.
+            if (slide.value != 0f) scope.launch { slide.snapTo(0f) }
             // Neighbours only matter while the strip is on screen; hidden, only the centre's
             // cue is kept current for grid-locked seeking.
             fillJob?.cancel()
