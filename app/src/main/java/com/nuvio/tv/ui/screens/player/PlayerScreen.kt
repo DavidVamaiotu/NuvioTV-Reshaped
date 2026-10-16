@@ -2166,7 +2166,7 @@ private fun ExoPlayerSurface(
         playerView.applySubtitleStyleIfNeeded(subtitleStyle, subtitleLiftPx)
     }
     // Nuvio RS hook: custom subtitle font, re-applied when it finishes loading or changes
-    LaunchedEffect(playerView) { com.nuvio.tv.reshaped.subtitlefont.SubtitleFontStore.font.collect { playerView.applySubtitleStyleIfNeeded(latestSubtitleStyle, force = true) } }
+    LaunchedEffect(playerView) { com.nuvio.tv.reshaped.subtitlefont.SubtitleFontStore.font.collect { playerView.applySubtitleStyleIfNeeded(latestSubtitleStyle, latestSubtitleLiftPx, force = true) } }
 }
 
 private fun PlayerView.enableComposeSurfaceSyncWorkaroundIfAvailable() {
