@@ -1,3 +1,3 @@
-- AudioSync logs can now be downloaded to a phone by QR code directly from the AudioSync settings. This avoids the unsupported Android share action on TVs.
-- AudioSync playback fallback now feeds short PCM buffers continuously when audio is unknown, allowing speech detection and sampling to start even if look-ahead capture is not producing evidence.
-- Logs now show why speech analyzers restart, along with separate decoded and playback PCM formats and timestamps, to investigate repeated Opus timestamp resets.
+- Fixed AudioSync getting stuck before speech detection on streams whose decoded audio buffers share timestamps, including grouped Opus packets. Analysis now positions these buffers using their actual PCM duration.
+- The playback fallback no longer discards different audio buffers just because their timestamps match. Partially consumed buffer retries are still analyzed only once.
+- Real seeks and missing-audio gaps still restart speech detection. Logs show repeated timestamp counts and the original versus corrected analysis times.

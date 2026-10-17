@@ -62,6 +62,7 @@ internal class AudioSyncDecoder(
     private var centerIndex = -1
     private var mono = FloatArray(0)
     private val bufferInfo = MediaCodec.BufferInfo()
+    private val pcmClock = PcmTimestampTracker()
     private val unsupportedMimes = HashSet<String>()
     private val encodedSamples = AtomicLong()
     private val decodedUs = AtomicLong()
@@ -86,6 +87,7 @@ internal class AudioSyncDecoder(
             " decoded=${decodedUs.get() / 1_000}ms playback=${playbackUs.get() / 1_000}ms" +
             " droppedInput=${droppedSamples.get()} droppedPlayback=${droppedPlaybackBuffers.get()} queue=${bytes}B" +
             " captureStarts=${analyzer.starts} playbackStarts=${liveAnalyzer.starts}" +
+            " captureRepeatedPts=${pcmClock.repeatedTimestamps}" +
             " captureReset=[${analyzer.lastStartReason}] playbackReset=[${liveAnalyzer.lastStartReason}]" +
             " decodedPcm=[$lastDecodedPcm] playbackPcm=[$lastPlaybackPcm]" +
             " lastPcm=$age mediaMs=${mediaMs ?: "-"} lastError=${lastError ?: "-"}"
@@ -338,12 +340,13 @@ internal class AudioSyncDecoder(
         if (channels <= 0 || rate <= 0) return
         val frames = buffer.remaining() / ((if (outputFloat) 4 else 2) * channels)
         if (frames <= 0) return
-        lastDecodedPcm = "${frames}frames@${rate}Hz ${channels}ch ${if (outputFloat) "float" else "s16"} timeUs=$timeUs"
+        val mediaTimeUs = pcmClock.resolve(timeUs, frames, rate)
+        lastDecodedPcm = "${frames}frames@${rate}Hz ${channels}ch ${if (outputFloat) "float" else "s16"} rawUs=$timeUs timeUs=$mediaTimeUs"
         decodedUs.addAndGet(frames * 1_000_000L / rate)
-        recordPcm(timeUs)
+        recordPcm(mediaTimeUs)
         if (mono.size < frames) mono = FloatArray(frames)
         PcmDownmix.toMono(buffer, buffer.position(), frames, channels, outputFloat, centerIndex, mono)
-        analyzer.accept(mono, frames, rate, timeUs)
+        analyzer.accept(mono, frames, rate, mediaTimeUs)
     }
 
     /** Opens a decoder for [format] unless the current one already fits. False when none is usable. */
@@ -455,6 +458,7 @@ internal class AudioSyncDecoder(
             initializationData.indices.all { initializationData[it].contentEquals(other.initializationData[it]) }
 
     private fun flushCodec() {
+        pcmClock.reset()
         ffmpeg?.let { decoder ->
             runCatching { decoder.flush() }.onFailure { releaseCodec() }
             return
@@ -468,6 +472,7 @@ internal class AudioSyncDecoder(
     }
 
     private fun releaseCodec() {
+        pcmClock.reset()
         ffmpeg?.let { decoder ->
             ffmpeg = null
             codecFormat = null

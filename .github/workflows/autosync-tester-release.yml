@@ -11,6 +11,9 @@ name: AutoSync TV Tester Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [subtitle-autosync-tester]
+    paths: ['.github/workflows/autosync-tester-release.yml']
 
 permissions:
   contents: write
@@ -24,6 +27,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'Release tester: fix grouped PCM timestamps 2026-10-17'
     runs-on: ubuntu-latest
 
     steps:
@@ -309,6 +313,7 @@ jobs:
             --tests 'com.nuvio.tv.updater.*' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSyncDiagnosticsTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.PcmTimestampTrackerTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SubtitleCandidatePoolTest' \
             --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$TESTER_TAG"
