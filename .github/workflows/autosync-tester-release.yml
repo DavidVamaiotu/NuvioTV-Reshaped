@@ -11,6 +11,9 @@ name: AutoSync TV Tester Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [subtitle-autosync-tester]
+    paths: [".github/workflows/autosync-tester-release.yml"]
 
 permissions:
   contents: write
@@ -24,6 +27,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Trigger ranked regex tester release'
     runs-on: ubuntu-latest
 
     steps:
