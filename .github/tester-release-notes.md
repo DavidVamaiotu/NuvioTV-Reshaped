@@ -1,4 +1,3 @@
-- Netflix-style Home: less work on every remote press. Moving along a row now redraws only the title text under it instead of the whole row, and moving between titles or rows no longer rebuilds the whole Home page. Nothing looks or behaves differently, except that Back from a later title in a row now always returns to the row's first title.
-- AudioSync diagnostics now show analysed audio, speech activity, and why matching is still waiting. Exported logs include periodic decoder, queue, and matcher progress, plus sampled-audio decoder summaries.
-- Japanese and other non-English audio correctly report speech detection only instead of leaving the English recognizer on "starting". Speech-activity sampling remains available without English recognition.
-- AudioSync keeps alternative subtitles available when speech activity is inconclusive. Weak early scores no longer permanently discard files or trim the search to four candidates; later dialogue and sampled scenes can still confirm them.
+- AudioSync logs can now be downloaded to a phone by QR code directly from the AudioSync settings. This avoids the unsupported Android share action on TVs.
+- AudioSync playback fallback now feeds short PCM buffers continuously when audio is unknown, allowing speech detection and sampling to start even if look-ahead capture is not producing evidence.
+- Logs now show why speech analyzers restart, along with separate decoded and playback PCM formats and timestamps, to investigate repeated Opus timestamp resets.

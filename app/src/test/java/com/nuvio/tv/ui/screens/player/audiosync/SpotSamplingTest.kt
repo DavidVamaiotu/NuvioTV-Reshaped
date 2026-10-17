@@ -8,11 +8,36 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class SpotSamplingTest {
     private val filmMs = 100 * 60_000L
+
+    @Test
+    fun shortPlaybackBuffersBuildEvidenceWhenCaptureHasNone() {
+        val weights = File("src/main/res/raw/silero_vad_v5_16k.bin").inputStream().use(SileroVadWeights::read)
+        for ((rate, frames) in listOf(48_000 to 960, 16_000 to 320, 48_000 to 320)) {
+            val timeline = SpeechTimeline()
+            val analyzer = SpeechAnalyzer(SileroVad(weights), timeline)
+            val samples = FloatArray(frames)
+            val durationUs = frames * 1_000_000L / rate
+            val blocks = 6 * rate / frames
+            repeat(blocks) { index ->
+                val timeUs = 240_000_000L + index * frames * 1_000_000L / rate
+                // The playback fallback must retain short buffers until VAD produces full frames.
+                if (timeline.needsAnalysis(timeUs, durationUs)) {
+                    analyzer.accept(samples, frames, rate, timeUs)
+                }
+            }
+            assertEquals(1L, analyzer.starts, "continuous $frames-frame buffers at $rate Hz")
+            assertTrue(timeline.diagnostics().analysedSeconds > 5.7, "short PCM never got past warm-up at $rate Hz")
+            val known = timeline.knownRange()!!
+            assertFalse(timeline.needsAnalysis(known.first * SpeechTimeline.FRAME_DURATION_US, 20_000L))
+            assertTrue(timeline.needsAnalysis(known.last * SpeechTimeline.FRAME_DURATION_US, 40_000L))
+        }
+    }
 
     @Test
     fun sampledPcmStillBuildsSpeechActivityWithRecognitionDisabled() {

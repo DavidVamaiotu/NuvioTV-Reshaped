@@ -53,6 +53,9 @@ internal class SpeechAnalyzer(
     @Volatile
     var starts: Long = 0L
         private set
+    @Volatile
+    var lastStartReason: String = "not started"
+        private set
 
     fun reset() {
         running = false
@@ -65,7 +68,15 @@ internal class SpeechAnalyzer(
     /** Feeds [count] mono samples starting at media time [timeUs]. */
     fun accept(samples: FloatArray, count: Int, sampleRate: Int, timeUs: Long) {
         if (count <= 0 || sampleRate <= 0) return
-        if (!running || sampleRate != sourceRate || abs(timeUs - expectedNextTimeUs()) > CONTINUITY_TOLERANCE_US) {
+        val deltaUs = if (running) timeUs - expectedNextTimeUs() else 0L
+        val reason = when {
+            !running -> "initial or reset"
+            sampleRate != sourceRate -> "rate $sourceRate->$sampleRate"
+            abs(deltaUs) > CONTINUITY_TOLERANCE_US -> "timestamp delta=${deltaUs}us block=$count@$sampleRate timeUs=$timeUs"
+            else -> null
+        }
+        if (reason != null) {
+            lastStartReason = reason
             start(sampleRate, timeUs)
         }
         appendHistory(samples, count)

@@ -73,6 +73,8 @@ internal class AudioSyncDecoder(
     @Volatile private var workerState = "not started"
     @Volatile private var decoderName = "none"
     @Volatile private var lastError: String? = null
+    @Volatile private var lastDecodedPcm = "none"
+    @Volatile private var lastPlaybackPcm = "none"
 
     /** Metadata only; no audio, subtitle text or stream URLs are retained. */
     fun diagnostics(): String {
@@ -84,6 +86,8 @@ internal class AudioSyncDecoder(
             " decoded=${decodedUs.get() / 1_000}ms playback=${playbackUs.get() / 1_000}ms" +
             " droppedInput=${droppedSamples.get()} droppedPlayback=${droppedPlaybackBuffers.get()} queue=${bytes}B" +
             " captureStarts=${analyzer.starts} playbackStarts=${liveAnalyzer.starts}" +
+            " captureReset=[${analyzer.lastStartReason}] playbackReset=[${liveAnalyzer.lastStartReason}]" +
+            " decodedPcm=[$lastDecodedPcm] playbackPcm=[$lastPlaybackPcm]" +
             " lastPcm=$age mediaMs=${mediaMs ?: "-"} lastError=${lastError ?: "-"}"
     }
 
@@ -207,6 +211,7 @@ internal class AudioSyncDecoder(
                     }
                     is Item.Sample -> decode(item)
                     is Item.Pcm -> {
+                        lastPlaybackPcm = "${item.samples.size}frames@${item.sampleRate}Hz timeUs=${item.timeUs}"
                         playbackUs.addAndGet(item.samples.size * 1_000_000L / item.sampleRate.coerceAtLeast(1))
                         recordPcm(item.timeUs)
                         liveAnalyzer.accept(item.samples, item.samples.size, item.sampleRate, item.timeUs)
@@ -333,6 +338,7 @@ internal class AudioSyncDecoder(
         if (channels <= 0 || rate <= 0) return
         val frames = buffer.remaining() / ((if (outputFloat) 4 else 2) * channels)
         if (frames <= 0) return
+        lastDecodedPcm = "${frames}frames@${rate}Hz ${channels}ch ${if (outputFloat) "float" else "s16"} timeUs=$timeUs"
         decodedUs.addAndGet(frames * 1_000_000L / rate)
         recordPcm(timeUs)
         if (mono.size < frames) mono = FloatArray(frames)

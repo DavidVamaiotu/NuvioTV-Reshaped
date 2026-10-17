@@ -57,6 +57,14 @@ internal class SpeechTimeline {
 
     fun knownFrameCount(): Int = knownFrames
 
+    /** Even PCM shorter than one VAD frame must be fed while any of its audio is unknown. */
+    fun needsAnalysis(timeUs: Long, durationUs: Long): Boolean {
+        if (durationUs <= 0) return false
+        val from = frameForTimeUs(timeUs)
+        val to = frameForTimeUs(timeUs + durationUs - 1) + 1
+        return knownFramesIn(from, to) < to - from
+    }
+
     /** Returns probabilities for [fromFrame, toFrame); unknown frames are NaN. */
     fun snapshot(fromFrame: Int, toFrame: Int): FloatArray {
         val out = FloatArray((toFrame - fromFrame).coerceAtLeast(0)) { Float.NaN }

@@ -19,7 +19,7 @@ import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.NetworkCell
-import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,6 +42,7 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
+import com.nuvio.tv.ui.reshaped.debuglog.DebugLogQrDialog
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncFallback
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncPreferences
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncSettings
@@ -118,13 +119,14 @@ internal fun LazyListScope.audioSyncFallbackSettingsItems(enabled: Boolean) {
 
     item(key = "audio_sync_share_log") {
         AudioSyncFallback.initialize(LocalContext.current)
-        val actions = SubtitleSyncStatus.logActions ?: return@item
+        var showQr by remember { mutableStateOf(false) }
         NavigationSettingsItem(
-            icon = Icons.Default.Share,
-            title = "Share audio sync log",
-            subtitle = "Timings and decisions of recent syncs, for reporting a problem. Links are shortened and no audio or subtitle text is included.",
-            onClick = { actions.share() },
+            icon = Icons.Default.QrCode2,
+            title = "Send audio sync log to phone",
+            subtitle = "Scan a QR code with a phone on the same network, then download the Audio sync log. No audio or subtitle text is included.",
+            onClick = { showQr = true },
         )
+        if (showQr) DebugLogQrDialog(onDismiss = { showQr = false })
     }
 }
 

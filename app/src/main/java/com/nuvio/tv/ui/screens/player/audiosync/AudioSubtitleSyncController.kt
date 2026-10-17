@@ -1151,9 +1151,7 @@ internal class AudioSubtitleSyncController(
     override fun wantsPlaybackPcm(mediaTimeUs: Long, durationUs: Long): Boolean {
         if (!enabled || released || decoder == null || !listening()) return false
         if (mediaTimeUs < 0 || !inDutyWindow(mediaTimeUs)) return false
-        val from = SpeechTimeline.frameForTimeUs(mediaTimeUs)
-        val to = SpeechTimeline.frameForTimeUs(mediaTimeUs + durationUs) + 1
-        return timeline.knownFramesIn(from, to) < to - from - 1
+        return timeline.needsAnalysis(mediaTimeUs, durationUs)
     }
 
     override fun onPlaybackPcm(mono: FloatArray, frames: Int, sampleRate: Int, mediaTimeUs: Long) {
