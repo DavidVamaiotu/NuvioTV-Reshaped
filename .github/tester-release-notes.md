@@ -1,4 +1,5 @@
-- Experimental **Ranked regex rules** under Playback → Stream selection → Regex. Add, edit, remove, and reorder up to 20 priority rules; the highest matching tier wins across eligible sources, with addon order breaking ties.
-- Ranked rules also apply to next episodes and TorBox link preparation. No match opens manual selection. Existing source filters, autoplay timeout, last-link reuse, and binge-group preferences still apply.
-- Optional and separate from the existing single regex: clear all ranked rules and save to restore that setting. No automatic rule presets or playback changes.
-- The ranking engine is isolated from Android/player architecture, with bounded matching and 26 focused regression tests. Setup examples and implementation notes: [Ranked regex autoplay](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/blob/subtitle-autosync-tester/docs/ranked-regex-autoplay.md).
+- Every **Ranked regex** priority now has a **Presets** picker, sharing the same 13 choices as the single-regex editor. Presets fill that priority; you can still edit and reorder it before saving.
+- Fixed large source lists exhausting one shared matching allowance and falling back to manual despite valid matches. Ranked matching now runs off the UI thread, checks cancellation, caches compiled rules, and uses linear tier buckets.
+- Added per-source protection and an elapsed-time matching budget. Expensive or incomplete evaluations still open manual selection instead of guessing a lower tier.
+- Fixed row identities when saved rules reload. Added large-list, preset, background-worker and cancellation coverage: 38 focused tests.
+- [Setup examples, limits, and implementation notes](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/blob/subtitle-autosync-tester/docs/ranked-regex-autoplay.md).

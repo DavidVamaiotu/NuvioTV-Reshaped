@@ -17,6 +17,7 @@ import com.nuvio.tv.core.torrent.TorrentSettings
 import com.nuvio.tv.core.torrent.TorrentService
 import com.nuvio.tv.core.torrent.TorrentState
 import com.nuvio.tv.core.player.StreamAutoPlayPolicy
+import kotlinx.coroutines.sync.withLock
 import com.nuvio.tv.core.player.StreamAutoPlaySelector
 import com.nuvio.tv.core.tracking.TrackingMediaKind
 import com.nuvio.tv.core.tracking.TrackingMediaReference
@@ -479,7 +480,8 @@ class StreamScreenViewModel @Inject constructor(
             var connectionFit: StreamConnectionFit? = null
             var connectionFitCaptured = false
 
-            fun applySuccess(addonStreamGroups: List<AddonStreams>, isAllLoaded: Boolean) {
+            val successMutex = kotlinx.coroutines.sync.Mutex()
+            suspend fun applySuccess(addonStreamGroups: List<AddonStreams>, isAllLoaded: Boolean) = successMutex.withLock {
                 if (!connectionFitCaptured) {
                     _uiState.value.runtime?.let { runtimeMinutes ->
                         connectionFit = StreamConnectionFit.capture(context, runtimeMinutes)
@@ -518,7 +520,7 @@ class StreamScreenViewModel @Inject constructor(
                 // Early binge group match: if we have a persisted binge group, try to
                 // match it immediately on every emission without waiting for all addons.
                 val earlyBingeGroupMatch = if (!autoPlayHandledForSession && !resolvedAutoPlayTarget && persistedBingeGroup != null) {
-                    StreamAutoPlaySelector.selectAutoPlayStream(
+                    StreamAutoPlaySelector.selectAutoPlayStreamAsync(
                         streams = allStreams,
                         mode = playerSettings.streamAutoPlayMode,
                         regexPattern = playerSettings.streamAutoPlayRegex,
@@ -538,12 +540,12 @@ class StreamScreenViewModel @Inject constructor(
                 // chance to return higher-quality streams before the selector
                 // picks from whatever is available.
                 val shouldAutoSelect = !autoPlayHandledForSession && !resolvedAutoPlayTarget && isAllLoaded
-                val selectedAutoPlayStream = if (earlyBingeGroupMatch != null) {
+                var selectedAutoPlayStream = if (earlyBingeGroupMatch != null) {
                     earlyBingeGroupMatch
                 } else if (!shouldAutoSelect) {
                     null
                 } else {
-                    StreamAutoPlaySelector.selectAutoPlayStream(
+                    StreamAutoPlaySelector.selectAutoPlayStreamAsync(
                         streams = allStreams,
                         mode = playerSettings.streamAutoPlayMode,
                         regexPattern = playerSettings.streamAutoPlayRegex,
@@ -556,6 +558,8 @@ class StreamScreenViewModel @Inject constructor(
                         preferBingeGroupInSelection = persistedBingeGroup != null
                     )
                 }
+                // A manual selection can complete while matching is on the worker.
+                if (autoPlayHandledForSession || resolvedAutoPlayTarget) selectedAutoPlayStream = null
                 if (selectedAutoPlayStream != null) {
                     resolvedAutoPlayTarget = true
                 }
@@ -743,7 +747,7 @@ class StreamScreenViewModel @Inject constructor(
                                     result.data, installedAddonOrder
                                 )
                                 val allStreams = orderedStreams.flatMap { it.streams }
-                                val earlyMatch = StreamAutoPlaySelector.selectAutoPlayStream(
+                                val earlyMatch = StreamAutoPlaySelector.selectAutoPlayStreamAsync(
                                     streams = allStreams,
                                     mode = playerSettings.streamAutoPlayMode,
                                     regexPattern = playerSettings.streamAutoPlayRegex,

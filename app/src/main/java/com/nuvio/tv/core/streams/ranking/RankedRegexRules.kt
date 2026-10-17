@@ -10,16 +10,31 @@ class RankedRegexRules private constructor(private val rules: List<Pattern>) {
      * null means evaluation failed, so callers must show manual selection rather than pick a
      * lower tier on incomplete evidence. Never infer exclusions by rewriting a user's regex.
      */
-    fun <T> rank(items: List<T>, text: (T) -> String): List<T>? {
-        val budget = ReadBudget()
+    fun <T> rank(
+        items: List<T>,
+        checkCancelled: () -> Unit = {},
+        nanoTime: () -> Long = System::nanoTime,
+        text: (T) -> String
+    ): List<T>? {
+        val started = nanoTime()
+        val checkpoint = {
+            checkCancelled()
+            if (nanoTime() - started >= MAX_DURATION_NANOS) throw EvaluationLimit()
+        }
+        val tiers = List(rules.size) { ArrayList<T>() }
         return try {
-            items.mapNotNull { item ->
+            for (item in items) {
+                checkpoint()
                 val value = text(item)
                 if (value.length > MAX_TEXT_LENGTH) throw EvaluationLimit()
-                val bounded = BoundedText(value, 0, value.length, budget)
+                // A large batch must not consume one shared read allowance: each candidate
+                // gets the same protection, while the deadline bounds the complete pass.
+                val bounded = BoundedText(value, 0, value.length, ReadBudget(checkpoint))
                 val tier = rules.indexOfFirst { it.matcher(bounded).find() }
-                if (tier < 0) null else tier to item
-            }.sortedBy { it.first }.map { it.second }
+                if (tier >= 0) tiers[tier].add(item)
+            }
+            checkpoint()
+            tiers.flatten()
         } catch (_: EvaluationLimit) {
             null
         } catch (_: StackOverflowError) {
@@ -31,6 +46,7 @@ class RankedRegexRules private constructor(private val rules: List<Pattern>) {
         const val MAX_RULES = 20
         const val MAX_PATTERN_LENGTH = 2048
         private const val MAX_TEXT_LENGTH = 32_768
+        private const val MAX_DURATION_NANOS = 2_000_000_000L
 
         fun isValidPattern(pattern: String): Boolean =
             pattern.isNotBlank() && pattern.length <= MAX_PATTERN_LENGTH && compile(pattern) != null
@@ -54,10 +70,15 @@ class RankedRegexRules private constructor(private val rules: List<Pattern>) {
     }
 
     // Use a pure Java matcher: Android's native matcher converts CharSequence to String,
-    // bypassing read limits. A shared character-read budget interrupts
+    // bypassing read limits. Character-read and elapsed-time checks interrupt
     // pathological patterns during matching, without leaving an uncancellable worker behind.
     private class EvaluationLimit : RuntimeException()
-    private class ReadBudget(var remaining: Int = 10_000_000)
+    private class ReadBudget(val checkpoint: () -> Unit, var remaining: Int = 1_000_000) {
+        fun read() {
+            if (--remaining < 0) throw EvaluationLimit()
+            if (remaining and 1023 == 0) checkpoint()
+        }
+    }
     private class BoundedText(
         private val value: String,
         private val start: Int,
@@ -66,7 +87,7 @@ class RankedRegexRules private constructor(private val rules: List<Pattern>) {
     ) : CharSequence {
         override val length: Int get() = end - start
         override fun get(index: Int): Char {
-            if (--budget.remaining < 0) throw EvaluationLimit()
+            budget.read()
             if (index !in 0 until length) throw IndexOutOfBoundsException()
             return value[start + index]
         }

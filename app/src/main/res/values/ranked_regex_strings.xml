@@ -14,4 +14,5 @@
     <string name="ranked_regex_clear">Clear rules</string>
     <string name="ranked_regex_license_title">Java regex library</string>
     <string name="ranked_regex_license_body">Regex 1.1.11 by Florian Ingerl, derived from OpenJDK. GPL v2 with the Classpath exception. Used for bounded source ranking.</string>
+    <string name="ranked_regex_preset_help">Presets replace this priority only. Exclusion presets do not filter other priorities. Edit or reorder the rules, then Save.</string>
 </resources>

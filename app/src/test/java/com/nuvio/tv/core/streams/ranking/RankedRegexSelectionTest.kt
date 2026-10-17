@@ -10,6 +10,9 @@ import com.nuvio.tv.domain.model.StreamDebridCacheState
 import com.nuvio.tv.domain.model.StreamDebridCacheStatus
 import org.junit.Assert.*
 import org.junit.Test
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 
 class RankedRegexSelectionTest {
     private val tiers = listOf("(?s)(?=.*2160p)(?=.*remux)", "2160p", "1080p")
@@ -97,6 +100,24 @@ class RankedRegexSelectionTest {
         assertFalse(StreamAutoPlayPolicy.isRegexSelectionConfigured("2160p", listOf("[")))
         assertTrue(StreamAutoPlayPolicy.isRegexSelectionConfigured("", listOf(".*")))
         assertFalse(StreamAutoPlayPolicy.isRegexSelectionConfigured("", emptyList()))
+    }
+
+    @Test fun `concurrent selections never reuse the wrong compiled rules`() = runBlocking {
+        val streams = listOf(stream("1080p", "AddonA"), stream("2160p", "AddonB"))
+        (0 until 40).map { index ->
+            async {
+                val pattern = if (index % 2 == 0) "1080p" else "2160p"
+                val selected = StreamAutoPlaySelector.selectAutoPlayStreamAsync(
+                    streams = streams, mode = StreamAutoPlayMode.REGEX_MATCH, regexPattern = "",
+                    source = StreamAutoPlaySource.ALL_SOURCES,
+                    installedAddonNames = setOf("AddonA", "AddonB"),
+                    selectedAddons = emptySet(), selectedPlugins = emptySet(),
+                    rankedRegexPatterns = listOf(pattern)
+                )
+                assertEquals(pattern, selected?.name)
+            }
+        }.awaitAll()
+        Unit
     }
 
     private fun select(

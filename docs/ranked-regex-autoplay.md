@@ -1,7 +1,10 @@
 # Ranked regex autoplay (tester)
 
 Settings → Playback → Stream selection → choose Regex → Ranked regex rules.
-Add up to 20 rules. Move them up/down to set priority, then Save. No rules are
+Add up to 20 rules. Each priority has a Presets button with the same 13 choices
+as the single-regex editor. Choose one, edit if needed, move it up/down, then Save.
+Presets replace only the chosen priority; exclusion presets do not filter other
+priorities. No rules are
 installed by default. Clearing and saving all rules restores the existing single
 regex setting without changing it. Cancel discards edits. Settings are per profile,
 using the existing profile-scoped preferences store.
@@ -53,6 +56,10 @@ metadata can only match through fields the addon actually supplied.
   It knows nothing about Android, Stream, repositories, DI, or player state.
 - `StreamRegexRanking.kt` is the only Stream-to-text adapter.
 - `RankedRegexSettingsCodec.kt` stores ordered JSON without losing regex escapes.
+- `RankedRegexWork.kt` owns background execution and cancellation, independently
+  of Android. Existing callers serialize result application across suspended
+  decisions and retain manual-selection/cancellation guards.
+- `StreamRegexPreset.kt` is the shared preset definition for both editors.
 - `RankedRegexDialog.kt` owns the editor. Existing settings and selector call sites
   provide small hooks. No changes to renderers, resize, audio, or subtitle sync.
 - The pinned `com.github.florianingerl.util:regex:1.1.11` matcher is private to this
@@ -60,7 +67,14 @@ metadata can only match through fields the addon actually supplied.
   Android platform matcher converts input to String, defeating a read-count guard.
   No plugin is registered; the legacy regex still uses the platform matcher.
 - Limit: 20 rules, 2048 characters per rule, 32768 characters per candidate text,
-  and 10 million character reads across a ranking pass. Budget/stack exhaustion
+  and 1 million character reads per candidate with a 2-second elapsed-time budget
+  for a complete pass. Clock/cancellation checks occur between candidates and
+  every 1024 character reads. This is a matching checkpoint budget, not a native
+  preemptive watchdog. Large source lists no longer consume one fixed shared
+  read allowance. Ranked evaluation runs on Dispatchers.Default; old selection
+  paths retain their existing execution. Compiled ranked rules are cached for
+  the active configuration, and tier buckets preserve ties without a full sort.
+  Budget/stack exhaustion
   fails the whole pass to manual; it cannot accidentally prefer a lower tier.
 - No migration or overwrite of the old regex. Invalid saved JSON remains an invalid
   ranked configuration until edited or cleared, rather than silently enabling a
@@ -81,10 +95,31 @@ Primary references:
 - https://android.googlesource.com/platform/prebuilts/fullsdk/sources/+/refs/heads/androidx-compose-integration-release/android-34/java/util/regex/Matcher.java
 - https://github.com/florianingerl/com.florianingerl.util.regex
 
-26 focused JVM tests cover global tier choice, stable ties, late better candidates,
+38 focused JVM tests cover global tier choice, stable ties, late better candidates,
 fallback/no match, explicit catch-all, lookaheads, inline flags, source eligibility,
 playability, filename metadata, continuity, old-mode behavior, read-limit abort,
-1500+ candidates, invalid configuration, and ordered escaped JSON round trips.
+1500+ realistic candidates with 20 rules, valid unanchored lookahead fallbacks,
+background execution, worker cancellation, concurrent compiled-rule reuse,
+all 13 presets, invalid configuration, and ordered escaped JSON round trips.
 The tester release workflow also executes these against the full Android project,
 then builds signed APKs and checks in-place update compatibility. Physical remote
 navigation and real addon metadata should be exercised by testers.
+
+
+## Tester.11 host benchmark
+
+A warmed desktop JVM using synthetic addon metadata of roughly 350–400 characters:
+
+| Rules | Sources | Median ranking time |
+| --- | ---: | ---: |
+| 3 anchored quality tiers | 1500 | about 20 ms |
+| 20 simple rules | 1500 | about 66 ms |
+| 20 simple rules | 5000 | about 245 ms |
+| 3 unanchored lookahead tiers | 200 | about 253 ms |
+
+These are host measurements, not Mi Box measurements or performance guarantees.
+The old shared allowance returned no result for the last three kinds of test;
+the updated matcher returns the expected matches in these cases. Unanchored
+lookaheads can still be substantially more expensive. Use anchored expressions
+where appropriate; the execution budget may open manual selection for expensive
+rules. Actual TV timing, remote focus, and real addon results require device testing.

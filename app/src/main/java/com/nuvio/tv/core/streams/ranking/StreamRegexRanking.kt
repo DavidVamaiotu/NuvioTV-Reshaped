@@ -4,8 +4,17 @@ import com.nuvio.tv.domain.model.Stream
 
 /** The sole model adapter for the standalone ranking engine. No URLs are resolved or fetched. */
 object StreamRegexRanking {
-    fun rank(streams: List<Stream>, patterns: List<String>): List<Stream>? =
-        RankedRegexRules.create(patterns)?.rank(streams, ::searchableText)
+    private data class Compiled(val patterns: List<String>, val rules: RankedRegexRules?)
+    @Volatile private var cached: Compiled? = null
+
+    fun rank(
+        streams: List<Stream>, patterns: List<String>, checkCancelled: () -> Unit = {}
+    ): List<Stream>? {
+        val compiled = cached?.takeIf { it.patterns == patterns } ?: Compiled(
+            patterns.toList(), RankedRegexRules.create(patterns)
+        ).also { cached = it }
+        return compiled.rules?.rank(streams, checkCancelled = checkCancelled, text = ::searchableText)
+    }
 
     fun searchableText(stream: Stream): String = buildString {
         append(stream.addonName).append(' ')

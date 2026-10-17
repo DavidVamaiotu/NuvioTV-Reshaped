@@ -70,4 +70,36 @@ class RankedRegexRulesTest {
         assertEquals("1080p source 0", input.first())
         assertEquals(input.take(1500), ranked.drop(2))
     }
+
+    @Test fun `large ordinary twenty rule batch is not rejected by source count`() {
+        val rules = RankedRegexRules.create((1..19).map { "missing-tier-$it" } + "1080p")!!
+        val input = List(1500) { realisticSource(it) }
+        assertEquals(input, rules.rank(input) { it })
+    }
+
+    @Test fun `ordinary unanchored lookaheads retain valid fallback matches`() {
+        val rules = RankedRegexRules.create(listOf("(?s)(?=.*2160p)(?=.*remux)", "2160p", "1080p"))!!
+        val input = List(200) { realisticSource(it) }
+        assertEquals(input, rules.rank(input) { it })
+    }
+
+    @Test fun `whole pass deadline still fails closed`() {
+        val rules = RankedRegexRules.create(listOf("1080p"))!!
+        var ticks = 0L
+        assertNull(rules.rank(listOf("1080p", "1080p"), nanoTime = { ticks++ * 1_000_000_000L }) { it })
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun `caller cancellation is propagated rather than converted to no match`() {
+        val rules = RankedRegexRules.create(listOf("(a+)+$"))!!
+        var checkpoints = 0
+        rules.rank(listOf("a".repeat(2000) + "!"), checkCancelled = {
+            // The second check occurs inside matching, after the candidate-start check.
+            if (++checkpoints == 2) throw IllegalStateException("cancelled")
+        }) { it }
+    }
+
+    private fun realisticSource(index: Int): String =
+        "Torrentio TorBox cached\nExample.Movie.2026.1080p.WEB-DL.DDP5.1.H.264-GROUP\n" +
+            "English subtitles\nSize: 8.4GB\nhttps://example.com/video/1080p.mkv?token=" + "x".repeat(200) + index
 }

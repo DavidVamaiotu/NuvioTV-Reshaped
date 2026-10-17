@@ -52,7 +52,7 @@ object StreamAutoPlaySelector {
 
 
 
-    fun selectAutoPlayStream(
+    suspend fun selectAutoPlayStreamAsync(
         streams: List<Stream>,
         mode: StreamAutoPlayMode,
         regexPattern: String,
@@ -64,6 +64,40 @@ object StreamAutoPlaySelector {
         preferBingeGroupInSelection: Boolean = false,
         bingeGroupOnly: Boolean = false,
         rankedRegexPatterns: List<String> = emptyList()
+    ): Stream? {
+        return com.nuvio.tv.core.streams.ranking.RankedRegexWork.run(
+            enabled = mode == StreamAutoPlayMode.REGEX_MATCH && rankedRegexPatterns.isNotEmpty() && !bingeGroupOnly
+        ) { checkpoint ->
+            selectAutoPlayStream(
+                streams = streams,
+                mode = mode,
+                regexPattern = regexPattern,
+                source = source,
+                installedAddonNames = installedAddonNames,
+                selectedAddons = selectedAddons,
+                selectedPlugins = selectedPlugins,
+                preferredBingeGroup = preferredBingeGroup,
+                preferBingeGroupInSelection = preferBingeGroupInSelection,
+                bingeGroupOnly = bingeGroupOnly,
+                rankedRegexPatterns = rankedRegexPatterns,
+                rankedRegexCheckCancelled = checkpoint
+            )
+        }
+    }
+
+    fun selectAutoPlayStream(
+        streams: List<Stream>,
+        mode: StreamAutoPlayMode,
+        regexPattern: String,
+        source: StreamAutoPlaySource,
+        installedAddonNames: Set<String>,
+        selectedAddons: Set<String>,
+        selectedPlugins: Set<String>,
+        preferredBingeGroup: String? = null,
+        preferBingeGroupInSelection: Boolean = false,
+        bingeGroupOnly: Boolean = false,
+        rankedRegexPatterns: List<String> = emptyList(),
+        rankedRegexCheckCancelled: () -> Unit = {}
     ): Stream? {
         if (streams.isEmpty()) return null
 
@@ -116,7 +150,7 @@ object StreamAutoPlaySelector {
             StreamAutoPlayMode.REGEX_MATCH -> {
                 if (rankedRegexPatterns.isNotEmpty()) {
                     return StreamRegexRanking.rank(
-                        candidateStreams.filter { isPlayable(it) }, rankedRegexPatterns
+                        candidateStreams.filter { isPlayable(it) }, rankedRegexPatterns, rankedRegexCheckCancelled
                     )?.firstOrNull()
                 }
                 val pattern = regexPattern.trim()

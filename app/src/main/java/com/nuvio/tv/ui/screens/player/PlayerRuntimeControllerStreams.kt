@@ -8,6 +8,7 @@ import androidx.media3.common.util.UnstableApi
 import com.nuvio.tv.core.connection.StreamConnectionFit
 import com.nuvio.tv.core.debrid.DirectDebridPlayableResult
 import com.nuvio.tv.core.network.NetworkResult
+import kotlinx.coroutines.sync.withLock
 import com.nuvio.tv.core.player.StreamAutoPlaySelector
 import com.nuvio.tv.data.local.PlayerSettings
 import com.nuvio.tv.data.local.StreamAutoPlayMode
@@ -1835,10 +1836,12 @@ internal fun PlayerRuntimeController.playNextEpisode(userInitiated: Boolean = fa
             // finishes, so the waiting code below resumes without polling.
             val searchSettled = CompletableDeferred<Unit>()
 
-            fun trySelectStream(data: List<AddonStreams>): Stream? {
+            val selectionMutex = kotlinx.coroutines.sync.Mutex()
+            suspend fun trySelectStream(data: List<AddonStreams>): Stream? = selectionMutex.withLock {
+                if (autoSelectTriggered) return@withLock null
                 val orderedStreams = StreamAutoPlaySelector.orderAddonStreams(data, installedAddonOrder)
                 val allStreams = orderedStreams.flatMap { it.streams }
-                return StreamAutoPlaySelector.selectAutoPlayStream(
+                StreamAutoPlaySelector.selectAutoPlayStreamAsync(
                     streams = allStreams,
                     mode = effectiveMode,
                     regexPattern = effectiveRegex,
@@ -1857,11 +1860,11 @@ internal fun PlayerRuntimeController.playNextEpisode(userInitiated: Boolean = fa
                 )
             }
 
-            fun tryBingeGroupOnly(data: List<AddonStreams>): Stream? {
+            suspend fun tryBingeGroupOnly(data: List<AddonStreams>): Stream? {
                 if (currentStreamBingeGroup == null || !playerSettings.streamAutoPlayPreferBingeGroupForNextEpisode) return null
                 val orderedStreams = StreamAutoPlaySelector.orderAddonStreams(data, installedAddonOrder)
                 val allStreams = orderedStreams.flatMap { it.streams }
-                return StreamAutoPlaySelector.selectAutoPlayStream(
+                return StreamAutoPlaySelector.selectAutoPlayStreamAsync(
                     streams = allStreams,
                     mode = effectiveMode,
                     regexPattern = effectiveRegex,
@@ -1877,6 +1880,7 @@ internal fun PlayerRuntimeController.playNextEpisode(userInitiated: Boolean = fa
             }
 
             fun recordSelection(candidate: Stream) {
+                if (autoSelectTriggered) return
                 autoSelectTriggered = true
                 selectedStream = candidate
                 searchSettled.complete(Unit)

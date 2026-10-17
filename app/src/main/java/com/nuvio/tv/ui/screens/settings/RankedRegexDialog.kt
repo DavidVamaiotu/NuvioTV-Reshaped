@@ -19,6 +19,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -46,10 +48,12 @@ internal fun RankedRegexDialog(
     onDismiss: () -> Unit
 ) {
     // Stable row identities keep text input and D-pad focus attached to a rule after moving it.
-    var nextId by remember { mutableStateOf(initialPatterns.size) }
+    var nextId by remember(initialPatterns) { mutableStateOf(initialPatterns.size) }
     var rows by remember(initialPatterns) {
         mutableStateOf(initialPatterns.mapIndexed { index, pattern -> index to pattern })
     }
+    var presetRowId by remember(initialPatterns) { mutableStateOf<Int?>(null) }
+    val presets = streamRegexPresets()
     val patterns = rows.map { it.second.trim() }.filter { it.isNotEmpty() }
     val valid = patterns.isEmpty() || RankedRegexRules.create(patterns) != null
 
@@ -69,7 +73,16 @@ internal fun RankedRegexDialog(
                 }
                 itemsIndexed(rows, key = { _, row -> row.first }) { index, row ->
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(stringResource(R.string.ranked_regex_priority, index + 1))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(stringResource(R.string.ranked_regex_priority, index + 1))
+                            Button(onClick = { presetRowId = row.first }) {
+                                Text(stringResource(R.string.autoplay_regex_presets))
+                            }
+                        }
                         RankedRegexInput(row.second) { value ->
                             rows = rows.map { if (it.first == row.first) it.first to value else it }
                         }
@@ -106,6 +119,40 @@ internal fun RankedRegexDialog(
                 Button(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
                 Button(enabled = valid, onClick = { onSave(patterns) }) {
                     Text(stringResource(R.string.action_save))
+                }
+            }
+        }
+    }
+    presetRowId?.let { rowId ->
+        NuvioDialog(
+            onDismiss = { presetRowId = null },
+            title = stringResource(R.string.autoplay_regex_presets),
+            subtitle = stringResource(R.string.ranked_regex_preset_help),
+            width = 700.dp
+        ) {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 340.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                itemsIndexed(presets, key = { index, _ -> index }) { _, preset ->
+                    Card(
+                        onClick = {
+                            rows = rows.map { if (it.first == rowId) it.first to preset.second else it }
+                            presetRowId = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        scale = CardDefaults.scale(focusedScale = 1f)
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text(preset.first)
+                            Text(
+                                preset.second,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
             }
         }
