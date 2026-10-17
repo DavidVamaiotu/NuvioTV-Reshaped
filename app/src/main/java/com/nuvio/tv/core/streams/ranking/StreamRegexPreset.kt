@@ -13,6 +13,6 @@ enum class StreamRegexPreset(val pattern: String) {
     HDR_DV("(hdr|hdr10\\+?|dv|dolby\\s*vision)"),
     DOLBY_ATMOS_DTS("(atmos|truehd|dts[-\\s]?hd|dtsx?)"),
     ENGLISH("(\\beng\\b|english)"),
-    NO_CAM_TS("^(?!.*\\b(cam|hdcam|ts|telesync)\\b).*$"),
+    NO_CAM_TS("(?s)^(?!.*\\b(cam|hdcam|ts|telesync)\\b).*$"),
     NO_REMUX_HDR("(?is)^(?!.*\\b(hdr|hdr10|dv|dolby|vision|hevc|remux|2160p)\\b).+$")
 }

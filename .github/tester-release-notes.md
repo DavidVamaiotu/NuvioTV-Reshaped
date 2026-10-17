@@ -1,5 +1,6 @@
 - Every **Ranked regex** priority now has a **Presets** picker, sharing the same 13 choices as the single-regex editor. Presets fill that priority; you can still edit and reorder it before saving.
 - Fixed large source lists exhausting one shared matching allowance and falling back to manual despite valid matches. Ranked matching now runs off the UI thread, checks cancellation, caches compiled rules, and uses linear tier buckets.
 - Added per-source protection and an elapsed-time matching budget. Expensive or incomplete evaluations still open manual selection instead of guessing a lower tier.
-- Fixed row identities when saved rules reload. Added large-list, preset, background-worker and cancellation coverage: 38 focused tests.
+- Fixed the No CAM/TS preset rejecting ordinary multiline addon descriptions.
+- Fixed row identities when saved rules reload. Added large-list, preset, background-worker and cancellation coverage: 39 focused tests.
 - [Setup examples, limits, and implementation notes](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/blob/subtitle-autosync-tester/docs/ranked-regex-autoplay.md).

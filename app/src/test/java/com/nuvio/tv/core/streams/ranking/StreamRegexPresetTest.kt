@@ -36,4 +36,11 @@ class StreamRegexPresetTest {
         val noHdr = RankedRegexRules.create(listOf(StreamRegexPreset.NO_REMUX_HDR.pattern))!!
         assertEquals(listOf("1080p AVC"), noHdr.rank(listOf("2160p HDR", "1080p AVC")) { it })
     }
+
+    @Test fun `no cam preset handles multiline addon descriptions`() {
+        val good = "Torrentio 1080p\nMovie.WEB-DL\nEnglish audio"
+        val bad = "Torrentio 1080p\nMovie.HDCAM\nEnglish audio"
+        val rules = RankedRegexRules.create(listOf(StreamRegexPreset.NO_CAM_TS.pattern))!!
+        assertEquals(listOf(good), rules.rank(listOf(bad, good)) { it })
+    }
 }

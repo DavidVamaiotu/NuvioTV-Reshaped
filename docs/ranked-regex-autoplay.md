@@ -2,7 +2,8 @@
 
 Settings → Playback → Stream selection → choose Regex → Ranked regex rules.
 Add up to 20 rules. Each priority has a Presets button with the same 13 choices
-as the single-regex editor. Choose one, edit if needed, move it up/down, then Save.
+as the single-regex editor. The No CAM/TS preset now handles multiline descriptions
+in both editors. Choose one, edit if needed, move it up/down, then Save.
 Presets replace only the chosen priority; exclusion presets do not filter other
 priorities. No rules are
 installed by default. Clearing and saving all rules restores the existing single
@@ -95,7 +96,7 @@ Primary references:
 - https://android.googlesource.com/platform/prebuilts/fullsdk/sources/+/refs/heads/androidx-compose-integration-release/android-34/java/util/regex/Matcher.java
 - https://github.com/florianingerl/com.florianingerl.util.regex
 
-38 focused JVM tests cover global tier choice, stable ties, late better candidates,
+39 focused JVM tests cover global tier choice, stable ties, late better candidates,
 fallback/no match, explicit catch-all, lookaheads, inline flags, source eligibility,
 playability, filename metadata, continuity, old-mode behavior, read-limit abort,
 1500+ realistic candidates with 20 rules, valid unanchored lookahead fallbacks,
