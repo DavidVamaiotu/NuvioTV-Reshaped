@@ -74,7 +74,10 @@ internal fun SubtitleSyncStatusOverlay(modifier: Modifier = Modifier) {
             } else {
                 "Listened ${state.lookAheadSec}s ahead"
             }
-            Line("$listening · ${state.wordsHeard} words recognised")
+            Line(listening)
+            if (state.wordsHeard > 0) Line("${state.wordsHeard} words recognised")
+            Line("Analysed ${state.analysedAudioSec}s audio · ~${state.speechHeardSec}s speech activity")
+            if (state.waiting.isNotEmpty()) Line(state.waiting)
             if (state.sampling.isNotEmpty()) Line("Across the film: ${state.sampling}")
             if (state.recognizer.isNotEmpty()) Line("Speech recognition: ${state.recognizer}")
             if (state.reference.isNotEmpty()) Line("English reference: ${state.reference}")

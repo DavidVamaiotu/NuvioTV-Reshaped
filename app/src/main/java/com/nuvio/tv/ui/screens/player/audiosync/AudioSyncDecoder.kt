@@ -9,12 +9,14 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Process
+import android.os.SystemClock
 import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.MediaFormatUtil
 import androidx.media3.decoder.ffmpeg.AudioSyncFfmpegDecoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Decodes the copied compressed audio on its own low-priority thread with a private [MediaCodec]
@@ -61,6 +63,34 @@ internal class AudioSyncDecoder(
     private var mono = FloatArray(0)
     private val bufferInfo = MediaCodec.BufferInfo()
     private val unsupportedMimes = HashSet<String>()
+    private val encodedSamples = AtomicLong()
+    private val decodedUs = AtomicLong()
+    private val playbackUs = AtomicLong()
+    private val droppedSamples = AtomicLong()
+    private val droppedPlaybackBuffers = AtomicLong()
+    @Volatile private var lastPcmAtMs = 0L
+    @Volatile private var lastPcmTimeUs = Long.MIN_VALUE
+    @Volatile private var workerState = "not started"
+    @Volatile private var decoderName = "none"
+    @Volatile private var lastError: String? = null
+
+    /** Metadata only; no audio, subtitle text or stream URLs are retained. */
+    fun diagnostics(): String {
+        val bytes = synchronized(lock) { queuedBytes }
+        val lastOutput = lastPcmAtMs
+        val age = if (lastOutput == 0L) "never" else "${(SystemClock.elapsedRealtime() - lastOutput) / 1_000}s ago"
+        val mediaMs = lastPcmTimeUs.takeUnless { it == Long.MIN_VALUE }?.div(1_000L)
+        return "decoder=$decoderName worker=$workerState input=${encodedSamples.get()}" +
+            " decoded=${decodedUs.get() / 1_000}ms playback=${playbackUs.get() / 1_000}ms" +
+            " droppedInput=${droppedSamples.get()} droppedPlayback=${droppedPlaybackBuffers.get()} queue=${bytes}B" +
+            " captureStarts=${analyzer.starts} playbackStarts=${liveAnalyzer.starts}" +
+            " lastPcm=$age mediaMs=${mediaMs ?: "-"} lastError=${lastError ?: "-"}"
+    }
+
+    private fun recordPcm(timeUs: Long) {
+        lastPcmTimeUs = timeUs
+        lastPcmAtMs = SystemClock.elapsedRealtime()
+    }
 
     /** Called from the extractor (loading) thread. Returns false when the sample was dropped. */
     fun offer(format: Format, timeUs: Long, data: ByteArray, offset: Int, size: Int): Boolean {
@@ -68,7 +98,9 @@ internal class AudioSyncDecoder(
         synchronized(lock) {
             if (released) return false
             if (mime in unsupportedMimesSnapshot) return false
+            encodedSamples.incrementAndGet()
             if (queuedBytes + size > MAX_QUEUED_BYTES) {
+                droppedSamples.incrementAndGet()
                 if (!dropping) {
                     dropping = true
                     queue.addLast(Item.Discontinuity)
@@ -89,7 +121,10 @@ internal class AudioSyncDecoder(
         synchronized(lock) {
             if (released) return
             val bytes = frames * 4
-            if (queuedBytes + bytes > MAX_QUEUED_BYTES) return
+            if (queuedBytes + bytes > MAX_QUEUED_BYTES) {
+                droppedPlaybackBuffers.incrementAndGet()
+                return
+            }
             queue.addLast(Item.Pcm(mono.copyOf(frames), sampleRate, timeUs))
             queuedBytes += bytes
             ensureThread()
@@ -148,6 +183,7 @@ internal class AudioSyncDecoder(
         try {
             while (true) {
                 val item = synchronized(lock) {
+                    workerState = "waiting for input"
                     while (queue.isEmpty() && !released) lock.wait()
                     if (released) return
                     lock.notifyAll()
@@ -159,19 +195,30 @@ internal class AudioSyncDecoder(
                         }
                     }
                 }
+                workerState = when (item) {
+                    is Item.Pcm -> "analysing playback PCM"
+                    is Item.Sample -> "decoding compressed audio"
+                    Item.Discontinuity -> "resetting"
+                }
                 when (item) {
                     is Item.Discontinuity -> {
                         flushCodec()
                         analyzer.reset()
                     }
                     is Item.Sample -> decode(item)
-                    is Item.Pcm -> liveAnalyzer.accept(item.samples, item.samples.size, item.sampleRate, item.timeUs)
+                    is Item.Pcm -> {
+                        playbackUs.addAndGet(item.samples.size * 1_000_000L / item.sampleRate.coerceAtLeast(1))
+                        recordPcm(item.timeUs)
+                        liveAnalyzer.accept(item.samples, item.samples.size, item.sampleRate, item.timeUs)
+                    }
                 }
             }
         } catch (_: InterruptedException) {
         } catch (error: Throwable) {
+            lastError = error.javaClass.simpleName
             SyncLog.w("decoder loop stopped: ${error.message}")
         } finally {
+            workerState = "stopped"
             releaseCodec()
         }
     }
@@ -188,10 +235,14 @@ internal class AudioSyncDecoder(
                 inputIndex = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
                 attempts++
             }
-            if (inputIndex < 0) return
+            if (inputIndex < 0) {
+                droppedSamples.incrementAndGet()
+                return
+            }
             val input = codec.getInputBuffer(inputIndex) ?: return
             input.clear()
             if (input.remaining() < sample.data.size) {
+                droppedSamples.incrementAndGet()
                 codec.queueInputBuffer(inputIndex, 0, 0, sample.timeUs, 0)
                 return
             }
@@ -199,6 +250,7 @@ internal class AudioSyncDecoder(
             codec.queueInputBuffer(inputIndex, 0, sample.data.size, sample.timeUs, 0)
             drainOutput(codec)
         } catch (error: Exception) {
+            lastError = error.javaClass.simpleName
             SyncLog.w("decode failed for ${sample.format.sampleMimeType}: ${error.message}")
             releaseCodec()
             analyzer.reset()
@@ -210,13 +262,17 @@ internal class AudioSyncDecoder(
             var attempts = 0
             while (!decoder.queue(sample.data, sample.timeUs)) {
                 drainFfmpeg(decoder)
-                if (++attempts > MAX_INPUT_ATTEMPTS) return
+                if (++attempts > MAX_INPUT_ATTEMPTS) {
+                    droppedSamples.incrementAndGet()
+                    return
+                }
                 Thread.sleep(2)
             }
             drainFfmpeg(decoder)
         } catch (error: InterruptedException) {
             throw error
         } catch (error: Exception) {
+            lastError = error.javaClass.simpleName
             SyncLog.w("ffmpeg decode failed for ${sample.format.sampleMimeType}: ${error.message}")
             releaseCodec()
             analyzer.reset()
@@ -277,6 +333,8 @@ internal class AudioSyncDecoder(
         if (channels <= 0 || rate <= 0) return
         val frames = buffer.remaining() / ((if (outputFloat) 4 else 2) * channels)
         if (frames <= 0) return
+        decodedUs.addAndGet(frames * 1_000_000L / rate)
+        recordPcm(timeUs)
         if (mono.size < frames) mono = FloatArray(frames)
         PcmDownmix.toMono(buffer, buffer.position(), frames, channels, outputFloat, centerIndex, mono)
         analyzer.accept(mono, frames, rate, timeUs)
@@ -299,6 +357,7 @@ internal class AudioSyncDecoder(
         if (created != null) {
             codec = created
             codecFormat = format
+            decoderName = created.name
             SyncLog.i("decoding $mime ${format.channelCount}ch ${format.sampleRate}Hz with ${created.name}")
             return true
         }
@@ -314,10 +373,12 @@ internal class AudioSyncDecoder(
             codecFormat = format
             // FFmpeg emits float PCM in its native layout, where the centre is the third channel.
             outputFloat = true
+            decoderName = software.name
             SyncLog.i("decoding $mime ${format.channelCount}ch ${format.sampleRate}Hz with ${software.name}")
             return true
         }
         unsupportedMimes += mime
+        decoderName = "playback tap ($mime)"
         unsupportedMimesSnapshot = unsupportedMimes.toSet()
         SyncLog.i("no usable decoder for $mime; relying on the playback tap")
         runCatching { onUnsupportedFormat(mime) }

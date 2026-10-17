@@ -114,7 +114,13 @@ internal class AudioSyncTracker(
     private var provisionalBlocked = false
     private var streakStartAnalysedSeconds = 0.0
 
+    @Volatile
     var lastEstimate: SubtitleAudioAligner.Estimate? = null
+        private set
+
+    /** Why speech detection has not confirmed a mapping; independent of English recognition. */
+    @Volatile
+    var waitingReason: String = "Waiting for analysed audio"
         private set
 
     private var followRuns = 0
@@ -146,7 +152,10 @@ internal class AudioSyncTracker(
     }
 
     fun update(timeline: SpeechTimeline, playbackPositionMs: Long): Outcome {
-        val known = timeline.knownRange() ?: return Outcome.NotEnoughEvidence
+        val known = timeline.knownRange() ?: run {
+            waitingReason = "Waiting for analysed audio"
+            return Outcome.NotEnoughEvidence
+        }
         val current = model
         return if (current == null) search(timeline) else follow(timeline, known, current, playbackPositionMs)
     }
@@ -157,18 +166,32 @@ internal class AudioSyncTracker(
         val knownFrames = segments.sumOf { it.knownFrames }
         val provisionalFrames = (provisionalPolicy.minKnownSeconds * FRAMES_PER_SECOND).toInt()
         val minFrames = if (provisionalPolicy.enabled) minOf(MIN_KNOWN_FRAMES, provisionalFrames) else MIN_KNOWN_FRAMES
-        if (knownFrames < minFrames) return Outcome.NotEnoughEvidence
+        if (knownFrames < minFrames) {
+            waitingReason = "Collecting audio (need ${(minFrames / FRAMES_PER_SECOND).toInt()}s for a first estimate)"
+            return Outcome.NotEnoughEvidence
+        }
         // One transform of the speech serves every check below; each ratio is correlated once.
         val speech = SubtitleAudioAligner.prepare(segments, -MAX_SHIFT_MS, MAX_SHIFT_MS)
-            ?: return Outcome.NotEnoughEvidence
-        val estimate = speech.estimate(track) ?: return Outcome.NotEnoughEvidence
+            ?: run {
+                waitingReason = "Speech activity is too constant to compare (silence, music or flat detector output)"
+                lastEstimate = null
+                return Outcome.NotEnoughEvidence
+            }
+        val estimate = speech.estimate(track) ?: run {
+            waitingReason = "No usable subtitle overlap within the 60s offset search"
+            lastEstimate = null
+            return Outcome.NotEnoughEvidence
+        }
         lastEstimate = estimate
-        if (isLockable(estimate, segments, knownFrames, track)) {
+        val blocker = lockBlocker(estimate, segments, knownFrames, track)
+        if (blocker == null) {
+            waitingReason = ""
             val locked = SubtitleSyncModel(listOf(SubtitleSyncSegment(0L, estimate.scale, estimate.shiftMs)))
             model = locked
             provisionalModel = null
             return Outcome.Locked(locked, estimate)
         }
+        waitingReason = blocker
         val candidate = if (!provisionalPolicy.unitScaleOnly || estimate.scale == 1.0) {
             estimate
         } else {
@@ -427,15 +450,28 @@ internal class AudioSyncTracker(
             segments: List<SpeechSegment>,
             knownFrames: Int,
             track: SubtitleSpeechTrack,
-        ): Boolean {
+        ): Boolean = lockBlocker(estimate, segments, knownFrames, track) == null
+
+        private fun lockBlocker(
+            estimate: SubtitleAudioAligner.Estimate,
+            segments: List<SpeechSegment>,
+            knownFrames: Int,
+            track: SubtitleSpeechTrack,
+        ): String? {
             val requiredProminence = if (isStandardRate(estimate.scale)) {
                 ACCEPT_PROMINENCE
             } else {
                 ACCEPT_PROMINENCE + NON_STANDARD_RATE_PENALTY
             }
-            return knownFrames >= MIN_KNOWN_FRAMES && hasEnoughEvidence(estimate) &&
-                !estimate.atSearchEdge && estimate.prominence >= requiredProminence &&
-                confirmedByBothHalves(segments, estimate, track)
+            return when {
+                knownFrames < MIN_KNOWN_FRAMES -> "Collecting audio (need 60s for confirmation)"
+                estimate.cueCount < MIN_CUES -> "Too few overlapping dialogue lines (need $MIN_CUES)"
+                !(estimate.speechSeconds >= MIN_SPEECH_SECONDS) -> "Too little detected speech (need ${MIN_SPEECH_SECONDS.toInt()}s)"
+                estimate.atSearchEdge -> "Best timing is at the 60s search boundary; match is unreliable"
+                !(estimate.prominence >= requiredProminence) -> "Several timings match similarly; waiting for a clearer match"
+                !confirmedByBothHalves(segments, estimate, track) -> "Timing does not agree across both halves of the analysed audio"
+                else -> null
+            }
         }
 
         private fun hasEnoughEvidence(

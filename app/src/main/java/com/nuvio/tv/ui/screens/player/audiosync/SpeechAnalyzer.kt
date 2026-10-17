@@ -50,6 +50,9 @@ internal class SpeechAnalyzer(
     private var nextFrame = 0
     private var warmupChunks = 0
     private var running = false
+    @Volatile
+    var starts: Long = 0L
+        private set
 
     fun reset() {
         running = false
@@ -74,6 +77,7 @@ internal class SpeechAnalyzer(
         runStartTimeUs + receivedSamples * 1_000_000L / sourceRate.coerceAtLeast(1)
 
     private fun start(sampleRate: Int, timeUs: Long) {
+        starts++
         if (sampleRate != sourceRate || kernel == null) {
             sourceRate = sampleRate
             kernel = ResampleKernel.create(sampleRate, SileroVad.SAMPLE_RATE)

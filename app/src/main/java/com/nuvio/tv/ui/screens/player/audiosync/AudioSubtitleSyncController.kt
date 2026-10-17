@@ -62,6 +62,9 @@ internal class AudioSubtitleSyncController(
         }, "NuvioAudioSyncAlign").apply { isDaemon = true }
     }
     private val alignRunning = AtomicBoolean(false)
+    @Volatile private var alignmentState = "idle"
+    @Volatile private var alignmentStartedAtMs = 0L
+    @Volatile private var lastAlignmentDurationMs = 0L
     private val sessionRequest = AtomicInteger(0)
 
     @Volatile
@@ -312,13 +315,17 @@ internal class AudioSubtitleSyncController(
         val speechModel = SubtitleSyncStatus.speechModel.value
         // A model downloaded from Settings mid-playback is picked up here.
         if (recognizer == null && speechModel.downloaded && !audioIsForeign()) ensureRecognizer()
+        val foreignAudio = audioIsForeign()
         val recognizerText = when {
+            foreignAudio -> "not used (non-English audio); speech detection only"
+            noUsableReference -> "idle (no usable English reference); speech detection only"
             recognizer != null -> recognizerReady
             speechModel.downloading -> "downloading model ${(speechModel.progress * 100).toInt()}%"
             speechModel.error != null -> "model download failed (${speechModel.error})"
             recognizerStatus.isNotEmpty() -> recognizerStatus
             else -> "starting"
         }
+        val evidence = timeline.diagnostics()
         val diagnostics = SubtitleSyncDiagnostics(
             phase = phase,
             method = lockMethod?.let { method ->
@@ -332,36 +339,61 @@ internal class AudioSubtitleSyncController(
             }.orEmpty(),
             lookAheadSec = if (liveOnly) 0 else aheadSec,
             liveOnly = liveOnly,
+            analysedAudioSec = evidence.analysedSeconds.toInt(),
+            speechHeardSec = evidence.speechSeconds.toInt(),
+            waiting = if (synced == null || estimated) current.tracker.waitingReason else "",
+            pipeline = "playheadMs=$playbackPositionMs durationMs=$mediaDurationMs" +
+                " analysedThroughMs=${evidence.lastMediaMs ?: "-"} " +
+                "matcher=$alignmentState matcherElapsedMs=${if (alignRunning.get()) SystemClock.elapsedRealtime() - alignmentStartedAtMs else 0L}" +
+                " lastMatchRunMs=$lastAlignmentDurationMs " +
+                (decoder?.diagnostics() ?: "decoder not created"),
             wordsHeard = asr?.heardWordCount ?: 0,
             recognizer = recognizerText,
             reference = if (audioIsForeign()) "not used (audio is not English)" else referenceStatus,
             alternatives = pool?.summary.orEmpty(),
             rate = synced?.segments?.last()?.scale?.takeIf { kotlin.math.abs(it - 1.0) > 1e-6 }
                 ?.let { "subtitle stretched ×${"%.4f".format(java.util.Locale.US, it)}" },
-            sampling = spotStatus.ifEmpty { spotUnavailable?.takeIf { it.first == sourceKey }?.second.orEmpty() },
+            sampling = samplingStatus(),
             notice = switchNotice?.takeIf { it.first == current.key }?.second,
-            problem = problem ?: if (decoderUnavailable) "Speech detector could not be loaded" else null,
+            problem = if (decoderUnavailable) "Speech detector could not be loaded" else
+                problem.takeUnless { foreignAudio && noUsableReference },
         )
         SubtitleSyncStatus.publishDiagnostics(diagnostics)
         logChange(diagnostics)
     }
 
     private var lastLoggedState = ""
+    private var lastLoggedAtMs = 0L
 
-    /** Logs what the status panel shows whenever it changes (offset to the tenth of a second). */
+    /** Logs state changes and a bounded progress heartbeat, even when the panel stays Listening. */
     private fun logChange(diagnostics: SubtitleSyncDiagnostics) {
         val state = with(diagnostics) {
             "panel: $phase mapping=${mapping.ifEmpty { "-" }}" +
                 " method=${method ?: "-"} rate=${rate ?: "1"} ahead=${lookAheadSec}s words=$wordsHeard" +
                 " recognizer=$recognizer reference=$reference others=$alternatives sampling=$sampling" +
+                " waiting=$waiting" +
                 (notice?.let { " notice=$it" } ?: "") + (problem?.let { " problem=$it" } ?: "")
         }
         // Word count and look-ahead change constantly; log them only alongside a real change.
         val key = state.replace(changingPanelFields, "")
-        if (key == lastLoggedState) return
+        val now = SystemClock.elapsedRealtime()
+        if (key == lastLoggedState && now - lastLoggedAtMs < DIAGNOSTICS_HEARTBEAT_MS) return
         lastLoggedState = key
+        lastLoggedAtMs = now
         val offset = diagnostics.offsetMs?.let { " offset=%+.1fs".format(java.util.Locale.US, it / 1_000.0) }.orEmpty()
-        SyncLog.i(state + offset)
+        val estimate = session?.tracker?.lastEstimate?.let(::describe) ?: "none"
+        SyncLog.i(state + offset + " analysed=${diagnostics.analysedAudioSec}s" +
+            " speechActivity=${diagnostics.speechHeardSec}s ${diagnostics.pipeline} candidate=[$estimate]")
+    }
+
+    private fun samplingStatus(): String = spotStatus.ifEmpty {
+        spotUnavailable?.takeIf { it.first == sourceKey }?.second ?: when {
+            spotSource == null -> "no sampling source configured"
+            mediaDurationMs <= 0 -> "waiting for media duration"
+            mediaDurationMs < MIN_SAMPLED_FILM_MS -> "not used for titles shorter than 20 minutes"
+            timeline.knownFrameCount() < SAMPLE_AFTER_FRAMES -> "waiting for 5s of analysed audio"
+            else -> "waiting to sample"
+        }
     }
 
     fun onSourceChanged(newSourceKey: String) {
@@ -441,7 +473,11 @@ internal class AudioSubtitleSyncController(
 
     private fun sampleSpots(source: SpotSource, current: Session) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
-        val weights = runCatching { loadWeights(appContext) }.getOrNull() ?: return
+        val weights = runCatching { loadWeights(appContext) }.getOrNull() ?: run {
+            spotStatus = "speech detector could not be loaded"
+            SyncLog.w("audio sampling skipped: speech detector weights unavailable")
+            return
+        }
         createDecoder()
         // One decoder per connection: each reads a different place, so their audio must not mix.
         // They are made as connections open, so a single-connection host costs a single decoder.
@@ -471,7 +507,11 @@ internal class AudioSubtitleSyncController(
                 .firstOrNull()?.let { (it.toFrame * SpeechTimeline.FRAME_DURATION_MS).toLong() } ?: 0L
             val notBeforeMs = if (playbackPositionMs < RESUME_THRESHOLD_MS) coveredMs + SPOT_MS else 0L
             val spots = DialogueSpotPlanner.plan(tracks, mediaDurationMs, SPOT_COUNT, SPOT_MS, notBeforeMs)
-            if (spots.isEmpty()) return
+            if (spots.isEmpty()) {
+                spotStatus = "no suitable dialogue spots found"
+                SyncLog.i("audio sampling skipped: no suitable dialogue spots")
+                return
+            }
             SyncLog.i("sampling audio at ${spots.map { it / 1_000 }}s")
             spotStatus = "sampling ${spots.size} dialogue spots…"
             val startedAt = SystemClock.elapsedRealtime()
@@ -504,9 +544,13 @@ internal class AudioSubtitleSyncController(
             // The last spot of each connection ends mid-speech more often than not.
             synchronized(segmenters) { segmenters.toList() }.forEach(SpeechSegmenter::flush)
         } catch (error: Throwable) {
+            spotStatus = "sampling failed (${error.javaClass.simpleName})"
             SyncLog.w("audio sampling failed: ${error.message}")
         } finally {
-            synchronized(decoders) { decoders.toList() }.forEach(AudioSyncDecoder::release)
+            synchronized(decoders) { decoders.toList() }.forEachIndexed { index, sampledDecoder ->
+                SyncLog.i("sampling decoder[$index] ${sampledDecoder.diagnostics()}")
+                sampledDecoder.release()
+            }
         }
     }
 
@@ -597,6 +641,8 @@ internal class AudioSubtitleSyncController(
                 val started = Session(key, track, dialogue)
                 sessionStartedAtMs = SystemClock.elapsedRealtime()
                 session = started
+                lastLoggedState = ""
+                lastLoggedAtMs = 0L
                 SyncLog.i("sync session started for $key with ${track.size} dialogue cues")
                 if (!enabled) return@execute
                 when {
@@ -632,7 +678,12 @@ internal class AudioSubtitleSyncController(
         stopPool()
         lockedAtElapsedMs = 0L
         asr?.stopSession()
-        if (session != null) SyncLog.i("sync session stopped")
+        session?.let { current ->
+            val evidence = timeline.diagnostics()
+            SyncLog.i("sync session stopped analysed=${evidence.analysedSeconds.toInt()}s" +
+                " speechActivity=${evidence.speechSeconds.toInt()}s waiting=${current.tracker.waitingReason}" +
+                " ${decoder?.diagnostics().orEmpty()}")
+        }
         session = null
         model = null
         SubtitleSyncStatus.publishDiagnostics(null)
@@ -1160,21 +1211,28 @@ internal class AudioSubtitleSyncController(
             return
         }
         if (!alignRunning.compareAndSet(false, true)) return
+        alignmentState = "queued"
+        alignmentStartedAtMs = now
         lastAlignedSession = current
         lastAlignVersion = version
         lastAlignAtMs = now
         val position = playbackPositionMs
         try {
             aligner.execute {
+                alignmentState = "running"
+                alignmentStartedAtMs = SystemClock.elapsedRealtime()
                 try {
                     align(current, position)
                 } catch (error: Throwable) {
                     SyncLog.w("alignment failed: ${error.message}")
                 } finally {
+                    lastAlignmentDurationMs = SystemClock.elapsedRealtime() - alignmentStartedAtMs
+                    alignmentState = "idle"
                     alignRunning.set(false)
                 }
             }
         } catch (_: Exception) {
+            alignmentState = "idle"
             alignRunning.set(false)
         }
     }
@@ -1259,6 +1317,7 @@ internal class AudioSubtitleSyncController(
         private const val ALIGN_INTERVAL_MS = 8_000L
         private const val SEARCH_INTERVAL_MS = 3_000L
         private const val DIAGNOSTICS_INTERVAL_MS = 1_000L
+        private const val DIAGNOSTICS_HEARTBEAT_MS = 15_000L
         private const val PREFERENCES = "nuvio_audio_sync"
         private const val PREFETCH_REFERENCES = 2
         private const val MAX_REFERENCES = 4

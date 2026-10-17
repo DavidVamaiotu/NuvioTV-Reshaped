@@ -30,6 +30,12 @@ data class SubtitleSyncDiagnostics(
     val lookAheadSec: Int = 0,
     val liveOnly: Boolean = false,
     val speechHeardSec: Int = 0,
+    /** Unique media time analysed; unlike look-ahead, this also counts audio behind the playhead. */
+    val analysedAudioSec: Int = 0,
+    /** Why speech-activity matching cannot yet confirm timing. */
+    val waiting: String = "",
+    /** Decoder and queue metadata for exported diagnostics, not the normal player overlay. */
+    val pipeline: String = "",
     val wordsHeard: Int = 0,
     val recognizer: String = "",
     val reference: String = "",
