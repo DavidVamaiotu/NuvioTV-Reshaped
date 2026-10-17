@@ -1,3 +1,4 @@
-- Fixed AudioSync getting stuck before speech detection on streams whose decoded audio buffers share timestamps, including grouped Opus packets. Analysis now positions these buffers using their actual PCM duration.
-- The playback fallback no longer discards different audio buffers just because their timestamps match. Partially consumed buffer retries are still analyzed only once.
-- Real seeks and missing-audio gaps still restart speech detection. Logs show repeated timestamp counts and the original versus corrected analysis times.
+- Experimental **Ranked regex rules** under Playback → Stream selection → Regex. Add, edit, remove, and reorder up to 20 priority rules; the highest matching tier wins across eligible sources, with addon order breaking ties.
+- Ranked rules also apply to next episodes and TorBox link preparation. No match opens manual selection. Existing source filters, autoplay timeout, last-link reuse, and binge-group preferences still apply.
+- Optional and separate from the existing single regex: clear all ranked rules and save to restore that setting. No automatic rule presets or playback changes.
+- The ranking engine is isolated from Android/player architecture, with bounded matching and 26 focused regression tests. Setup examples and implementation notes: [Ranked regex autoplay](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/blob/subtitle-autosync-tester/docs/ranked-regex-autoplay.md).

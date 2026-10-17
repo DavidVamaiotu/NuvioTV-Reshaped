@@ -382,7 +382,7 @@ class StreamScreenViewModel @Inject constructor(
 
             if (
                 playerSettings.streamAutoPlayMode == StreamAutoPlayMode.REGEX_MATCH &&
-                !StreamAutoPlayPolicy.isRegexSelectionConfigured(playerSettings.streamAutoPlayRegex)
+                !StreamAutoPlayPolicy.isRegexSelectionConfigured(playerSettings.streamAutoPlayRegex, playerSettings.streamAutoPlayRankedRegex)
             ) {
                 directAutoPlayFlowEnabledForSession = false
                 autoPlayHandledForSession = true
@@ -522,6 +522,7 @@ class StreamScreenViewModel @Inject constructor(
                         streams = allStreams,
                         mode = playerSettings.streamAutoPlayMode,
                         regexPattern = playerSettings.streamAutoPlayRegex,
+                        rankedRegexPatterns = playerSettings.streamAutoPlayRankedRegex,
                         source = playerSettings.streamAutoPlaySource,
                         installedAddonNames = installedAddonOrder.toSet(),
                         selectedAddons = playerSettings.streamAutoPlaySelectedAddons,
@@ -546,6 +547,7 @@ class StreamScreenViewModel @Inject constructor(
                         streams = allStreams,
                         mode = playerSettings.streamAutoPlayMode,
                         regexPattern = playerSettings.streamAutoPlayRegex,
+                        rankedRegexPatterns = playerSettings.streamAutoPlayRankedRegex,
                         source = playerSettings.streamAutoPlaySource,
                         installedAddonNames = installedAddonOrder.toSet(),
                         selectedAddons = playerSettings.streamAutoPlaySelectedAddons,
@@ -745,6 +747,7 @@ class StreamScreenViewModel @Inject constructor(
                                     streams = allStreams,
                                     mode = playerSettings.streamAutoPlayMode,
                                     regexPattern = playerSettings.streamAutoPlayRegex,
+                                    rankedRegexPatterns = playerSettings.streamAutoPlayRankedRegex,
                                     source = playerSettings.streamAutoPlaySource,
                                     installedAddonNames = installedAddonOrder.toSet(),
                                     selectedAddons = playerSettings.streamAutoPlaySelectedAddons,

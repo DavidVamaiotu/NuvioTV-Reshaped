@@ -1,5 +1,6 @@
 package com.nuvio.tv.core.debrid
 
+import com.nuvio.tv.core.streams.ranking.StreamRegexRanking
 import android.util.Log
 import com.nuvio.tv.core.player.StreamAutoPlaySelector
 import com.nuvio.tv.data.local.DebridSettingsDataStore
@@ -90,6 +91,7 @@ class DirectDebridStreamPreparer @Inject constructor(
             streams = streams,
             mode = playerSettings.streamAutoPlayMode,
             regexPattern = playerSettings.streamAutoPlayRegex,
+            rankedRegexPatterns = playerSettings.streamAutoPlayRankedRegex,
             source = playerSettings.streamAutoPlaySource,
             installedAddonNames = installedAddonNames,
             selectedAddons = playerSettings.streamAutoPlaySelectedAddons,
@@ -100,7 +102,15 @@ class DirectDebridStreamPreparer @Inject constructor(
                 ?.let(prioritized::add)
         }
 
-        if (playerSettings.streamAutoPlayMode == StreamAutoPlayMode.REGEX_MATCH) {
+        if (playerSettings.streamAutoPlayMode == StreamAutoPlayMode.REGEX_MATCH &&
+            playerSettings.streamAutoPlayRankedRegex.isNotEmpty()
+        ) {
+            StreamRegexRanking.rank(
+                candidates, playerSettings.streamAutoPlayRankedRegex
+            ).orEmpty().filter { candidate ->
+                prioritized.none { it.preparationKey() == candidate.preparationKey() }
+            }.forEach(prioritized::add)
+        } else if (playerSettings.streamAutoPlayMode == StreamAutoPlayMode.REGEX_MATCH) {
             val regex = runCatching {
                 Regex(playerSettings.streamAutoPlayRegex.trim(), RegexOption.IGNORE_CASE)
             }.getOrNull()

@@ -1,0 +1,17 @@
+<resources>
+    <string name="ranked_regex_title">Ranked regex rules</string>
+    <string name="ranked_regex_disabled">Optional · using the single regex above</string>
+    <string name="ranked_regex_count">%1$d rules · highest matching priority wins</string>
+    <string name="ranked_regex_summary">Highest matching priority wins. Ties keep addon order.</string>
+    <string name="ranked_regex_help">Priority 1 is best. Try rules in order across all eligible sources; ties keep addon order. No match opens manual selection. Rules replace the single regex while configured. Existing last-link and binge-group reuse still take priority. Blank fields are ignored.</string>
+    <string name="ranked_regex_priority">Priority %1$d</string>
+    <string name="ranked_regex_invalid">Invalid regex or longer than 2048 characters</string>
+    <string name="ranked_regex_placeholder">Example: (?s)^(?=.*2160p)(?=.*remux)</string>
+    <string name="ranked_regex_up">Move up</string>
+    <string name="ranked_regex_down">Move down</string>
+    <string name="ranked_regex_remove">Remove</string>
+    <string name="ranked_regex_add">Add rule (up to 20)</string>
+    <string name="ranked_regex_clear">Clear rules</string>
+    <string name="ranked_regex_license_title">Java regex library</string>
+    <string name="ranked_regex_license_body">Regex 1.1.11 by Florian Ingerl, derived from OpenJDK. GPL v2 with the Classpath exception. Used for bounded source ranking.</string>
+</resources>

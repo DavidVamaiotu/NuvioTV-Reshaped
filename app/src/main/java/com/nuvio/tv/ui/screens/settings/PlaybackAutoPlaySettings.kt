@@ -97,6 +97,15 @@ internal fun PlaybackStreamSelectionSection(
             subtitle = settings.streamAutoPlayRegex.ifBlank { stringResource(R.string.autoplay_regex_placeholder) },
             onClick = { onOpenDialog(PlaybackDialog.STREAM_REGEX) }
         )
+        SettingsActionRow(
+            title = stringResource(R.string.ranked_regex_title),
+            subtitle = if (settings.streamAutoPlayRankedRegex.isEmpty()) {
+                stringResource(R.string.ranked_regex_disabled)
+            } else {
+                stringResource(R.string.ranked_regex_count, settings.streamAutoPlayRankedRegex.size)
+            },
+            onClick = { onOpenDialog(PlaybackDialog.STREAM_RANKED_REGEX) }
+        )
     }
 
     if (settings.streamAutoPlayMode != StreamAutoPlayMode.MANUAL) {
@@ -331,6 +340,14 @@ internal fun AutoPlaySettingsDialogs(
             selectedSource = settings.streamAutoPlaySource,
             onSourceSelected = { source ->
                 onUpdate { setStreamAutoPlaySource(source) }
+                onDismiss()
+            },
+            onDismiss = onDismiss
+        )
+        PlaybackDialog.STREAM_RANKED_REGEX -> RankedRegexDialog(
+            initialPatterns = settings.streamAutoPlayRankedRegex,
+            onSave = { patterns ->
+                onUpdate { setStreamAutoPlayRankedRegex(patterns) }
                 onDismiss()
             },
             onDismiss = onDismiss

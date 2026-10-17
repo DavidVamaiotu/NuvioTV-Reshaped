@@ -307,6 +307,7 @@ jobs:
           set -euo pipefail
           ./gradlew :app:testFullReleaseUnitTest \
             --tests 'com.nuvio.tv.updater.*' \
+            --tests 'com.nuvio.tv.core.streams.ranking.*' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSyncDiagnosticsTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.PcmTimestampTrackerTest' \
