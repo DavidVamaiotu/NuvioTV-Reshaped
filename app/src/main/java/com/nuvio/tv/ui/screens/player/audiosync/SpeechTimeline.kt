@@ -17,6 +17,17 @@ internal class SpeechTimeline {
     @Volatile private var knownFrames = 0
     /** One past the highest frame ever recorded, so scans stop there rather than at capacity. */
     @Volatile private var knownEnd = 0
+    private var probabilitySum = 0.0
+
+    data class Diagnostics(val analysedSeconds: Double, val speechSeconds: Double, val lastMediaMs: Long?)
+
+    /** Constant-time summary; repeated analysis of a frame replaces its earlier contribution. */
+    @Synchronized
+    fun diagnostics(): Diagnostics = Diagnostics(
+        knownFrames * FRAME_DURATION_MS / 1_000.0,
+        probabilitySum * FRAME_DURATION_MS / 1_000.0,
+        if (knownFrames == 0) null else (knownEnd * FRAME_DURATION_MS).toLong(),
+    )
 
     @Volatile
     var version: Long = 0L
@@ -29,6 +40,7 @@ internal class SpeechTimeline {
         val quantized = 1 + (kotlin.math.sqrt(probability.coerceIn(0f, 1f)) * 254f + 0.5f).toInt()
         val current = values
         if (current[frame].toInt() == 0) knownFrames++
+        probabilitySum += probabilityOf(quantized) - probabilityOf(current[frame].toInt() and 0xFF)
         current[frame] = quantized.toByte()
         if (frame >= knownEnd) knownEnd = frame + 1
         version++
@@ -39,10 +51,19 @@ internal class SpeechTimeline {
         values.fill(0)
         knownFrames = 0
         knownEnd = 0
+        probabilitySum = 0.0
         version++
     }
 
     fun knownFrameCount(): Int = knownFrames
+
+    /** Even PCM shorter than one VAD frame must be fed while any of its audio is unknown. */
+    fun needsAnalysis(timeUs: Long, durationUs: Long): Boolean {
+        if (durationUs <= 0) return false
+        val from = frameForTimeUs(timeUs)
+        val to = frameForTimeUs(timeUs + durationUs - 1) + 1
+        return knownFramesIn(from, to) < to - from
+    }
 
     /** Returns probabilities for [fromFrame, toFrame); unknown frames are NaN. */
     fun snapshot(fromFrame: Int, toFrame: Int): FloatArray {
@@ -195,6 +216,12 @@ internal class SpeechTimeline {
         const val FRAME_DURATION_MS = FRAME_DURATION_US / 1_000.0
         private const val INITIAL_CAPACITY = 1 shl 15
         private val EMPTY = ByteArray(0)
+
+        private fun probabilityOf(value: Int): Double {
+            if (value == 0) return 0.0
+            val root = (value - 1) / 254.0
+            return root * root
+        }
 
         /** Two minutes: shorter gaps cost less to carry than a separate transform. */
         val DEFAULT_JOIN_GAP_FRAMES = (120_000 / FRAME_DURATION_MS).toInt()

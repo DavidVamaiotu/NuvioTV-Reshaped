@@ -31,7 +31,8 @@ internal class PlaybackAudioTap(
 ) : ForwardingAudioSink(sink) {
     private var pcmFormat: Format? = null
     private var outputStreamOffsetUs = 0L
-    private var lastPresentationTimeUs = C.TIME_UNSET
+    private var pendingBuffer: ByteBuffer? = null
+    private val pcmClock = PcmTimestampTracker()
     private var mono = FloatArray(0)
 
     override fun configure(inputFormat: Format, specifiedBufferSize: Int, outputChannels: IntArray?) {
@@ -40,41 +41,54 @@ internal class PlaybackAudioTap(
                 (it.pcmEncoding == C.ENCODING_PCM_16BIT || it.pcmEncoding == C.ENCODING_PCM_FLOAT) &&
                 it.channelCount > 0 && it.sampleRate > 0
         }
-        lastPresentationTimeUs = C.TIME_UNSET
+        pendingBuffer = null
+        pcmClock.reset()
         super.configure(inputFormat, specifiedBufferSize, outputChannels)
     }
 
     override fun setOutputStreamOffsetUs(outputStreamOffsetUs: Long) {
         this.outputStreamOffsetUs = outputStreamOffsetUs
+        pcmClock.reset()
         super.setOutputStreamOffsetUs(outputStreamOffsetUs)
     }
 
     override fun handleBuffer(buffer: ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
         val format = pcmFormat
-        // A partially consumed buffer is offered again with the same timestamp; only read it once.
-        if (format != null && presentationTimeUs != lastPresentationTimeUs) {
-            lastPresentationTimeUs = presentationTimeUs
+        // Retry the same partially consumed buffer only once. Different decoded buffers can
+        // legitimately share a timestamp (e.g. laced Opus), including a reused codec buffer.
+        if (format != null && buffer !== pendingBuffer) {
+            pendingBuffer = buffer
             try {
                 tap(buffer, format, presentationTimeUs - outputStreamOffsetUs)
             } catch (_: Throwable) {
                 // Never let sync analysis disturb playback.
             }
         }
-        return super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        val consumed = super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        if (consumed) pendingBuffer = null
+        return consumed
     }
 
     override fun flush() {
-        lastPresentationTimeUs = C.TIME_UNSET
+        pendingBuffer = null
+        pcmClock.reset()
         super.flush()
     }
 
-    private fun tap(buffer: ByteBuffer, format: Format, mediaTimeUs: Long) {
+    override fun handleDiscontinuity() {
+        pendingBuffer = null
+        pcmClock.reset()
+        super.handleDiscontinuity()
+    }
+
+    private fun tap(buffer: ByteBuffer, format: Format, reportedMediaTimeUs: Long) {
         val channels = format.channelCount
         val isFloat = format.pcmEncoding == C.ENCODING_PCM_FLOAT
         val bytesPerSample = if (isFloat) 4 else 2
         val data = buffer.duplicate().order(ByteOrder.nativeOrder())
         val frames = data.remaining() / (bytesPerSample * channels)
         if (frames <= 0) return
+        val mediaTimeUs = pcmClock.resolve(reportedMediaTimeUs, frames, format.sampleRate)
         val durationUs = frames * 1_000_000L / format.sampleRate
         if (!listener.wantsPlaybackPcm(mediaTimeUs, durationUs)) return
         if (mono.size < frames) mono = FloatArray(frames)

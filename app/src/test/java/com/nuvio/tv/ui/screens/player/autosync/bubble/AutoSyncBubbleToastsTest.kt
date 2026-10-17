@@ -10,6 +10,48 @@ import org.junit.Test
 
 class AutoSyncBubbleToastsTest {
     @Test
+    fun failureOnlyModeFiltersProgressAndSuccessButKeepsFailures() {
+        for (kind in AutoSyncBubbleKind.values()) {
+            assertEquals(kind == AutoSyncBubbleKind.Failure, AutoSyncBubbleToasts.shouldNotify(kind, true))
+            assertTrue(AutoSyncBubbleToasts.shouldNotify(kind, false))
+        }
+    }
+
+    @Test
+    fun hiddenLoadingStaysHiddenUntilAResultOrANewRun() {
+        AutoSyncBubbleToasts.attachHost()
+        try {
+            for (result in listOf(AutoSyncBubbleKind.Success, AutoSyncBubbleKind.Failure)) {
+                AutoSyncBubbleToasts.beginRun()
+                AutoSyncBubbleToasts.post(AutoSyncBubbleKind.Working, "Analyzing…")
+                val working = AutoSyncBubbleToasts.current.value!!
+                // Model loading and takeover updates belong to the same loading window.
+                AutoSyncBubbleToasts.post(AutoSyncBubbleKind.Working, "Syncing to audio…")
+                val updated = AutoSyncBubbleToasts.current.value!!
+                assertEquals(working.session, updated.session)
+                AutoSyncBubbleToasts.hideWorking(updated.session)
+                AutoSyncBubbleToasts.leaving(updated.session)
+                AutoSyncBubbleToasts.finished(updated.id)
+                assertTrue(AutoSyncBubbleToasts.post(AutoSyncBubbleKind.Working, "Still analyzing…"))
+                assertNull(AutoSyncBubbleToasts.current.value)
+                assertTrue(AutoSyncBubbleToasts.post(result, "Result"))
+                assertEquals(result, AutoSyncBubbleToasts.current.value!!.kind)
+                assertNotEquals(working.session, AutoSyncBubbleToasts.current.value!!.session)
+            }
+            AutoSyncBubbleToasts.beginRun()
+            AutoSyncBubbleToasts.post(AutoSyncBubbleKind.Working, "Analyzing…")
+            val working = AutoSyncBubbleToasts.current.value!!
+            AutoSyncBubbleToasts.hideWorking(working.session)
+            AutoSyncBubbleToasts.finished(working.id)
+            AutoSyncBubbleToasts.beginRun()
+            AutoSyncBubbleToasts.post(AutoSyncBubbleKind.Working, "New subtitle")
+            assertNotNull(AutoSyncBubbleToasts.current.value)
+        } finally {
+            AutoSyncBubbleToasts.detachHost()
+        }
+    }
+
+    @Test
     fun workingShowsWhatIsHappeningNow() {
         assertEquals(
             "Analyzing…" to null,

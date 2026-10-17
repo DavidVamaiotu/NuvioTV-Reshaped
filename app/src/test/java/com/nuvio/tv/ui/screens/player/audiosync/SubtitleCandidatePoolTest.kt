@@ -14,6 +14,40 @@ class SubtitleCandidatePoolTest {
     private val durationMs = 20 * 60_000L
 
     @Test
+    fun uncertainEarlySpeechKeepsAllCandidatesAndLaterDialogueCanRecover() {
+        val spoken = cues(Random(950), durationMs)
+        val pool = SubtitleCandidatePool(SubtitleSpeechTrack.fromCues(cues(Random(951), durationMs)))
+            .apply { mediaDurationMs = durationMs }
+        repeat(11) { pool.addCandidate("decoy$it", cues(Random(960 + it), durationMs)) }
+        pool.addCandidate("good", spoken.map { (a, b, t) -> Triple(a - 3_000L, b - 3_000L, t) })
+
+        // More than the old three-minute pruning threshold, but unrelated to actual dialogue.
+        // Six updates also give every file multiple opportunities to score poorly.
+        val random = Random(980)
+        val live = SpeechTimeline()
+        val earlyFrames = (4 * 60_000 / SpeechTimeline.FRAME_DURATION_MS).toInt()
+        repeat(earlyFrames) { live.record(it, random.nextFloat()) }
+        repeat(6) { pass ->
+            live.record(0, random.nextFloat())
+            assertNull(pool.update(live, null, nowMs = pass * 10_000L))
+        }
+        assertEquals("testing 12", pool.summary, "uncertain VAD must not prune or keep only the top four")
+
+        // New sampled scenes replace the uncertain opening in the ten-minute scoring window.
+        val full = speechFor(spoken, shiftMs = 0.0, random = Random(981))
+        val end = full.knownRange()!!.last + 1
+        val from = (9 * 60_000 / SpeechTimeline.FRAME_DURATION_MS).toInt()
+        full.snapshot(from, end).forEachIndexed { index, probability -> live.record(from + index, probability) }
+        var winner: SubtitleCandidatePool.Winner? = null
+        for (pass in 0 until 3) {
+            live.record(0, random.nextFloat())
+            winner = pool.update(live, null, nowMs = 60_000L + pass * 10_000L)
+            if (winner != null) break
+        }
+        assertEquals("good", assertNotNull(winner, "the correct file must remain available for later evidence").key)
+    }
+
+    @Test
     fun findsTheFileThatFitsWhenTheChosenOneNeverWill() {
         val spoken = cues(Random(500), durationMs)
         val speech = speechFor(spoken, shiftMs = 0.0, random = Random(501))

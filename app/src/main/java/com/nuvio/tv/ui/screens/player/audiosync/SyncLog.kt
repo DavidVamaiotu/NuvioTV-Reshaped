@@ -10,6 +10,7 @@ import android.os.Looper
 import android.widget.Toast
 import java.io.File
 import android.util.Log
+import com.nuvio.tv.BuildConfig
 import com.nuvio.tv.ui.screens.player.audiosync.SubtitleSyncStatus
 import com.nuvio.tv.ui.screens.player.audiosync.SyncLogActions
 import java.text.SimpleDateFormat
@@ -43,7 +44,8 @@ internal object SyncLog {
     }
 
     fun text(): String {
-        val header = "Nuvio audio sync log · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}"
+        val header = "Nuvio audio sync log · ${Build.MANUFACTURER} ${Build.MODEL} · Android ${Build.VERSION.RELEASE}" +
+            " · app ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
         return synchronized(lines) { (listOf(header) + lines).joinToString("\n") }
     }
 

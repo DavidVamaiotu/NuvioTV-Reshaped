@@ -11,17 +11,16 @@ import java.util.concurrent.TimeUnit
  */
 internal object SharedRecognizer {
     /** Covers moving to the next episode or picking another film. */
-    private const val KEEP_AFTER_LAST_USE_MS = 3 * 60_000L
+    private const val KEEP_AFTER_LAST_USE_MS = 10 * 60_000L
 
     private val closer = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "NuvioAsrRelease").apply { isDaemon = true }
     }
-    private var instance: SherpaSpeechToText? = null
+    @Volatile private var instance: SherpaSpeechToText? = null
     private var users = 0
     private var pendingClose: ScheduledFuture<*>? = null
 
     /** True when a recogniser is loaded and can be acquired without waiting. */
-    @get:Synchronized
     val isLoaded: Boolean
         get() = instance != null
 

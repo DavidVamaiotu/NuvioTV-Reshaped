@@ -34,12 +34,15 @@ internal data class AutoSyncBubbleMessage(
 internal object AutoSyncBubbleToasts {
     private const val PREFS_NAME = "nuvio_autosync_bubble_settings"
     private const val KEY_ENABLED = "enabled"
+    private const val KEY_FAILURES_ONLY = "failures_only"
 
     private val lock = Any()
     @Volatile private var initialized = false
 
     private val _enabled = MutableStateFlow(true)
     val enabled: StateFlow<Boolean> = _enabled.asStateFlow()
+    private val _failuresOnly = MutableStateFlow(false)
+    val failuresOnly: StateFlow<Boolean> = _failuresOnly.asStateFlow()
 
     private val _current = MutableStateFlow<AutoSyncBubbleMessage?>(null)
     val current: StateFlow<AutoSyncBubbleMessage?> = _current.asStateFlow()
@@ -48,6 +51,7 @@ internal object AutoSyncBubbleToasts {
     private val nextId = AtomicLong(0L)
     /** The run whose bubble is fading away; a message arriving now starts a fresh bubble. */
     @Volatile private var leavingSession = -1L
+    @Volatile private var workingHidden = false
 
     fun ensureLoaded(context: Context) {
         if (initialized) return
@@ -55,6 +59,7 @@ internal object AutoSyncBubbleToasts {
             if (initialized) return
             val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             _enabled.value = prefs.getBoolean(KEY_ENABLED, true)
+            _failuresOnly.value = prefs.getBoolean(KEY_FAILURES_ONLY, false)
             initialized = true
         }
     }
@@ -69,8 +74,36 @@ internal object AutoSyncBubbleToasts {
         if (!enabled) _current.value = null
     }
 
+    fun setFailuresOnly(context: Context, enabled: Boolean) {
+        ensureLoaded(context)
+        _failuresOnly.value = enabled
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_FAILURES_ONLY, enabled).apply()
+        if (enabled) _current.update { it?.takeIf { message -> message.kind == AutoSyncBubbleKind.Failure } }
+    }
+
+    /** A new subtitle/run gets a new loading window, even if the previous run timed out. */
+    fun beginRun() {
+        workingHidden = false
+        _current.value = null
+    }
+
+    /** Hide only progress: later success/failure events are still shown. */
+    fun hideWorking(session: Long) {
+        if (_current.value?.let { it.session == session && it.kind == AutoSyncBubbleKind.Working } == true) {
+            workingHidden = true
+        }
+    }
+
+    internal fun shouldNotify(kind: AutoSyncBubbleKind, failuresOnly: Boolean): Boolean =
+        !failuresOnly || kind == AutoSyncBubbleKind.Failure
+
     /** Shows [text] (an "Auto Sync • headline • detail" toast string) in the bubble, if it can. */
     fun post(kind: AutoSyncBubbleKind, text: String): Boolean {
+        // Consume suppressed messages even when bubbles are off, so they do not become plain toasts.
+        if (!shouldNotify(kind, _failuresOnly.value)) return true
+        if (kind == AutoSyncBubbleKind.Working && workingHidden) return true
+        if (kind != AutoSyncBubbleKind.Working) workingHidden = false
         if (!_enabled.value || hosts.get() <= 0) return false
         val (headline, detail) = split(kind, text)
         val id = nextId.incrementAndGet()
@@ -104,6 +137,7 @@ internal object AutoSyncBubbleToasts {
         if (hosts.decrementAndGet() <= 0) {
             hosts.set(0)
             _current.value = null
+            workingHidden = false
         }
     }
 

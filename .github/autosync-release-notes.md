@@ -1,2 +1,5 @@
-- **Nuvio 1.1.0-beta.5.** Includes everything in the official NuvioTV 1.1.0-beta.5 release: faster parallel streaming with HTTP/2 on, MDBList lists in the library sorted by release date, landscape poster and collection fixes, screen-reader labels, a fix for SIGSEGV crashes in the ExoPlayer buffer, and more translations.
-- **Lighter AutoSync.** AutoSync now uses at most two background threads, so it competes less with playback on low-end TVs, decodes add-on subtitles in any character set, and does no work at all when it is turned off.
+- AudioSync: fixed stalls caused by short playback buffers and repeated Opus timestamps. Speech-activity sampling continues to work without English recognition.
+- Uncertain subtitle candidates stay available for later dialogue; match confidence checks are unchanged. Logs include decoder, matcher, sampling and speech-evidence progress, with QR download on TV.
+- New “Only show sync failures” setting hides AutoSync and AudioSync progress and success notices.
+- Loading bubbles hide after about 15 seconds while sync continues. Further loading updates stay hidden; success and failure events can bring the bubble back.
+- The speech model stays cached for 10 minutes after use, reducing repeat initialization when switching streams or episodes.
