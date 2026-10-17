@@ -11,9 +11,6 @@ name: AutoSync TV Tester Release
 
 on:
   workflow_dispatch:
-  push:
-    branches: [subtitle-autosync-tester]
-    paths: ['.github/workflows/autosync-tester-release.yml']
 
 permissions:
   contents: write
@@ -27,7 +24,6 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'Release tester grouped PCM timestamp fix 2026-10-17'
     runs-on: ubuntu-latest
 
     steps:
