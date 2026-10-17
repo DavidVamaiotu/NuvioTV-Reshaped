@@ -16,7 +16,7 @@ import kotlin.math.roundToInt
  * 1. on arrival, copies of the chosen file or of each other (same timing) are dropped, and so are
  *    files whose length cannot fit the video at any common frame rate;
  * 2. every [update] scores a few remaining files in turn against one shared transform of the
- *    detected speech, drops those that clearly do not follow the dialogue and keeps the best few;
+ *    detected speech; an inconclusive score keeps the file eligible for later evidence;
  * 3. once recognised words pin an English reference to the audio, the files are aligned to that
  *    pinned reference, which settles translated files without waiting for more audio.
  * A file wins when it meets the same confirmation rules as a normal lock. The caller only asks while
@@ -35,11 +35,6 @@ internal class SubtitleCandidatePool(
     private class Candidate(val key: String, val track: SubtitleSpeechTrack) {
         /** Frame-rate ratios that fit the video's length; null until the length is known. */
         var scales: DoubleArray? = null
-        var misses = 0
-        var score = 0.0
-
-        /** Scored at least once with enough audio to be ruled out. */
-        var ranked = false
     }
 
     private class Reference(val key: String, val track: SubtitleSpeechTrack, val matcher: WordAnchorMatcher)
@@ -164,39 +159,23 @@ internal class SubtitleCandidatePool(
             maxShiftMs = AudioSyncTracker.MAX_SHIFT_MS,
         ) ?: return null
 
-        val pruning = knownFrames >= PRUNE_AFTER_FRAMES
-        val dropped = ArrayList<Candidate>()
         var best: Pair<Candidate, SubtitleAudioAligner.Estimate>? = null
         val batch = List(minOf(BATCH_SIZE, candidates.size)) { candidates[(cursor + it) % candidates.size] }
         cursor = (cursor + batch.size) % candidates.size
         for (candidate in batch) {
             val scales = candidate.scales ?: SubtitleAudioAligner.CANDIDATE_SCALES
             val estimate = speech.estimate(candidate.track, scales)
-            candidate.score = estimate?.prominence ?: 0.0
-            candidate.ranked = candidate.ranked || pruning
             if (estimate != null && AudioSyncTracker.isLockable(estimate, segments, knownFrames, candidate.track)) {
                 if (best == null || estimate.prominence > best.second.prominence) best = candidate to estimate
-                continue
             }
-            val weak = estimate == null || estimate.atSearchEdge || estimate.prominence < PRUNE_PROMINENCE
-            candidate.misses = if (weak && pruning) candidate.misses + 1 else 0
-            if (candidate.misses >= PRUNE_AFTER_MISSES) dropped += candidate
+            // VAD is probabilistic. Music, sparse dialogue, or a different opening can make a
+            // correct file look weak now; a later sampled scene may confirm it. Keep every
+            // inconclusive candidate and rotate through the bounded batch on future updates.
         }
         best?.let { (candidate, estimate) ->
             log("candidate ${candidate.key} locked by speech detection: $estimate")
             return win(candidate, estimate.scale, estimate.shiftMs, "speech detection")
         }
-        synchronized(lock) {
-            active.removeAll(dropped.toSet())
-            ruledOut += dropped.size
-            // Keep the best few once every candidate has been scored on enough audio.
-            if (active.size > MAX_ACTIVE && active.all { it.ranked }) {
-                val kept = active.sortedByDescending { it.score }.take(MAX_ACTIVE).toSet()
-                ruledOut += active.size - kept.size
-                active.retainAll(kept)
-            }
-        }
-        if (dropped.isNotEmpty()) log("ruled out ${dropped.size} candidates on speech timing")
         return null
     }
 
@@ -286,12 +265,6 @@ internal class SubtitleCandidatePool(
 
         /** Candidates scored per call, so the cost per call stays flat however many there are. */
         private const val BATCH_SIZE = 4
-
-        /** Candidates are only ruled out on speech timing after this much known audio. */
-        private val PRUNE_AFTER_FRAMES = (180 * FRAMES_PER_SECOND).toInt()
-        private const val PRUNE_PROMINENCE = 0.04
-        private const val PRUNE_AFTER_MISSES = 2
-        private const val MAX_ACTIVE = 4
 
         /** A file for this video covers at least this share of it (end credits have no dialogue). */
         private const val MIN_LENGTH_COVERAGE = 0.5

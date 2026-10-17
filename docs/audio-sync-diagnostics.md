@@ -43,3 +43,8 @@ Interpret several consecutive heartbeats while playback is advancing:
 
 These are diagnostic leads, not automatic root-cause verdicts. The additional
 metadata does not relax matching thresholds or force a timing correction.
+
+Alternative subtitles are not permanently pruned on weak speech-activity scores
+or reduced to a top-four shortlist. A bounded batch is retried as evidence grows;
+only a confirmed match wins. Duplicate, unparsable, or clearly incompatible-length
+files are still excluded. This does not relax the confidence required to apply timing.

@@ -30,7 +30,7 @@ jobs:
   release:
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.head_commit.message == 'Release tester: AudioSync diagnostics 2026-10-17'
+      github.event.head_commit.message == 'Release tester: preserve uncertain AudioSync candidates 2026-10-17'
     runs-on: ubuntu-latest
 
     steps:
@@ -316,6 +316,7 @@ jobs:
             --tests 'com.nuvio.tv.updater.*' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSyncDiagnosticsTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.SubtitleCandidatePoolTest' \
             --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$TESTER_TAG"
 
