@@ -126,6 +126,9 @@ android {
         buildConfigField("String", "DEVICE_LOGIN_WEB_BASE_URL", "\"${localProperties.getProperty("DEVICE_LOGIN_WEB_BASE_URL", "https://nuvio.tv/link")}\"")
         buildConfigField("boolean", "DOVI_NATIVE_ENABLED", enableDoviNative.toString())
         buildConfigField("boolean", "DOVI_EXTRACTOR_HOOK_READY", doviExtractorHookReady.toString())
+        externalNativeBuild {
+            cmake { arguments("-DDOVI_BUILD_BRIDGE=${if (enableDoviNative) "ON" else "OFF"}") }
+        }
         if (enableDoviNative) {
             externalNativeBuild {
                 cmake {
@@ -175,12 +178,9 @@ android {
         }
     }
 
-    if (enableDoviNative) {
-        externalNativeBuild {
-            cmake {
-                path = file("src/main/cpp/CMakeLists.txt")
-            }
-        }
+    // Preview decoder builds independently of the Dolby Vision playback bridge.
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt") }
     }
 
     signingConfigs {
@@ -566,3 +566,17 @@ dependencies {
 }
 
 apply(from = "reshaped.gradle") // Nuvio RS hook: fork build settings
+
+// FFmpeg 6.0 fallback ABI pin. Updating this AAR requires reviewing the preview backend headers too.
+val verifyPreviewFfmpegAbi by tasks.registering {
+    val aar = layout.projectDirectory.file("libs/nextlib-mediainfo-local.aar")
+    inputs.file(aar)
+    doLast {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(aar.asFile.readBytes()).joinToString("") { "%02x".format(it) }
+        check(digest == "509e645e0f4232bdd3c6e1b2e4b82c3686140a0355f13656890f3641d8b7fb53") {
+            "Preview FFmpeg ABI changed: review seekpreview native backend and headers before updating the pin."
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn(verifyPreviewFfmpegAbi) }

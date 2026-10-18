@@ -11,6 +11,7 @@ import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSources
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewTrack
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalSeekPreviewSettings
 import com.nuvio.tv.ui.screens.player.seekpreview.local.localSeekPreviewCacheKey
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.SessionPreviewTrack
 import androidx.media3.exoplayer.SeekParameters
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
@@ -138,25 +139,31 @@ class SeekPreviewState internal constructor(
                     season = controller.currentSeason,
                     episode = controller.currentEpisode,
                     durationMs = durationMs
-                )
+                ) + "|" + com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewStore.digest(source.sourceKey.toByteArray())
                 val opened = LocalPreviewSources.open(source, cacheKey, durationMs)
                 if (opened == null) {
                     emit(null)
                     return@transformLatest
                 }
+                val independent = controller.rangePreview(source, durationMs)
+                val combined = independent?.let { SessionPreviewTrack(opened, it) }
                 try {
-                    emit(opened)
+                    emit(combined ?: opened)
                     // Keyframes are only decoded while paused or scrubbing: decoding during
                     // playback made the video judder. Buffering counts as playing.
                     controller.uiState
                         .map { state ->
                             val scrubbing = state.pendingPreviewSeekPosition != null || state.showSeekOverlay
-                            (state.isPlaying || state.isBuffering) && !scrubbing
+                            Triple((state.isPlaying || state.isBuffering) && !scrubbing, state.isBuffering, state.bufferedPosition)
                         }
                         .distinctUntilChanged()
-                        .collect { active -> opened.playbackActive = active }
+                        .collect { (active, stalled, buffered) ->
+                            opened.playbackActive = active
+                            independent?.updatePlayback(active, stalled, controller.currentPlaybackPositionMs(), buffered)
+                        }
                     awaitCancellation()
                 } finally {
+                    combined?.close()
                     LocalPreviewSources.close(source, opened)
                 }
             }
@@ -211,15 +218,15 @@ class SeekPreviewState internal constructor(
                 .map { it.pendingPreviewSeekPosition }
                 .distinctUntilChanged()
                 .collect { position ->
-                    val track = localTrack.value as? LocalPreviewTrack
+                    val track = localTrack.value
                     val last = previous
                     previous = position
                     if (position == null || last == null) {
-                        if (position == null) track?.scrubDirection = 0
+                        if (position == null) track?.noteScrubDirection(0)
                         return@collect
                     }
                     if (abs(position - last) >= SCRUB_STEP_MIN_MS) {
-                        track?.scrubDirection = if (position > last) 1 else -1
+                        track?.noteScrubDirection(if (position > last) 1 else -1)
                     }
                 }
         }

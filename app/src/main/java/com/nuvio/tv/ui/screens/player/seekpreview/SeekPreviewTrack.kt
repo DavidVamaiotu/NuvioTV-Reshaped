@@ -17,6 +17,9 @@ data class SeekPreviewThumbnail(
     val cueStartMs: Long,
     val cueEndMs: Long,
     val approximate: Boolean = false,
+    /** Provenance is kept with the image, not inferred from which fallback answered last. */
+    val origin: String = "UNKNOWN",
+    val actualFrameMs: Long? = null,
 )
 
 /**
@@ -48,6 +51,7 @@ interface SeekPreviewTrack {
      * is both exact and the fastest seek a player can make.
      */
     fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? = null
+    fun noteScrubDirection(direction: Int) = Unit
 
     /** Stops background work; the track is not fed again. */
     fun close() = Unit

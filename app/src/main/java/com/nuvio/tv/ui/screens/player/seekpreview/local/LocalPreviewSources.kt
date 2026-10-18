@@ -19,6 +19,7 @@ internal class LocalPreviewSource(
     val owner: Any,
     val sourceKey: String,
     val context: Context,
+    val headers: Map<String, String> = emptyMap(),
 ) {
     @Volatile var released = false
     @Volatile var track: LocalPreviewTrack? = null
@@ -61,8 +62,8 @@ internal object LocalPreviewSources {
      * Registers [sourceKey] as [owner]'s playing stream and returns [factory] wrapped so its
      * video keyframes reach that stream's preview track while playback demuxes them.
      */
-    fun register(owner: Any, context: Context, sourceKey: String, factory: ExtractorsFactory): ExtractorsFactory {
-        val source = LocalPreviewSource(owner, sourceKey, context.applicationContext)
+    fun register(owner: Any, context: Context, sourceKey: String, factory: ExtractorsFactory, headers: Map<String, String> = emptyMap()): ExtractorsFactory {
+        val source = LocalPreviewSource(owner, sourceKey, context.applicationContext, headers.toMap())
         current.value?.let { stale ->
             stale.released = true
             stale.track = null

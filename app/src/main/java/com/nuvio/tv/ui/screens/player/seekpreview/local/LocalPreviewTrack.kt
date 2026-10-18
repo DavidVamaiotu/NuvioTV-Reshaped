@@ -13,6 +13,10 @@ import androidx.media3.common.util.MediaFormatUtil
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewCue
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewThumbnail
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewTrack
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewStore
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewOrigin
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewLru
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewResources
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -94,12 +98,9 @@ internal class LocalPreviewTrack(
     private var darkCount = 0
     /** Keyframe time (ms) → slot holding its thumbnail, so a keyframe is never fetched twice. */
     private val keyframeSlots = HashMap<Long, Int>()
-    private val decoded = object : LinkedHashMap<Int, Bitmap>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Bitmap>?) = size > MAX_DECODED
-    }
-    private val blurred = object : LinkedHashMap<Int, Bitmap>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Bitmap>?) = size > MAX_DECODED
-    }
+    private val decoded = PreviewLru<Int, Bitmap>(3 * 1024 * 1024) { it.allocationByteCount }
+    private val blurred = PreviewLru<Int, Bitmap>(1024 * 1024) { it.allocationByteCount }
+    private val workResources = PreviewResources(context) { decoded.clear(); blurred.clear() }
     @Volatile private var closed = false
 
     private val sinceSave = AtomicInteger()
@@ -116,7 +117,9 @@ internal class LocalPreviewTrack(
     private val _revision = MutableStateFlow(0)
     override val revision: StateFlow<Int> = _revision.asStateFlow()
 
-    private val cacheFile: File = File(File(context.applicationContext.cacheDir, CACHE_DIR), sha1(cacheKey) + ".bin")
+    private val cacheDirectory = File(context.applicationContext.cacheDir, "seek_preview_tap_v2")
+    private var disk: PreviewStore? = null
+    @Synchronized private fun diskStore(): PreviewStore = disk ?: PreviewStore(cacheDirectory, cacheKey, CACHE_LIMIT_BYTES).also { disk = it }
 
     /**
      * False while the viewer has paused or is scrubbing (set by the owner from the player's
@@ -184,6 +187,7 @@ internal class LocalPreviewTrack(
     override fun close() {
         if (closed) return
         closed = true
+        workResources.close()
         synchronized(lock) { candidate = null }
         tapExecutor.shutdownNow()
         Thread({
@@ -192,7 +196,8 @@ internal class LocalPreviewTrack(
             runCatching { spool?.close() }
             spool = null
             spoolFile.delete()
-            saveCache()
+            synchronized(this) { disk?.close() }
+            decoded.clear(); blurred.clear()
             scope.cancel()
         }, "NuvioPreviewClose").apply { isDaemon = true }.start()
     }
@@ -217,11 +222,15 @@ internal class LocalPreviewTrack(
         val cue = if (exact != null) synchronized(lock) { frameCue(exact) } else gridCue(slot)
         return SeekPreviewThumbnail(
             bitmap = bitmap,
+            origin = "PLAYBACK",
+            actualFrameMs = synchronized(lock) { frameMs[found] },
             cueStartMs = cue.startMs,
             cueEndMs = cue.endMs,
             approximate = approximate,
         )
     }
+
+    override fun noteScrubDirection(direction: Int) { scrubDirection = direction }
 
     override fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? = keyframeIndex(positionMs, toleranceMs)
 
@@ -262,7 +271,7 @@ internal class LocalPreviewTrack(
 
     private fun nearestFilled(slot: Int): Int? {
         if (jpegs[slot] != null) return slot
-        for (distance in 1 until slotCount) {
+        for (distance in 1..minOf(3, slotCount - 1)) {
             val before = slot - distance
             val after = slot + distance
             if (before < 0 && after >= slotCount) break
@@ -280,8 +289,10 @@ internal class LocalPreviewTrack(
     private suspend fun bitmapFor(slot: Int, small: Boolean): Bitmap? {
         val cache = if (small) blurred else decoded
         synchronized(lock) { cache[slot] }?.let { return it }
-        val bytes = synchronized(lock) { jpegs[slot] } ?: return null
-        val bitmap = withContext(Dispatchers.Default) {
+        val bitmap = withContext(Dispatchers.IO) {
+            val store = diskStore()
+            val entry = store.atSlot(slot.toLong()) ?: return@withContext null
+            val bytes = store.read(entry) ?: return@withContext null
             runCatching {
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.RGB_565
@@ -290,7 +301,7 @@ internal class LocalPreviewTrack(
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
             }.getOrNull()
         } ?: return null
-        synchronized(lock) { cache[slot] = bitmap }
+        cache.put(slot, bitmap)
         return bitmap
     }
 
@@ -385,8 +396,11 @@ internal class LocalPreviewTrack(
 
     /** Tap thread. */
     private fun decodeInto(slot: Int, format: Format, bytes: ByteArray, timeUs: Long) {
+        if (closed || !workResources.allowsDimensions(format.width, format.height)) { release(slot); return }
         val frame = runCatching {
-            decoder.decode(MediaFormatUtil.createMediaFormatFromFormat(format), bytes, 0, bytes.size, timeUs)
+            decoder.decode(MediaFormatUtil.createMediaFormatFromFormat(format).apply {
+                format.codecs?.let { setString("reshaped-codecs", it) }
+            }, bytes, 0, bytes.size, timeUs)
         }.getOrNull()
         if (frame != null) {
             store(slot, frame.jpeg, timeUs / 1_000L, frame.dark)
@@ -525,19 +539,18 @@ internal class LocalPreviewTrack(
     }
 
     private fun store(slot: Int, jpeg: ByteArray, keyMs: Long, dark: Boolean) {
+        val disk = diskStore()
+        disk.put(slot * SLOT_MS, keyMs, PreviewOrigin.PLAYBACK, jpeg, replace = true)
+        if (disk.atSlot(slot.toLong()) == null) { release(slot); return }
         synchronized(lock) {
             if (slotState[slot] != FILLED) filledCount++
             slotState[slot] = FILLED
             setDark(slot, dark)
-            jpegs[slot] = jpeg
+            jpegs[slot] = ByteArray(0) // Metadata marker only; compressed bytes stay on disk.
             frameMs[slot] = keyMs
             keyframeSlots.putIfAbsent(keyMs, slot)
-            decoded.remove(slot)
-            blurred.remove(slot)
-        }
-        if (sinceSave.incrementAndGet() >= SAVE_EVERY) {
-            sinceSave.set(0)
-            scope.launch(Dispatchers.IO) { saveCache() }
+            decoded.clear()
+            blurred.clear()
         }
         notifyChanged()
     }
@@ -549,70 +562,17 @@ internal class LocalPreviewTrack(
     // ---- Disk cache ----------------------------------------------------------------------
 
     private fun loadCache() {
-        if (!cacheFile.exists()) return
-        runCatching {
-            DataInputStream(cacheFile.inputStream().buffered()).use { input ->
-                val magic = input.readInt()
-                if ((magic != CACHE_MAGIC && magic != CACHE_MAGIC_V1) || input.readInt().toLong() != SLOT_MS) return
-                val count = input.readInt()
-                repeat(count) {
-                    val slot = input.readInt()
-                    val keyMs = input.readLong()
-                    val bytes = ByteArray(input.readInt())
-                    input.readFully(bytes)
-                    // Caches from before dark frames were marked count every frame as bright.
-                    val dark = magic == CACHE_MAGIC && input.readBoolean()
-                    if (slot in 0 until slotCount && claim(slot)) {
-                        synchronized(lock) {
-                            filledCount++
-                            slotState[slot] = FILLED
-                            setDark(slot, dark)
-                            jpegs[slot] = bytes
-                            frameMs[slot] = keyMs
-                            keyframeSlots.putIfAbsent(keyMs, slot)
-                        }
-                    }
-                }
+        val entries = diskStore().all()
+        synchronized(lock) {
+            for (entry in entries) {
+                val slot = entry.slot.toInt()
+                if (slot !in 0 until slotCount || slotState[slot] != EMPTY) continue
+                jpegs[slot] = ByteArray(0)
+                frameMs[slot] = entry.timeMs
+                slotState[slot] = FILLED
+                filledCount++
+                keyframeSlots[entry.timeMs] = slot
             }
-            cacheFile.setLastModified(System.currentTimeMillis())
-        }.onFailure { Log.w(TAG, "cache unreadable: ${it.message}") }
-    }
-
-    @Synchronized
-    private fun saveCache() {
-        val entries = synchronized(lock) {
-            (0 until slotCount).mapNotNull { slot ->
-                val bytes = jpegs[slot]
-                if (slotState[slot] == FILLED && bytes != null) CachedFrame(slot, frameMs[slot], bytes, darkSlots[slot]) else null
-            }
-        }
-        if (entries.isEmpty()) return
-        runCatching {
-            cacheFile.parentFile?.mkdirs()
-            val temp = File(cacheFile.path + ".tmp")
-            DataOutputStream(temp.outputStream().buffered()).use { output ->
-                output.writeInt(CACHE_MAGIC)
-                output.writeInt(SLOT_MS.toInt())
-                output.writeInt(entries.size)
-                for ((slot, keyMs, bytes, dark) in entries) {
-                    output.writeInt(slot)
-                    output.writeLong(keyMs)
-                    output.writeInt(bytes.size)
-                    output.write(bytes)
-                    output.writeBoolean(dark)
-                }
-            }
-            temp.renameTo(cacheFile)
-            pruneCache(cacheFile.parentFile)
-        }.onFailure { Log.w(TAG, "cache not saved: ${it.message}") }
-    }
-
-    private fun pruneCache(dir: File?) {
-        val files = dir?.listFiles { file -> file.name.endsWith(".bin") }?.sortedByDescending { it.lastModified() } ?: return
-        var total = 0L
-        for (file in files) {
-            total += file.length()
-            if (total > CACHE_LIMIT_BYTES && file != cacheFile) file.delete()
         }
     }
 
@@ -636,10 +596,10 @@ internal class LocalPreviewTrack(
         private const val CACHE_DIR = "seek_previews"
         private const val CACHE_MAGIC = 0x4E535032 // "NSP2": each frame ends with its dark flag
         private const val CACHE_MAGIC_V1 = 0x4E535031 // "NSP1"
-        private const val CACHE_LIMIT_BYTES = 200L * 1_000_000L
+        private const val CACHE_LIMIT_BYTES = 100L * 1024 * 1024
         private const val SPOOL_SUFFIX = ".spool"
         /** About an hour of 1080p keyframes. */
-        private const val SPOOL_LIMIT_BYTES = 96L * 1024 * 1024
+        private const val SPOOL_LIMIT_BYTES = 32L * 1024 * 1024
         /** A spool left by a crash; a live one is never this old without being written. */
         private const val STALE_SPOOL_MS = 12L * 60 * 60 * 1000
 
