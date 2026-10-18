@@ -16,6 +16,7 @@ internal fun PlayerRuntimeController.startInitialPlaybackIfNeeded() {
     if (initialPlaybackStarted) return
 
     initialPlaybackStarted = true
+    claimAutoSourceRecovery()
 
     // Persist binge group from navigation args so that subsequent plays
     // (from CW, Details, or next-episode) can reuse the same source group.

@@ -1,0 +1,54 @@
+name: Automatic source recovery validation
+
+on:
+  push:
+    branches: [feature/auto-source-recovery]
+  pull_request:
+    branches: [subtitle-autosync-tester]
+    paths:
+      - 'app/src/**/com/nuvio/tv/core/player/recovery/**'
+      - 'app/src/**/com/nuvio/tv/ui/screens/player/PlayerAutoSourceRecovery.kt'
+      - '.github/workflows/auto-source-recovery.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-recovery-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+      - name: Configure isolated debug signing
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/recovery-debug.jks" -storepass android -alias androiddebugkey -keypass android -dname "CN=Source Recovery Test,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000
+          printf 'NUVIO_RELEASE_STORE_FILE=%s/recovery-debug.jks\nNUVIO_RELEASE_KEY_ALIAS=androiddebugkey\nNUVIO_RELEASE_KEY_PASSWORD=android\nNUVIO_RELEASE_STORE_PASSWORD=android\n' "$RUNNER_TEMP" > local.properties
+      - name: Compile app and test recovery and source selection
+        run: >-
+          ./gradlew :app:testFullDebugUnitTest
+          --tests 'com.nuvio.tv.core.player.recovery.*'
+          --tests 'com.nuvio.tv.core.streams.ranking.*'
+          --tests 'com.nuvio.tv.core.player.StreamAutoPlaySelectorTest'
+          --build-cache --max-workers=2
+          -Pkotlin.compiler.execution.strategy=in-process
+          -Dorg.gradle.jvmargs='-Xmx4096m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8'
+          --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-recovery-validation
+          path: app/build/reports/tests/testFullDebugUnitTest/
+          if-no-files-found: ignore
+          retention-days: 7

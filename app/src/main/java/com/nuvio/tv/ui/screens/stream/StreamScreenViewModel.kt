@@ -1,5 +1,9 @@
 package com.nuvio.tv.ui.screens.stream
 
+import com.nuvio.tv.core.player.recovery.AutoSourceRecoveryPlan
+import com.nuvio.tv.core.player.recovery.AutoSourceRecoveryHandoff
+import com.nuvio.tv.core.player.recovery.prepareAutoSource
+
 import android.content.Context
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
@@ -99,6 +103,7 @@ class StreamScreenViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private var autoPlayHandledForSession = false
+    private var autoRecoverySettings: PlayerSettings? = null
     private var directAutoPlayModeInitializedForSession = false
     private var directAutoPlayFlowEnabledForSession = false
     private var isTorrentStreamStarted = false
@@ -358,6 +363,7 @@ class StreamScreenViewModel @Inject constructor(
         streamLoadJob = newScope.launch {
             streamLoadCompleted = false
             val playerSettings = playerSettingsDataStore.playerSettings.first()
+            autoRecoverySettings = playerSettings
             if (manualSelection) {
                 directAutoPlayModeInitializedForSession = true
                 directAutoPlayFlowEnabledForSession = false
@@ -1201,7 +1207,7 @@ class StreamScreenViewModel @Inject constructor(
         }
     }
 
-    suspend fun resolveStreamForPlayback(stream: Stream): StreamPlaybackInfo? {
+    suspend fun resolveStreamForPlayback(stream: Stream, reportErrors: Boolean = true): StreamPlaybackInfo? {
         if (stream.youTubeIdToResolve() != null) {
             return resolveYouTubeStreamForPlayback(stream)
         }
@@ -1275,19 +1281,19 @@ class StreamScreenViewModel @Inject constructor(
                 resolved
             }
             DirectDebridResolveResult.MissingApiKey -> {
-                showDirectDebridPlaybackError(context.getString(R.string.debrid_missing_api_key), refreshStreams = false)
+                if (reportErrors) showDirectDebridPlaybackError(context.getString(R.string.debrid_missing_api_key), refreshStreams = false)
                 null
             }
             DirectDebridResolveResult.NotCached -> {
-                showDirectDebridPlaybackError(context.getString(R.string.debrid_not_cached), refreshStreams = false)
+                if (reportErrors) showDirectDebridPlaybackError(context.getString(R.string.debrid_not_cached), refreshStreams = false)
                 null
             }
             DirectDebridResolveResult.Stale -> {
-                showDirectDebridPlaybackError(context.getString(R.string.debrid_stale_stream), refreshStreams = true)
+                if (reportErrors) showDirectDebridPlaybackError(context.getString(R.string.debrid_stale_stream), refreshStreams = true)
                 null
             }
             DirectDebridResolveResult.Error -> {
-                showDirectDebridPlaybackError(context.getString(R.string.debrid_resolution_failed), refreshStreams = false)
+                if (reportErrors) showDirectDebridPlaybackError(context.getString(R.string.debrid_resolution_failed), refreshStreams = false)
                 null
             }
         }
@@ -1485,6 +1491,40 @@ class StreamScreenViewModel @Inject constructor(
         return playbackInfo
     }
 
+    private suspend fun autoSourceRecoveryPlan(initialSource: Stream?): AutoSourceRecoveryPlan? {
+        if (contentType in listOf("tv", "channel", "cloud")) return null
+        val settings = autoRecoverySettings ?: return null
+        val preferred = if (settings.streamAutoPlayPreferBingeGroupForNextEpisode && settings.streamAutoPlayReuseBingeGroup) {
+            contentId?.let { bingeGroupCacheDataStore.get(it) }
+        } else null
+        return AutoSourceRecoveryPlan.create(
+            streams = _uiState.value.allStreams,
+            settings = settings,
+            installedAddonNames = addonRepository.getInstalledAddons().first().enabledAddons().map { it.displayName }.toSet(),
+            preferredBingeGroup = preferred, initialSource = initialSource,
+            profileId = playbackProfileId, videoId = videoId
+        )
+    }
+
+    suspend fun resolveAutoPlayForPlayback(stream: Stream): StreamPlaybackInfo? {
+        if (autoRecoverySettings?.playerPreference == PlayerPreference.EXTERNAL) return resolveStreamForPlayback(stream)
+        val plan = autoSourceRecoveryPlan(stream) ?: return resolveStreamForPlayback(stream)
+        val prepared = prepareAutoSource(plan, android.os.SystemClock::elapsedRealtime) {
+            resolveStreamForPlayback(it, reportErrors = false)
+        }
+        if (prepared == null) {
+            showDirectDebridPlaybackError(context.getString(R.string.player_auto_source_recovery_exhausted), refreshStreams = false)
+            return null
+        }
+        return prepared.value.copy(autoSourceRecoveryToken = AutoSourceRecoveryHandoff.put(prepared.plan))
+    }
+
+    suspend fun attachAutoSourceRecovery(info: StreamPlaybackInfo): StreamPlaybackInfo {
+        if (info.isExternal || info.autoSourceRecoveryToken != null) return info
+        val plan = autoSourceRecoveryPlan(_uiState.value.autoPlayStream) ?: return info
+        return info.copy(autoSourceRecoveryToken = AutoSourceRecoveryHandoff.put(plan))
+    }
+
     suspend fun awaitStreamLinkCacheSave() {
         pendingCacheSaveJob?.join()
     }
@@ -1545,6 +1585,7 @@ class StreamScreenViewModel @Inject constructor(
         autoLaunch: Boolean = false,
         context: android.content.Context
     ) {
+        AutoSourceRecoveryHandoff.discard(playbackInfo.autoSourceRecoveryToken)
         streamRepository.setLocalPluginSearchPaused(true)
         externalOverlayHideJob?.cancel()
         // Preserve the current message; blanking it made the card's Crossfade flash
@@ -1982,7 +2023,8 @@ data class StreamPlaybackInfo(
     val streamDescription: String? = null,
     val fileIdx: Int? = null,
     val sources: List<String>? = null,
-    val contentLanguage: String? = null
+    val contentLanguage: String? = null,
+    val autoSourceRecoveryToken: String? = null
 )
 
 private fun playbackUrlFor(playbackInfo: StreamPlaybackInfo): String? =

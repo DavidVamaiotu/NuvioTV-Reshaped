@@ -162,7 +162,8 @@ internal fun PlayerRuntimeController.initializePlayer(
     }
     mpvMediaLoadPrepared = false
 
-    scope.launch {
+    playerInitializationJob?.cancel()
+    playerInitializationJob = scope.launch {
         try {
             if (allowEngineFailover) {
                 startupEngineFailoverTriggered = false
@@ -279,7 +280,7 @@ internal fun PlayerRuntimeController.initializePlayer(
             if (effectiveInternalPlayerEngine == InternalPlayerEngine.MVP_PLAYER) {
                 mpvInitializationInProgress = true
                 try {
-                    val awaitedAfr = withTimeoutOrNull(AFR_PREFLIGHT_TOTAL_TIMEOUT_MS) {
+                    val awaitedAfr = withTimeoutOrNull(autoSourceRecovery?.remainingMs()?.coerceIn(1L, 3_000L) ?: AFR_PREFLIGHT_TOTAL_TIMEOUT_MS) {
                         afrJob.await()
                     }
                     if (awaitedAfr == null) {
@@ -620,7 +621,7 @@ internal fun PlayerRuntimeController.initializePlayer(
             isVc1TrackSelectionBypassActiveForCurrentPlayback = vc1TrackSelectionBypassActive
 
             val startupSubtitlePreparation = prepareStreamStartSubtitles(playerSettings)
-            val awaitedAfr = withTimeoutOrNull(AFR_PREFLIGHT_TOTAL_TIMEOUT_MS) {
+            val awaitedAfr = withTimeoutOrNull(autoSourceRecovery?.remainingMs()?.coerceIn(1L, 3_000L) ?: AFR_PREFLIGHT_TOTAL_TIMEOUT_MS) {
                 afrJob.await()
             }
             if (awaitedAfr == null) {
@@ -1426,6 +1427,8 @@ internal fun PlayerRuntimeController.initializePlayer(
                         if (isReleasingPlayer && error.errorCode == PlaybackException.ERROR_CODE_TIMEOUT) return
                         if (!isInBackground && com.nuvio.tv.reshaped.livetv.LiveEdgeRecovery.tryRejoin(error, _exoPlayer)) return // Nuvio RS hook: rejoin the live edge
                         cancelFirstFrameWatchdog()
+                        val status = error.findInvalidResponseCodeException()?.responseCode
+                        if (status in listOf(401, 403, 404, 410) && autoSourceRecovery?.failDefinitively() == true) return
                         val detailedError = error.toDisplayMessage(context)
                         cancelStableProgressReset()
 
@@ -1892,6 +1895,8 @@ internal fun PlayerRuntimeController.initializePlayer(
             if (!startupSubtitlePreparation.fetchCompleted) {
                 fetchAddonSubtitles()
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             if (
                 maybeAutoSwitchInternalPlayerOnStartupError(

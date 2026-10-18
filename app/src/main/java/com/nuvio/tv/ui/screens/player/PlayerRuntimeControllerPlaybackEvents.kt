@@ -1168,6 +1168,12 @@ fun PlayerRuntimeController.onEvent(event: PlayerEvent) {
         onUserInteraction()
     }
     when (event) {
+        PlayerEvent.OnPlayPause, PlayerEvent.OnSeekForward, PlayerEvent.OnSeekBackward,
+        is PlayerEvent.OnSeekBy, is PlayerEvent.OnSeekTo, is PlayerEvent.OnSourceStreamSelected,
+        PlayerEvent.OnRetry -> autoSourceRecovery?.cancel()
+        else -> Unit
+    }
+    when (event) {
         PlayerEvent.OnPlayPause -> {
             if (isUsingMpvEngine()) {
                 val playing = isPlaybackCurrentlyPlaying()
