@@ -168,7 +168,9 @@ internal class PlayerAutoSourceRecovery(
 internal fun PlayerRuntimeController.beginAutoSourceRecovery(plan: AutoSourceRecoveryPlan) {
     autoSourceRecovery?.cancel()
     if (contentType in listOf("tv", "channel", "cloud")) return
-    autoSourceRecovery = PlayerAutoSourceRecovery(this, plan).also { it.start() }
+    val recovery = PlayerAutoSourceRecovery(this, plan)
+    autoSourceRecovery = recovery
+    recovery.start()
 }
 
 internal fun PlayerRuntimeController.claimAutoSourceRecovery() {
