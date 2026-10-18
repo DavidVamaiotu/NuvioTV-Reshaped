@@ -56,7 +56,12 @@ extern "C" {
 
 JNIEXPORT jboolean JNICALL
 Java_com_nuvio_tv_ui_screens_player_seekpreview_engine_ThumbNative_nativeInit(JNIEnv *, jclass) {
-    return backend() ? JNI_TRUE : JNI_FALSE;
+    if (backend()) return JNI_TRUE;
+    // Kotlin applies backoff; a later session may retry after the runtime becomes available.
+    pthread_mutex_lock(&g_lock);
+    if (!g_backend) g_chosen = false;
+    pthread_mutex_unlock(&g_lock);
+    return JNI_FALSE;
 }
 
 /** "<name> <version>", "" when none. */

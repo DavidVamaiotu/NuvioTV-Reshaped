@@ -26,6 +26,7 @@ data class SeekPreviewThumbnail(
     /** Provenance is kept with the image, not inferred from which fallback answered last. */
     val origin: String = "UNKNOWN",
     val actualFrameMs: Long? = null,
+    val crop: android.graphics.Rect? = null,
 )
 
 /**

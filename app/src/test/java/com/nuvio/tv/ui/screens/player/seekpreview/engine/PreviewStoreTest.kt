@@ -64,4 +64,20 @@ class PreviewStoreTest {
             PreviewStore(directory, "a", 1_000_000).use { assertNull(it.nearest(0)) }
         } finally { directory.deleteRecursively() }
     }
+    @Test fun serverCuesWithinOneTenSecondSlotRemainDistinctAndLookupContainingIntervals() {
+        val directory = java.nio.file.Files.createTempDirectory("server-cues").toFile()
+        try {
+            PreviewStore(directory, "server", 1024 * 1024, slotMs = 1).use { store ->
+                store.put(1000, 1000, PreviewOrigin.SERVER, byteArrayOf(1), endMs = 2000)
+                store.put(2000, 2000, PreviewOrigin.SERVER, byteArrayOf(2), endMs = 3000)
+                assertEquals(1000L, store.nearest(1900, 0)?.timeMs)
+                assertEquals(2000L, store.nearest(2999, 0)?.timeMs)
+            }
+            PreviewStore(directory, "server", 1024 * 1024, slotMs = 1).use { store ->
+                assertEquals(1000L, store.nearest(1999, 0)?.timeMs)
+                assertEquals(2000L, store.nearest(2000, 0)?.timeMs)
+            }
+        } finally { directory.deleteRecursively() }
+    }
+
 }

@@ -26,19 +26,25 @@ internal object ThumbNative {
     const val INFO_DOVI_IPT = 11
     const val INFO_COUNT = 12
 
-    /**
-     * False when the library or an in-APK FFmpeg cannot be loaded, thumbnails then stay off. The native side prefers
-     * MPV's FFmpeg (~2x faster at 4K) and falls back to the FFmpeg 6.0 in libmediainfo.so.
-     */
-    val available: Boolean by lazy {
-        try {
-            System.loadLibrary("reshaped_preview")
-            nativeInit().also { ok -> if (ok) Log.i("ThumbDecode", "decoder backend: ${nativeBackend()}") }
-        } catch (t: Throwable) {
-            Log.w("ThumbDecode", "native decoder unavailable: ${t.javaClass.simpleName}: ${t.message}")
-            false
+    private val retry = NativeLoadBackoff()
+    @Volatile private var libraryLoaded = false
+    @Volatile private var ready = false
+    val available: Boolean get() = load()
+    fun load(): Boolean {
+        if (ready) return true
+        synchronized(this) {
+            if (ready) return true
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!retry.mayTry(now)) return false
+            try {
+                if (!libraryLoaded) { System.loadLibrary("reshaped_preview"); libraryLoaded = true }
+                if (nativeInit()) { ready = true; return true }
+            } catch (_: LinkageError) { }
+            retry.failed(now)
+            return false
         }
     }
+    fun state(): String = if (ready) "ok" else "unavailable (${retry.failures} attempts)"
 
     @JvmStatic external fun nativeInit(): Boolean
     @JvmStatic external fun nativeBackend(): String
@@ -204,6 +210,7 @@ internal class DecoderLane {
     private var trimWhenFree = false
 
     val inUse: Boolean get() = synchronized(this) { busy }
+    val closePending: Boolean get() = synchronized(this) { closeWhenFree }
 
     fun acquire() {
         synchronized(this) { busy = true }
@@ -231,4 +238,25 @@ internal class DecoderLane {
             trimWhenFree = busy
         }
     }
+}
+
+/** When a failed native load may be tried again: [FIRST_WAIT_MS] after the first failure, doubling, at most [MAX_WAIT_MS]. */
+internal class NativeLoadBackoff {
+    companion object {
+        const val FIRST_WAIT_MS = 60_000L
+        const val MAX_WAIT_MS = 15 * 60_000L
+    }
+
+    @Volatile var failures = 0
+        private set
+    private var nextTryAtMs = Long.MIN_VALUE
+
+    fun mayTry(nowMs: Long): Boolean = nowMs >= nextTryAtMs
+
+    fun failed(nowMs: Long) {
+        failures++
+        nextTryAtMs = nowMs + (FIRST_WAIT_MS shl (failures - 1).coerceAtMost(10)).coerceAtMost(MAX_WAIT_MS)
+    }
+
+    fun waitMs(nowMs: Long): Long = if (failures == 0) 0L else (nextTryAtMs - nowMs).coerceAtLeast(0L)
 }

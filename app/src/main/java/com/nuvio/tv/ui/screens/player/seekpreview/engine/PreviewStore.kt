@@ -15,12 +15,14 @@ internal class PreviewStore(
     directory: File,
     identity: String,
     budgetBytes: Long,
+    private val slotMs: Long = 10_000,
 ) : Closeable {
-    private val registryKey = File(directory, digest(identity.toByteArray())).absolutePath
+    private val storeIdentity = if (slotMs == 10_000L) identity else "$identity|slot:$slotMs"
+    private val registryKey = File(directory, digest(storeIdentity.toByteArray())).absolutePath
     fun imageKey(entry: StoredPreview) = PreviewImageKey(registryKey, entry.slot, entry.offset, entry.size)
     @Volatile private var closed = false
     private val state = synchronized(active) {
-        active[registryKey]?.also { it.references++ } ?: State(directory, digest(identity.toByteArray()), budgetBytes).also {
+        active[registryKey]?.also { it.references++ } ?: State(directory, digest(storeIdentity.toByteArray()), budgetBytes, slotMs).also {
             active[registryKey] = it
         }
     }
@@ -42,19 +44,24 @@ internal class PreviewStore(
             if (--state.references == 0) { state.flush(); active.remove(registryKey) }
         }
     }
-    private class State(val directory: File, val key: String, val budgetBytes: Long) {
+    private class State(val directory: File, val key: String, val budgetBytes: Long, private val slotMs: Long) {
         var references = 1
         private val dataFile = File(directory, "$key.frames")
         private val indexFile = File(directory, "$key.index")
         private val entries = linkedMapOf<Long, StoredPreview>()
+        private val byTime = java.util.TreeMap<Long, StoredPreview>()
         private var dirty = 0
         private val ioLock = Any()
         init { directory.mkdirs(); load() }
 
-        @Synchronized fun nearest(positionMs: Long, toleranceMs: Long = 5_000): StoredPreview? = entries.values
-            .minByOrNull { kotlin.math.abs(it.timeMs - positionMs) }
-            ?.takeIf { positionMs in it.timeMs until it.endMs || PreviewTiming.near(it.timeMs, positionMs, toleranceMs) }
-        @Synchronized fun has(positionMs: Long): Boolean = entries.containsKey(positionMs / 10_000)
+        @Synchronized fun nearest(positionMs: Long, toleranceMs: Long = 5_000): StoredPreview? {
+            val before = byTime.floorEntry(positionMs)?.value
+            if (before != null && positionMs < before.endMs) return before
+            val after = byTime.ceilingEntry(positionMs)?.value
+            return listOfNotNull(before, after).minByOrNull { kotlin.math.abs(it.timeMs - positionMs) }
+                ?.takeIf { PreviewTiming.near(it.timeMs, positionMs, toleranceMs) }
+        }
+        @Synchronized fun has(positionMs: Long): Boolean = entries.containsKey(positionMs / slotMs)
         @Synchronized fun all(): List<StoredPreview> = entries.values.toList()
         @Synchronized fun atSlot(slot: Long): StoredPreview? = entries[slot]
         fun read(entry: StoredPreview): ByteArray? {
@@ -68,7 +75,7 @@ internal class PreviewStore(
         }
         fun put(positionMs: Long, actualTimeMs: Long, origin: PreviewOrigin, picture: ByteArray, replace: Boolean = false, endMs: Long = actualTimeMs + 10_000) {
             if (actualTimeMs < 0 || endMs <= actualTimeMs || picture.size !in 1..MAX_PICTURE_BYTES) return
-            val slot = positionMs / 10_000
+            val slot = positionMs / slotMs
             synchronized(ioLock) {
                 val accepted = synchronized(this) { (replace || slot !in entries) && entries.size < MAX_ENTRIES }
                 if (!accepted || dataFile.length() + picture.size > budgetBytes) return
@@ -77,7 +84,10 @@ internal class PreviewStore(
                     val offset = dataFile.length()
                     dataFile.appendBytes(picture)
                     val shouldFlush = synchronized(this) {
-                        entries[slot] = StoredPreview(slot, actualTimeMs, origin, offset, picture.size, endMs)
+                        entries.remove(slot)?.let { byTime.remove(it.timeMs) }
+                        val entry = StoredPreview(slot, actualTimeMs, origin, offset, picture.size, endMs)
+                        entries[slot] = entry
+                        byTime[actualTimeMs] = entry
                         ++dirty >= 12
                     }
                     if (shouldFlush) flush()
@@ -94,11 +104,11 @@ internal class PreviewStore(
                     repeat(count) {
                         val item = StoredPreview(input.readLong(), input.readLong(), PreviewOrigin.entries[input.readInt()], input.readLong(), input.readInt(), input.readLong())
                         require(item.slot >= 0 && item.timeMs >= 0 && item.endMs > item.timeMs && item.size in 1..MAX_PICTURE_BYTES && item.offset >= 0)
-                        if (item.offset + item.size <= dataFile.length()) entries[item.slot] = item
+                        if (item.offset + item.size <= dataFile.length()) { entries[item.slot] = item; byTime[item.timeMs] = item }
                     }
                 }
                 indexFile.setLastModified(System.currentTimeMillis())
-            }.onFailure { entries.clear() }
+            }.onFailure { entries.clear(); byTime.clear() }
         }
         fun flush() = synchronized(ioLock) {
             val snapshot = synchronized(this) metadata@ {

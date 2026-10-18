@@ -61,6 +61,9 @@ class BitrateAwareLoadControl(
         budgetBytesOverride = if (bytes < 0L) -1L else bytes
     }
 
+    /** Current byte ceiling, also used by optional feature-owned loading leases. */
+    fun effectiveBufferBudgetBytes(): Long = if (budgetBytesOverride >= 0L) budgetBytesOverride else budgetBytes
+
     override fun getBackBufferDurationUs(playerId: PlayerId): Long {
         val override = backBufferOverrideUs
         return if (override >= 0L) override else super.getBackBufferDurationUs(playerId)

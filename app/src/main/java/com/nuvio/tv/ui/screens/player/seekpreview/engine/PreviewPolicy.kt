@@ -20,44 +20,6 @@ internal data class PreviewBudget(val small: Boolean) {
     }
 }
 
-/** One latest foreground target, a bounded neighbourhood, then a sparse-to-fine coverage pass. */
-internal class PreviewPlanner(private val durationMs: Long) {
-    data class Request(val positionMs: Long, val generation: Long, val direction: Int)
-    var latest: Request? = null
-        private set
-    private var generation = 0L
-    private val covered = HashSet<Long>()
-    private var strideIndex = 0
-    private var cursor = 0L
-    private val strides = longArrayOf(300_000, 60_000, 30_000, 10_000)
-    @Synchronized fun request(positionMs: Long): Request {
-        val p = positionMs.coerceIn(0, (durationMs - 1).coerceAtLeast(0))
-        val previous = latest
-        if (previous != null && previous.positionMs == p) return previous
-        return Request(p, ++generation, previous?.let { p.compareTo(it.positionMs) } ?: 1).also { latest = it }
-    }
-    @Synchronized fun isCurrent(request: Request): Boolean = latest?.generation == request.generation
-    @Synchronized fun next(has: (Long) -> Boolean, coverage: Boolean): Long? {
-        latest?.let { r ->
-            val direction = r.direction.takeIf { it != 0 } ?: 1
-            for (step in intArrayOf(0, direction, 2 * direction, -direction)) {
-                val p = (r.positionMs / 10_000 * 10_000 + step * 10_000).coerceIn(0, (durationMs - 1).coerceAtLeast(0))
-                if (!has(p) && p !in covered) return p
-            }
-        }
-        if (!coverage) return null
-        while (strideIndex < strides.size) {
-            if (cursor >= durationMs) { strideIndex++; cursor = 0; continue }
-            val p = cursor
-            cursor += strides[strideIndex]
-            if (!has(p) && p !in covered) return p
-        }
-        return null
-    }
-    @Synchronized fun completed(positionMs: Long) { covered += positionMs }
-    @Synchronized fun wasCompleted(positionMs: Long): Boolean = positionMs in covered
-}
-
 /** Byte-based eviction; frame counts do not bound bitmap memory. */
 internal class PreviewLru<K, V>(private val maxBytes: Int, private val sizeOf: (V) -> Int) {
     private val values = LinkedHashMap<K, V>(16, 0.75f, true)

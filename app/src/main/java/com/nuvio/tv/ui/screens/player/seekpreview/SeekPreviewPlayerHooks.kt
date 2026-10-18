@@ -112,6 +112,11 @@ fun SeekPreviewState.isSyncVisible(uiState: PlayerUiState): Boolean =
 
 /** Closes Preview Sync on Back; returns true when it consumed the press. */
 fun SeekPreviewState.handleBack(uiState: PlayerUiState): Boolean {
+    if (com.nuvio.tv.ui.screens.player.seekpreview.engine.SeekThumbnails.prepareUi.value !is
+        com.nuvio.tv.ui.screens.player.seekpreview.engine.SeekThumbnails.PrepareUi.Hidden && uiState.error == null) {
+        com.nuvio.tv.ui.screens.player.seekpreview.engine.SeekThumbnails.startWatchingNow()
+        return true
+    }
     if (!isSyncOverlayOpen) return false
     val visible = isSyncVisible(uiState)
     hideSyncOverlay()
@@ -129,6 +134,7 @@ fun BoxScope.SeekPreviewSyncLayer(
     uiState: PlayerUiState,
     onDismissed: () -> Unit,
 ) {
+    SeekPreviewPreparationLayer(onDismissed, visibleAllowed = uiState.error == null, onError = viewModel.seekPreview::stopGenerationForError)
     val seekPreview = viewModel.seekPreview
     val isOpen by seekPreview.showSyncOverlay.collectAsStateWithLifecycle()
     val visible = isOpen && uiState.error == null && !uiState.showLoadingOverlay

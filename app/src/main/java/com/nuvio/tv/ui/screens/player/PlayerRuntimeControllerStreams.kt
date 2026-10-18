@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.player
 
+import com.nuvio.tv.ui.screens.player.seekpreview.seekPreviewNextEpisode
 import com.nuvio.tv.ui.reshaped.livetv.keepPlayerForLiveTvZap // Nuvio RS hook
 import android.content.Intent
 import android.net.Uri
@@ -1730,7 +1731,9 @@ internal fun PlayerRuntimeController.preloadNextEpisodeSources() {
             videoId = nextVideo.id,
             season = nextVideo.season,
             episode = nextVideo.episode
-        ).collect { /* results cached by StreamSearchSessionCache */ }
+        ).collect { result ->
+            if (result is NetworkResult.Success) seekPreviewNextEpisode(result.data.flatMap { it.streams }, nextVideo.season, nextVideo.episode)
+        }
     }
 }
 

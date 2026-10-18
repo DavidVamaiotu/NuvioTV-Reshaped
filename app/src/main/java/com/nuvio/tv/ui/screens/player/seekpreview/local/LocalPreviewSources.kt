@@ -23,6 +23,7 @@ internal class LocalPreviewSource(
 ) {
     @Volatile var released = false
     @Volatile var track: LocalPreviewTrack? = null
+    @Volatile var keyframeSink: KeyframeSink? = null
 
     /**
      * The stream's index when it lists real keyframes: an MP4's sync-sample table, or the cue
@@ -67,22 +68,25 @@ internal object LocalPreviewSources {
         current.value?.let { stale ->
             stale.released = true
             stale.track = null
+            stale.keyframeSink = null
         }
         current.value = source
         return VideoKeyframeExtractorsFactory(factory, object : KeyframeSink {
             private fun track() = source.takeIf { !it.released }?.track
 
-            override fun wantsKeyframes(): Boolean = track()?.wantsKeyframes() == true
+            override fun wantsKeyframes(): Boolean = source.keyframeSink?.wantsKeyframes() ?: (track()?.wantsKeyframes() == true)
 
-            override fun acceptsFormat(format: Format): Boolean = track()?.acceptsFormat(format) == true
+            override fun acceptsFormat(format: Format): Boolean = source.keyframeSink?.acceptsFormat(format) ?: (track()?.acceptsFormat(format) == true)
 
-            override fun wantsKeyframe(timeUs: Long): Boolean = track()?.wantsKeyframe(timeUs) == true
+            override fun wantsKeyframe(timeUs: Long): Boolean = source.keyframeSink?.wantsKeyframe(timeUs) ?: (track()?.wantsKeyframe(timeUs) == true)
 
             // No track yet: say yes, so the tap only stops copying once a track says nothing is due.
-            override fun mayWantKeyframesNear(timeUs: Long): Boolean = track()?.mayWantKeyframesNear(timeUs) ?: true
+            override fun mayWantKeyframesNear(timeUs: Long): Boolean = source.keyframeSink?.mayWantKeyframesNear(timeUs) ?: track()?.mayWantKeyframesNear(timeUs) ?: true
 
             override fun onKeyframe(format: Format, timeUs: Long, data: ByteArray, offset: Int, size: Int) {
-                track()?.onKeyframe(format, timeUs, data, offset, size)
+                val sink = source.takeIf { !it.released }?.keyframeSink
+                if (sink != null) sink.onKeyframe(format, timeUs, data, offset, size)
+                else track()?.onKeyframe(format, timeUs, data, offset, size)
             }
 
             override fun onSeekMap(seekMap: SeekMap) {
@@ -96,6 +100,7 @@ internal object LocalPreviewSources {
         val source = current.value?.takeIf { it.owner === owner } ?: return
         source.released = true
         source.track = null
+        source.keyframeSink = null
         current.compareAndSet(source, null)
     }
 
