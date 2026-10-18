@@ -117,7 +117,7 @@ internal class LocalPreviewTrack(
     private val _revision = MutableStateFlow(0)
     override val revision: StateFlow<Int> = _revision.asStateFlow()
 
-    private val cacheDirectory = File(context.applicationContext.cacheDir, "seek_preview_tap_v2")
+    private val cacheDirectory = File(context.applicationContext.cacheDir, "seek_preview_engine_v1")
     private var disk: PreviewStore? = null
     @Synchronized private fun diskStore(): PreviewStore = disk ?: PreviewStore(cacheDirectory, cacheKey, CACHE_LIMIT_BYTES).also { disk = it }
 
@@ -346,6 +346,7 @@ internal class LocalPreviewTrack(
      * decoded before it is chosen, so this costs one copy of compressed bytes, not a decode.
      */
     fun onKeyframe(format: Format, timeUs: Long, data: ByteArray, offset: Int, size: Int) {
+        if (size !in 1..(4 * 1024 * 1024)) return
         if (format.width.toLong() * format.height.toLong() > maxPixels) {
             unsupported = true
             return
@@ -590,7 +591,7 @@ internal class LocalPreviewTrack(
         private const val STAND_IN_SAMPLE_SIZE = 4
         private const val LOW_MEMORY_BYTES = 3L * 1024L * 1024L * 1024L
         private const val FULL_HD_PIXELS = 1920L * 1088L
-        private const val TAP_QUEUE = 3
+        private const val TAP_QUEUE = 2
         private const val UI_UPDATE_INTERVAL_MS = 250L
         private const val SAVE_EVERY = 60
         private const val CACHE_DIR = "seek_previews"

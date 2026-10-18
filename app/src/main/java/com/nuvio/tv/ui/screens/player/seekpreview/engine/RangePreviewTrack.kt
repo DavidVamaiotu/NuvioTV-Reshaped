@@ -99,7 +99,7 @@ internal class RangePreviewTrack(
         try {
             while (!closed.get()) {
                 val request = planner.latest
-                val waiting = SystemClock.elapsedRealtime() - requestAt < 100
+                val waiting = SystemClock.elapsedRealtime() - requestAt < 150
                 val canWork = foreground && !resources.hidden && !buffering && !waiting &&
                     (!active || (!resources.budget.small && bufferAheadMs >= 20_000))
                 if (!canWork || request == null) { delay(100); continue }
@@ -170,6 +170,11 @@ internal class RangePreviewTrack(
                     break // No retry loop after memory exhaustion.
                 } catch (_: Exception) {
                     if (!planner.isCurrent(request) || buffering || active || !foreground) continue
+                    val coolingUntil = readers.maxOfOrNull { it.retryAtMs } ?: 0L
+                    if (coolingUntil > System.currentTimeMillis()) {
+                        delay(minOf(30_000, coolingUntil - System.currentTimeMillis()).coerceAtLeast(1))
+                        continue
+                    }
                     if (++failures >= 5) break
                     delay((1_000L shl failures).coerceAtMost(30_000))
                 }
@@ -186,7 +191,6 @@ internal class RangePreviewTrack(
         if (offers.isEmpty()) return
         // Verifying 4K still needs a full frame's working memory. Test real headroom, even on a small TV.
         if (!resources.allowsVerification(own.index.video)) return
-        triedCopies = true
         for (offer in offers) {
             if (closed.get() || !planner.isCurrent(request) || active) return
             var candidate: IndexedPreviewFile? = null
@@ -214,12 +218,13 @@ internal class RangePreviewTrack(
                     scores += score
                 }
                 if (PreviewCopies.verified(scores)) {
-                    copy = other; copyRatio = ratio; candidate = null
+                    copy = other; copyRatio = ratio; candidate = null; triedCopies = true
                     return
                 }
             } catch (_: Exception) { /* An unsuitable copy does not fail the playing file. */ }
             finally { candidate?.close() }
         }
+        triedCopies = true
     }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return

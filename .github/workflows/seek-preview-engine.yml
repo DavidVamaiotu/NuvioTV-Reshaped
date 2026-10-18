@@ -28,6 +28,8 @@ jobs:
           printf 'NUVIO_RELEASE_STORE_FILE=%s/preview-debug.jks\nNUVIO_RELEASE_KEY_ALIAS=androiddebugkey\nNUVIO_RELEASE_KEY_PASSWORD=android\nNUVIO_RELEASE_STORE_PASSWORD=android\n' "$RUNNER_TEMP" > local.properties
       - name: Test previews and build all native ABIs
         run: ./gradlew :app:testFullDebugUnitTest --tests '*seekpreview*' :app:assembleFullDebug --stacktrace
+      - name: Check native colour math and backend syntax
+        run: python scripts/test_seek_preview_native.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:

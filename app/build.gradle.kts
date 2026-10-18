@@ -12,6 +12,7 @@ plugins {
 import com.android.build.gradle.internal.tasks.L8DexDesugarLibTask
 import java.io.File
 import java.util.Properties
+import java.security.MessageDigest
 
 fun parseBooleanProperty(value: String?): Boolean {
     val normalized = value?.trim()?.lowercase() ?: return false
@@ -572,7 +573,7 @@ val verifyPreviewFfmpegAbi by tasks.registering {
     val aar = layout.projectDirectory.file("libs/nextlib-mediainfo-local.aar")
     inputs.file(aar)
     doLast {
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val digest = MessageDigest.getInstance("SHA-256")
             .digest(aar.asFile.readBytes()).joinToString("") { "%02x".format(it) }
         check(digest == "509e645e0f4232bdd3c6e1b2e4b82c3686140a0355f13656890f3641d8b7fb53") {
             "Preview FFmpeg ABI changed: review seekpreview native backend and headers before updating the pin."

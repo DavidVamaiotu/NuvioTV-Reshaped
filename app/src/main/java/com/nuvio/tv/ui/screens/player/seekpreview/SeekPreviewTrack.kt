@@ -73,6 +73,7 @@ internal class SeekrPreviewTrack(private val seekr: BoundedSeekrTrack) : SeekPre
                 bitmap = thumbnail.bitmap,
                 cueStartMs = thumbnail.cueStartMs,
                 cueEndMs = thumbnail.cueEndMs,
+                origin = "SEEKR",
             )
         }
 }
