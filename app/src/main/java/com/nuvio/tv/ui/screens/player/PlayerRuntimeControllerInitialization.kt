@@ -160,6 +160,7 @@ internal fun PlayerRuntimeController.initializePlayer(
         _uiState.update { it.copy(error = context.getString(R.string.player_error_no_stream_url), showLoadingOverlay = false) }
         return
     }
+    sourceRecoveryPickerError = null
     mpvMediaLoadPrepared = false
 
     playerInitializationJob?.cancel()

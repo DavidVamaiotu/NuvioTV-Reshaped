@@ -155,6 +155,7 @@ internal class PlayerAutoSourceRecovery(
 
     private fun showPicker() {
         stopAttempt()
+        player.sourceRecoveryPickerError = player.context.getString(R.string.player_auto_source_recovery_exhausted)
         player._uiState.update {
             it.copy(
                 error = null, isBuffering = false, showLoadingOverlay = false

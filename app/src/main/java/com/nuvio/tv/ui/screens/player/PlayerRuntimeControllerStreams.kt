@@ -402,8 +402,11 @@ internal fun PlayerRuntimeController.dismissSourcesPanel() {
     sourceStreamsJob = null
     sourceChipErrorDismissJob?.cancel()
     streamRepository.setLocalPluginSearchPaused(true)
+    val recoveryError = sourceRecoveryPickerError
+    sourceRecoveryPickerError = null
     _uiState.update {
         it.copy(
+            error = it.error ?: recoveryError,
             showSourcesPanel = false,
             isLoadingSourceStreams = false
         )
@@ -1003,6 +1006,7 @@ private fun PlayerRuntimeController.switchToTorrentSourceStream(
     resumeSavedProgress: Boolean = true
 ) {
     val infoHash = stream.getEffectiveInfoHash() ?: return
+    sourceRecoveryPickerError = null
     sourceStreamsScope?.cancel()
     sourceStreamsScope = null
     sourceStreamsJob = null
