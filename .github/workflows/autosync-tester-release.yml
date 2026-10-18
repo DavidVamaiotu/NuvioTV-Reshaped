@@ -344,6 +344,16 @@ jobs:
           # The APKs were built with the stamped version. Restore the source file so release
           # metadata stays ephemeral, then tag a unique empty commit.
           git restore --staged --worktree app/build.gradle.kts
+          # Restore manual-only releases in the same anchor commit, after all build checks pass.
+          python - <<'PYRESTORE'
+          from pathlib import Path
+          path = Path(".github/workflows/autosync-tester-release.yml")
+          text = path.read_text()
+          text = text.replace('  push:\n    branches: [subtitle-autosync-tester]\n    paths: [".github/workflows/autosync-tester-release.yml"]\n', '')
+          text = text.replace("    if: github.event_name != 'push' || github.event.head_commit.message == 'Trigger detached seek preview tester release'\n", '')
+          path.write_text(text)
+          PYRESTORE
+          git add .github/workflows/autosync-tester-release.yml
           git commit --allow-empty -m "Release $TESTER_TAG"
           git push origin HEAD:subtitle-autosync-tester
 
