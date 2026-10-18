@@ -129,6 +129,8 @@ fun SeekPreviewThumbnailHost(
             activeTrack.offsetMs = offset
             // Only overwrite on success — keeps the last good frame visible during a fetch.
             val coveringThumbnail = activeTrack.thumbnailFor(positionMs) ?: return@collect
+            // A slow provider may finish after the remote moved elsewhere. Never snap back to that old request.
+            if (requestFlow.value.positionMs != positionMs || requestFlow.value.offsetMs != offset) return@collect
             // Cue times arrive on the preview timeline; undo the sync offset so they can be
             // compared with, and assigned to, playback positions.
             val coveringCue = SeekPreviewCue(
@@ -140,7 +142,7 @@ fun SeekPreviewThumbnailHost(
             // frame is the closer one.
             val prefersSuccessor = coveringCue.prefersSuccessorFor(positionMs)
             val successor = if (prefersSuccessor) {
-                activeTrack.thumbnailFor(coveringCue.endMs)
+                activeTrack.sideThumbnailFor(coveringCue.endMs)
                     ?.takeIf { it.cueStartMs != coveringThumbnail.cueStartMs }
             } else {
                 null

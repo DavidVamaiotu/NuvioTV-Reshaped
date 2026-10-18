@@ -11,6 +11,9 @@ name: AutoSync TV Tester Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [subtitle-autosync-tester]
+    paths: [".github/workflows/autosync-tester-release.yml"]
 
 permissions:
   contents: write
@@ -24,6 +27,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Trigger detached seek preview tester release'
     runs-on: ubuntu-latest
 
     steps:
@@ -305,8 +309,10 @@ jobs:
           TESTER_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
+          python scripts/test_seek_preview_native.py
           ./gradlew :app:testFullReleaseUnitTest \
             --tests 'com.nuvio.tv.updater.*' \
+            --tests '*seekpreview*' \
             --tests 'com.nuvio.tv.core.streams.ranking.*' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSyncDiagnosticsTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' \

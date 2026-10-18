@@ -1,6 +1,5 @@
-- Every **Ranked regex** priority now has a **Presets** picker, sharing the same 13 choices as the single-regex editor. Presets fill that priority; you can still edit and reorder it before saving.
-- Fixed large source lists exhausting one shared matching allowance and falling back to manual despite valid matches. Ranked matching now runs off the UI thread, checks cancellation, caches compiled rules, and uses linear tier buckets.
-- Added per-source protection and an elapsed-time matching budget. Expensive or incomplete evaluations still open manual selection instead of guessing a lower tier.
-- Fixed the No CAM/TS preset rejecting ordinary multiline addon descriptions.
-- Fixed row identities when saved rules reload. Added large-list, preset, background-worker and cancellation coverage: 39 focused tests.
-- [Setup examples, limits, and implementation notes](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/blob/subtitle-autosync-tester/docs/ranked-regex-autoplay.md).
+- Seek previews can now request frames from later, uncached sections of supported MKV, MP4 and AVI files, independently of playback capture.
+- Preview requests follow the newest scrub position, cancel obsolete range reads and use bounded image caches. Seekr/server images and verified smaller copies provide additional coverage.
+- Added Arc-derived container readers and native HDR colour conversion, with attribution. Selected seek positions are preserved.
+- On 2 GB TVs, generation uses conservative memory checks and runs while paused or scrubbing. Ordinary original-4K decoding is disabled; available external images or verified smaller copies provide previews instead.
+- Tester validation: automated preview/native checks are included in the release build. Real-device feedback is still needed for cold seeks, rapid reverse scrubbing, 4K HDR/DV and long playback sessions.

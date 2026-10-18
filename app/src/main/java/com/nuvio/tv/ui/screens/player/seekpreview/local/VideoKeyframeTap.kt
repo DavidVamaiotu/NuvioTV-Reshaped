@@ -240,11 +240,11 @@ private class VideoTapTrackOutput(
             end = 0
             return false
         }
-        pending = pending.copyOf(maxOf(required.toInt(), pending.size * 2, 65_536))
+        pending = pending.copyOf(maxOf(required.toInt(), pending.size * 2, 65_536).coerceAtMost(MAX_PENDING_BYTES))
         return true
     }
 
     companion object {
-        private const val MAX_PENDING_BYTES = 24 * 1024 * 1024
+        private const val MAX_PENDING_BYTES = 8 * 1024 * 1024
     }
 }
