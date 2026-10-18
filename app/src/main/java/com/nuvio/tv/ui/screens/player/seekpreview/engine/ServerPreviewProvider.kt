@@ -38,7 +38,7 @@ internal class ServerPreviewProvider private constructor(
             discovered = true
             val json = runCatching { JSONObject(String(get(endpoint("Items/$item", "Fields" to "Trickplay"), 512 * 1024))) }.getOrNull()
             val manifest = json?.optJSONObject("Trickplay")
-            val listed = manifest?.keys()?.asSequence()?.firstOrNull { it == mediaSource || it == item }
+            val listed = manifest?.keys()?.asSequence()?.firstOrNull { it == mediaSource }
             val levels = listed?.let { manifest?.optJSONObject(it) }
             grid = levels?.keys()?.asSequence()?.mapNotNull { key ->
                 val value = levels.optJSONObject(key) ?: return@mapNotNull null
@@ -87,6 +87,9 @@ internal class ServerPreviewProvider private constructor(
         val first = entries[index]
         val next = entries[index + 1]
         val bytes = get(url, (next.second - first.second).toInt(), first.second until next.second)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth !in 1..640 || bounds.outHeight !in 1..640) return null
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
         return Picture(bitmap, first.first, if (index + 1 < entries.lastIndex) next.first else first.first + 10_000)
     }

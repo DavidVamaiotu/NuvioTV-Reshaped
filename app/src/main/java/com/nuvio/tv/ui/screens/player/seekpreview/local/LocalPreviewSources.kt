@@ -130,5 +130,5 @@ internal fun localSeekPreviewCacheKey(
     contentId.orEmpty(),
     season?.toString().orEmpty(),
     episode?.toString().orEmpty(),
-    (durationMs / 1000L).toString(),
+    durationMs.toString(),
 ).joinToString("|")

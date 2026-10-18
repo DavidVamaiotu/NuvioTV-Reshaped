@@ -5,6 +5,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PreviewStoreTest {
+    @Test fun overlappingSessionsShareOneManifestAndDoNotOverwriteEachOther() {
+        val directory = Files.createTempDirectory("preview-shared").toFile()
+        try {
+            val first = PreviewStore(directory, "same-file", 1_000_000)
+            val second = PreviewStore(directory, "same-file", 1_000_000)
+            first.put(0, 0, PreviewOrigin.ORIGINAL, byteArrayOf(1))
+            second.put(10_000, 10_000, PreviewOrigin.ORIGINAL, byteArrayOf(2))
+            first.close(); second.close()
+            PreviewStore(directory, "same-file", 1_000_000).use {
+                assertArrayEquals(byteArrayOf(1), it.read(it.nearest(0)!!))
+                assertArrayEquals(byteArrayOf(2), it.read(it.nearest(10_000)!!))
+            }
+        } finally { directory.deleteRecursively() }
+    }
     @Test fun reopensImagesLazilyWithTheirRealTimestampAndProvenance() {
         val directory = Files.createTempDirectory("preview-store").toFile()
         try {

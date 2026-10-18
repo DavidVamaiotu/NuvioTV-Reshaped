@@ -152,7 +152,7 @@ internal class LocalPreviewTrack(
     /** Slot → its spooled keyframe; the slot stays CLAIMED meanwhile. Guarded by [lock]. */
     private val spooled = HashMap<Int, SpooledKeyframe>()
     private val spoolFile = File(
-        File(context.applicationContext.cacheDir, CACHE_DIR),
+        cacheDirectory,
         sha1(cacheKey) + "-" + SystemClock.elapsedRealtimeNanos() + SPOOL_SUFFIX,
     )
     // Spool file state: only touched on the tap thread.

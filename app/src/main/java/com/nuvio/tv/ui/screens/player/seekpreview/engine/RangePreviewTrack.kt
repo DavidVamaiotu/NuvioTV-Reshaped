@@ -37,6 +37,7 @@ internal class RangePreviewTrack(
     private val closed = AtomicBoolean(false)
     private val readers = CopyOnWriteArraySet<PreviewRangeReader>()
     private val planner = PreviewPlanner(durationMs)
+    private val playbackHealth = PreviewPlaybackHealth()
     private var images: PreviewLru<Long, Bitmap>? = null
     private val resources = PreviewResources(context) { images?.clear(); readers.forEach { it.cancel() } }
     private val directory = File(context.applicationContext.cacheDir, "seek_preview_engine_v1")
@@ -61,10 +62,11 @@ internal class RangePreviewTrack(
         images = PreviewLru(resources.budget.bitmapBytes) { it.allocationByteCount }
         scope.launch { runWorker() }
     }
-    fun updatePlayback(playing: Boolean, stalled: Boolean, positionMs: Long, bufferedMs: Long) {
+    fun updatePlayback(playing: Boolean, stalled: Boolean, positionMs: Long, bufferedMs: Long, droppedFrames: Int = -1) {
         active = playing
         buffering = stalled
         bufferAheadMs = (bufferedMs - positionMs).coerceAtLeast(0)
+        playbackHealth.observe(SystemClock.elapsedRealtime(), playing, stalled, droppedFrames)
         if (playing || stalled) readers.forEach { it.cancel() }
     }
     override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? {
@@ -87,7 +89,7 @@ internal class RangePreviewTrack(
             val bytes = saved.read(entry) ?: return@withContext null
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.also { images?.put(entry.slot, it) }
         } ?: return null
-        return SeekPreviewThumbnail(bitmap, entry.timeMs, PreviewTiming.frameCueEnd(entry.timeMs, durationMs),
+        return SeekPreviewThumbnail(bitmap, entry.timeMs, minOf(entry.endMs, durationMs),
             origin = entry.origin.name, actualFrameMs = entry.timeMs)
     }
     override fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? = original?.nearestTime(positionMs)
@@ -101,6 +103,7 @@ internal class RangePreviewTrack(
                 val request = planner.latest
                 val waiting = SystemClock.elapsedRealtime() - requestAt < 150
                 val canWork = foreground && !resources.hidden && !buffering && !waiting &&
+                    playbackHealth.allows(SystemClock.elapsedRealtime(), active) &&
                     (!active || (!resources.budget.small && bufferAheadMs >= 20_000))
                 if (!canWork || request == null) { delay(100); continue }
                 try {
@@ -115,7 +118,7 @@ internal class RangePreviewTrack(
                                     val saved = serverStore ?: PreviewStore(directory, "$identity|server|${PreviewStore.digest(url.toByteArray())}", resources.budget.diskBytes)
                                         .also { serverStore = it }
                                     val encoded = ByteArrayOutputStream().also { picture.bitmap.compress(Bitmap.CompressFormat.WEBP, 80, it) }.toByteArray()
-                                    saved.put(request.positionMs, picture.timeMs, PreviewOrigin.SERVER, encoded)
+                                    saved.put(request.positionMs, picture.timeMs, PreviewOrigin.SERVER, encoded, endMs = picture.endMs)
                                     revisionState.value++
                                 }
                             } finally { picture.bitmap.recycle() }
@@ -141,6 +144,7 @@ internal class RangePreviewTrack(
                     val before = source.reader.bytesRead
                     val mapped = (position * copyRatio).toLong()
                     val made = PreviewDecodeGate.tryRun { source.frame(mapped, resources.budget.outputWidth) }
+                    if (made != null) playbackHealth.decoded(SystemClock.elapsedRealtime())
                     if (made != null) {
                         try {
                             if (!closed.get() && foreground && planner.isCurrent(request)) {

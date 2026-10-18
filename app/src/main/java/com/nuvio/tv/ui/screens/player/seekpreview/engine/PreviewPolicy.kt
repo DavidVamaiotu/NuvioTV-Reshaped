@@ -80,3 +80,18 @@ internal object PreviewTiming {
     fun near(frameMs: Long, requestedMs: Long, toleranceMs: Long = 5_000): Boolean = abs(frameMs - requestedMs) <= toleranceMs
     fun frameCueEnd(frameMs: Long, durationMs: Long): Long = minOf(durationMs, frameMs + 10_000).coerceAtLeast(frameMs + 1)
 }
+
+/** Observed playback always wins. Counter resets do not look like new frame drops. */
+internal class PreviewPlaybackHealth {
+    private var dropped = -1
+    private var decodedAt = -1L
+    private var heldUntil = 0L
+    @Synchronized fun decoded(now: Long) { decodedAt = now }
+    @Synchronized fun observe(now: Long, playing: Boolean, buffering: Boolean, droppedFrames: Int) {
+        if (buffering) heldUntil = maxOf(heldUntil, now + 30_000)
+        if (playing && droppedFrames >= 0 && dropped >= 0 && droppedFrames > dropped &&
+            decodedAt >= 0 && now - decodedAt <= 20_000) heldUntil = maxOf(heldUntil, now + 60_000)
+        dropped = droppedFrames
+    }
+    @Synchronized fun allows(now: Long, playing: Boolean): Boolean = !playing || now >= heldUntil
+}

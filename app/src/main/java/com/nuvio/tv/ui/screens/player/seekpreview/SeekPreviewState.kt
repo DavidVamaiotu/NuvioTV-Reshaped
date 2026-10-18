@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlin.math.abs
 
 /**
@@ -44,6 +45,8 @@ class SeekPreviewState internal constructor(
     scope: CoroutineScope,
     private val controller: PlayerRuntimeController,
 ) {
+    @Volatile private var ownedSeekr: BoundedSeekrTrack? = null
+    init { scope.coroutineContext[Job]?.invokeOnCompletion { ownedSeekr?.close() } }
     private val _previewCue = MutableStateFlow<SeekPreviewCue?>(null)
 
     /**
@@ -71,10 +74,11 @@ class SeekPreviewState internal constructor(
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     val track: StateFlow<BoundedSeekrTrack?> =
-        controller.playbackTimeline
-            .map { it.duration }
+        combine(controller.playbackTimeline, controller.uiState) { timeline, state -> timeline.duration to state.currentStreamUrl }
             .distinctUntilChanged()
-            .mapLatest { durationMs ->
+            .mapLatest { (durationMs, _) ->
+                ownedSeekr?.close()
+                ownedSeekr = null
                 // A new track describes a different release, so any manual sync dialled in
                 // for the previous one is meaningless. Drop it.
                 setOffset(0)
@@ -91,7 +95,7 @@ class SeekPreviewState internal constructor(
                 // Seekr hook: bounded sheet memory (see BoundedSeekrTrack), same thumbnails.
                 BoundedSeekr.loadTrack(apiKey, content, durationMs)
                     ?.also { track ->
-                        track.prefetchSheets()
+                        ownedSeekr = track
                         track.warm(runCatching { controller.currentPlaybackPositionMs() }.getOrNull() ?: 0L)
                     }
             }
@@ -152,14 +156,14 @@ class SeekPreviewState internal constructor(
                     // Keyframes are only decoded while paused or scrubbing: decoding during
                     // playback made the video judder. Buffering counts as playing.
                     controller.uiState
-                        .map { state ->
+                        .combine(controller.playbackTimeline) { state, timeline ->
                             val scrubbing = state.pendingPreviewSeekPosition != null || state.showSeekOverlay
-                            Triple((state.isPlaying || state.isBuffering) && !scrubbing, state.isBuffering, state.bufferedPosition)
+                            Triple((state.isPlaying || state.isBuffering) && !scrubbing, state.isBuffering, timeline.bufferedPosition)
                         }
                         .distinctUntilChanged()
                         .collect { (active, stalled, buffered) ->
                             opened.playbackActive = active
-                            independent?.updatePlayback(active, stalled, controller.currentPlaybackPositionMs(), buffered)
+                            independent?.updatePlayback(active, stalled, controller.currentPlaybackPositionMs() ?: 0L, buffered, controller.previewDroppedFrames())
                         }
                     awaitCancellation()
                 } finally {
@@ -173,13 +177,16 @@ class SeekPreviewState internal constructor(
      * What the preview shows: on-device frames where playback has been, Seekr elsewhere (see
      * [HybridSeekPreviewTrack]); either alone when the other is unavailable.
      */
+    @OptIn(ExperimentalCoroutinesApi::class)
     val previewTrack: StateFlow<SeekPreviewTrack?> =
-        combine(localTrack, track) { local, seekr ->
-            when {
-                local != null && seekr != null -> HybridSeekPreviewTrack(local, SeekrPreviewTrack(seekr))
-                local != null -> local
-                seekr != null -> SeekrPreviewTrack(seekr)
-                else -> null
+        combine(localTrack, track) { local, seekr -> local to seekr }
+        .transformLatest<Pair<SeekPreviewTrack?, BoundedSeekrTrack?>, SeekPreviewTrack?> { (local, seekr) ->
+            val hybrid = if (local != null && seekr != null) HybridSeekPreviewTrack(local, SeekrPreviewTrack(seekr)) else null
+            try {
+                emit(hybrid ?: local ?: seekr?.let(::SeekrPreviewTrack))
+                awaitCancellation()
+            } finally {
+                hybrid?.close()
             }
         }.stateIn(scope, SharingStarted.Eagerly, null)
 

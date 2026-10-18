@@ -22,6 +22,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
       - name: Configure isolated debug signing
         run: |
           keytool -genkeypair -keystore "$RUNNER_TEMP/preview-debug.jks" -storepass android -alias androiddebugkey -keypass android -dname "CN=Preview Test,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 10000

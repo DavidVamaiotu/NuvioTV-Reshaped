@@ -3,6 +3,12 @@ package com.nuvio.tv.ui.screens.player.seekpreview
 import android.graphics.Bitmap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 
 /**
  * A preview frame with the cue window it stands for.
@@ -61,6 +67,7 @@ private val StaticRevision: StateFlow<Int> = MutableStateFlow(0)
 
 /** Adapts the Seekr library's track. Its sheets are prefetched by [SeekPreviewState]. */
 internal class SeekrPreviewTrack(private val seekr: BoundedSeekrTrack) : SeekPreviewTrack {
+    override val revision: StateFlow<Int> get() = seekr.revision
     override var offsetMs: Long
         get() = seekr.offsetMs
         set(value) {
@@ -76,6 +83,9 @@ internal class SeekrPreviewTrack(private val seekr: BoundedSeekrTrack) : SeekPre
                 origin = "SEEKR",
             )
         }
+    override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? = seekr.sideThumbnailFor(positionMs)?.let {
+        SeekPreviewThumbnail(it.bitmap, it.cueStartMs, it.cueEndMs, origin = "SEEKR")
+    }
 }
 
 /**
@@ -93,21 +103,25 @@ internal class HybridSeekPreviewTrack(
     private val local: SeekPreviewTrack,
     private val seekr: SeekPreviewTrack,
 ) : SeekPreviewTrack {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val changes = MutableStateFlow(0)
     override var offsetMs: Long
         get() = seekr.offsetMs
         set(value) {
             seekr.offsetMs = value
         }
 
-    override val revision: StateFlow<Int> get() = local.revision
+    override val revision: StateFlow<Int> = changes
+    init { scope.launch { combine(local.revision, seekr.revision) { a, b -> a to b }.collect { changes.value++ } } }
+    override fun close() = scope.cancel()
 
     override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
         pick(positionMs, local.thumbnailFor(positionMs))
 
     override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
-        pick(positionMs, local.sideThumbnailFor(positionMs))
+        pick(positionMs, local.sideThumbnailFor(positionMs), side = true)
 
-    private suspend fun pick(positionMs: Long, localThumbnail: SeekPreviewThumbnail?): SeekPreviewThumbnail? {
+    private suspend fun pick(positionMs: Long, localThumbnail: SeekPreviewThumbnail?, side: Boolean = false): SeekPreviewThumbnail? {
         val shift = seekr.offsetMs
         val own = localThumbnail?.let { thumbnail ->
             if (shift == 0L) thumbnail else thumbnail.copy(
@@ -116,7 +130,7 @@ internal class HybridSeekPreviewTrack(
             )
         }
         if (own != null && !own.approximate) return own
-        return seekr.thumbnailFor(positionMs) ?: own
+        return (if (side) seekr.sideThumbnailFor(positionMs) else seekr.thumbnailFor(positionMs)) ?: own
     }
 
     override fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? =

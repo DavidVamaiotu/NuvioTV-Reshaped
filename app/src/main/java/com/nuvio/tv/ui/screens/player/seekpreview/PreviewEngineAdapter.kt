@@ -1,3 +1,5 @@
+@file:OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.nuvio.tv.ui.screens.player.seekpreview
 
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
@@ -14,14 +16,15 @@ internal fun PlayerRuntimeController.rangePreview(source: LocalPreviewSource, du
             // Read the latest already-fetched list. Never searches addons, resolves torrents, or changes an account.
             (uiState.value.sourceAllStreams + uiState.value.episodeAllStreams).mapNotNull { stream ->
                 val link = stream.getStreamUrl()?.takeIf { it != url && previewSingleFileUrl(it) } ?: return@mapNotNull null
-                if (stream.clientResolve != null || stream.isTorrent() || stream.serverTarget != null) return@mapNotNull null
+                if (stream.isTorrent() || stream.serverTarget != null) return@mapNotNull null
                 val path = link.substringBefore('?').lowercase()
                 // Only plain file links; addon resolve endpoints can mutate debrid accounts just by opening them.
                 if (!listOf(".mkv", ".mp4", ".m4v").any(path::endsWith)) return@mapNotNull null
                 val text = listOfNotNull(stream.name, stream.title, stream.description, stream.behaviorHints?.filename).joinToString(" ")
+                val parsed = stream.clientResolve?.stream?.raw?.parsed
                 val height = when {
-                    Regex("(?i)1080[pil]?").containsMatchIn(text) -> 1080
-                    Regex("(?i)720[pil]?").containsMatchIn(text) -> 720
+                    parsed?.resolution?.contains("1080") == true || Regex("(?i)1080[pil]?").containsMatchIn(text) -> 1080
+                    parsed?.resolution?.contains("720") == true || Regex("(?i)720[pil]?").containsMatchIn(text) -> 720
                     else -> return@mapNotNull null
                 }
                 PreviewCopy(link, stream.behaviorHints?.proxyHeaders?.request.orEmpty(), text, height,
@@ -37,3 +40,6 @@ internal fun previewSingleFileUrl(url: String): Boolean {
     return listOf(".m3u8", ".m3u", ".mpd", ".ism", "/manifest").none(path::endsWith) &&
         listOf("/resolve/", "/usenet/stream/", "/torrent/", "/transcode/").none { it in path }
 }
+
+internal fun PlayerRuntimeController.previewDroppedFrames(): Int =
+    _exoPlayer?.videoDecoderCounters?.droppedBufferCount ?: -1

@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PreviewPolicyTest {
+    @Test fun playbackDropsSuspendWorkButPauseStillAllowsAnExplicitPreview() {
+        val health = PreviewPlaybackHealth()
+        health.observe(0, true, false, 0)
+        health.decoded(1_000)
+        health.observe(2_000, true, false, 2)
+        assertFalse(health.allows(3_000, true))
+        assertTrue(health.allows(3_000, false))
+        assertTrue(health.allows(63_000, true))
+    }
     @Test fun laterUncachedTargetSupersedesOldSeek() {
         val planner = PreviewPlanner(7_200_000)
         val old = planner.request(400_000)
