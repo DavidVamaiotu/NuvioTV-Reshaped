@@ -70,6 +70,15 @@ class AutoSourceRecoveryPlanTest {
         assertEquals(listOf(group1, group2, ordinary), order(plan(listOf(ordinary, group1, group2), binge = "group")))
     }
 
+    @Test fun `binge continuity cannot bypass selected source filters during retries`() = runBlocking {
+        val excluded = stream("excluded", "B").copy(behaviorHints = StreamBehaviorHints(null, "group", null, null))
+        val allowedGroup = stream("allowed group").copy(behaviorHints = StreamBehaviorHints(null, "group", null, null))
+        val allowedFallback = stream("allowed fallback")
+        assertEquals(listOf(allowedGroup, allowedFallback), order(plan(
+            listOf(excluded, allowedFallback, allowedGroup), selected = setOf("A"), binge = "group"
+        )))
+    }
+
     @Test fun `binge only never tries unrelated sources`() = runBlocking {
         val group = stream("group").copy(behaviorHints = StreamBehaviorHints(null, "group", null, null))
         assertEquals(listOf(group), order(plan(listOf(stream("ordinary"), group), binge = "group", bingeOnly = true)))
