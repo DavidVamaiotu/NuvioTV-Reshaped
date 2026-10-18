@@ -118,7 +118,10 @@ internal class HybridSeekPreviewTrack(
 
     override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? {
         val cached = local.sideThumbnailFor(positionMs)
-        if (cached != null && !cached.approximate) return shifted(cached)
+        if (cached != null && !cached.approximate) {
+            // Keep provider priority aligned even when the centre was already cached.
+            return shifted(local.thumbnailFor(positionMs) ?: cached)
+        }
         val external = seekr.thumbnailFor(positionMs)
         if (external != null) {
             local.externalPreviewAvailable(positionMs)

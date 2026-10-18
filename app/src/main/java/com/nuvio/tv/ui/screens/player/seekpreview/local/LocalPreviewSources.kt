@@ -74,6 +74,8 @@ internal object LocalPreviewSources {
 
             override fun wantsKeyframes(): Boolean = track()?.wantsKeyframes() == true
 
+            override fun acceptsFormat(format: Format): Boolean = track()?.acceptsFormat(format) == true
+
             override fun wantsKeyframe(timeUs: Long): Boolean = track()?.wantsKeyframe(timeUs) == true
 
             // No track yet: say yes, so the tap only stops copying once a track says nothing is due.

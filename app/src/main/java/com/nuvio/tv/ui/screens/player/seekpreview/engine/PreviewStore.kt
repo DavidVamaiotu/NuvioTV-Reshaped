@@ -17,6 +17,7 @@ internal class PreviewStore(
     budgetBytes: Long,
 ) : Closeable {
     private val registryKey = File(directory, digest(identity.toByteArray())).absolutePath
+    fun imageKey(entry: StoredPreview) = PreviewImageKey(registryKey, entry.slot, entry.offset, entry.size)
     @Volatile private var closed = false
     private val state = synchronized(active) {
         active[registryKey]?.also { it.references++ } ?: State(directory, digest(identity.toByteArray()), budgetBytes).also {

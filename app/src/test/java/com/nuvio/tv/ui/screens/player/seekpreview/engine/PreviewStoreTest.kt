@@ -5,6 +5,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PreviewStoreTest {
+    @Test fun bitmapKeysSeparateProvidersAndReplacedPicturesInTheSameSlot() {
+        val directory = Files.createTempDirectory("preview-cache-key").toFile()
+        try {
+            PreviewStore(directory, "original", 1_000_000).use { original ->
+                PreviewStore(directory, "server", 1_000_000).use { server ->
+                    original.put(0, 0, PreviewOrigin.ORIGINAL, byteArrayOf(1))
+                    server.put(0, 0, PreviewOrigin.SERVER, byteArrayOf(2))
+                    val before = original.imageKey(original.atSlot(0)!!)
+                    assertNotEquals(before, server.imageKey(server.atSlot(0)!!))
+                    original.put(0, 5, PreviewOrigin.ORIGINAL, byteArrayOf(3), replace = true)
+                    assertNotEquals(before, original.imageKey(original.atSlot(0)!!))
+                }
+            }
+        } finally { directory.deleteRecursively() }
+    }
     @Test fun preservesTheServerCueIntervalInsteadOfPretendingEveryPreviewIsTenSeconds() {
         val directory = Files.createTempDirectory("preview-server").toFile()
         try {

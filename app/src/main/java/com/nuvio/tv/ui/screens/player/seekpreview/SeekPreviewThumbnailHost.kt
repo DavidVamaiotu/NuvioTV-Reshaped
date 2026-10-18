@@ -127,10 +127,20 @@ fun SeekPreviewThumbnailHost(
             // Single writer for the track's offset: the manual sync correction is pushed in
             // right before the lookup so a nudge is reflected on the very next frame.
             activeTrack.offsetMs = offset
-            // Only overwrite on success — keeps the last good frame visible during a fetch.
-            val coveringThumbnail = activeTrack.thumbnailFor(positionMs) ?: return@collect
+            val coveringThumbnail = activeTrack.thumbnailFor(positionMs)
             // A slow provider may finish after the remote moved elsewhere. Never snap back to that old request.
             if (requestFlow.value.positionMs != positionMs || requestFlow.value.offsetMs != offset) return@collect
+            if (coveringThumbnail == null) {
+                // A previous scene is not a preview of a distant uncached target.
+                val center = strip?.center
+                if (center == null || !SeekPreviewCue(center.cueStartMs - offset, center.cueEndMs - offset).represents(positionMs)) {
+                    fillJob?.cancel()
+                    strip = null
+                    cachedCovering = null
+                    seekPreview.onPreviewCueResolved(null)
+                }
+                return@collect
+            }
             // Cue times arrive on the preview timeline; undo the sync offset so they can be
             // compared with, and assigned to, playback positions.
             val coveringCue = SeekPreviewCue(

@@ -7,7 +7,6 @@ class PreviewPolicyTest {
     @Test fun playbackDropsSuspendWorkButPauseStillAllowsAnExplicitPreview() {
         val health = PreviewPlaybackHealth()
         health.observe(0, true, false, 0)
-        health.decoded(1_000)
         health.observe(2_000, true, false, 2)
         assertFalse(health.allows(3_000, true))
         assertTrue(health.allows(3_000, false))
@@ -44,11 +43,24 @@ class PreviewPolicyTest {
         assertNull(cache["too large"])
         assertTrue(cache.usedBytes() <= 10)
     }
-    @Test fun smallDeviceDoesNotDecodeOriginal4kEvenWithSpareMemory() {
+    @Test fun smallDeviceOnlyDecodes4kForAnExplicitPausedTargetWithRealHeadroom() {
         val budget = PreviewBudget(true)
         assertFalse(budget.canDecode(3840, 2160, 1000, 200))
+        assertFalse(budget.canDecode(3840, 2160, 1000, 200, paused = true))
+        assertFalse(budget.canDecode(3840, 2160, 449, 200, paused = true, explicit = true))
+        assertFalse(budget.canDecode(3840, 2160, 1000, 63, paused = true, explicit = true))
+        assertFalse(budget.canDecode(7680, 4320, 1000, 200, paused = true, explicit = true))
+        assertTrue(budget.canDecode(3840, 2160, 450, 64, paused = true, explicit = true))
         assertTrue(budget.canDecode(1280, 720, 400, 100))
         assertFalse(budget.canDecode(1280, 720, 100, 100))
+    }
+    @Test fun backgroundImageWorkYieldsToDroppedFramesEvenWithoutARecentVideoDecode() {
+        val health = PreviewPlaybackHealth()
+        health.observe(0, true, false, 10)
+        health.observe(1_000, true, false, 11)
+        assertFalse(health.allows(2_000, true))
+        assertTrue(health.allows(2_000, false))
+        assertTrue(health.allows(61_001, true))
     }
     @Test fun distantFrameCannotBeReportedAsMatching() {
         assertFalse(PreviewTiming.near(60_000, 5_400_000))

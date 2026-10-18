@@ -9,9 +9,12 @@ internal data class PreviewBudget(val small: Boolean) {
     val diskBytes = if (small) 100L * 1024 * 1024 else 200L * 1024 * 1024
     val coverageBytes = if (small) 32L * 1024 * 1024 else 128L * 1024 * 1024
     val outputWidth = if (small) 320 else 480
-    fun canDecode(width: Int, height: Int, availableMb: Long, heapFreeMb: Long): Boolean {
+    fun canDecode(width: Int, height: Int, availableMb: Long, heapFreeMb: Long,
+                  paused: Boolean = false, explicit: Boolean = false): Boolean {
+        if (width !in 1..4096 || height !in 1..2304) return false
         val fourK = width.toLong() * height > 1920L * 1088
-        if (fourK && small) return false
+        // A single paused target is affordable on some 2 GB TVs; a coverage pass is not.
+        if (fourK && small) return paused && explicit && availableMb >= 450 && heapFreeMb >= 64
         val cost = if (fourK) 100 else 45
         return availableMb >= (if (small) 180 else 250) + cost && heapFreeMb >= 24
     }
@@ -52,6 +55,7 @@ internal class PreviewPlanner(private val durationMs: Long) {
         return null
     }
     @Synchronized fun completed(positionMs: Long) { covered += positionMs }
+    @Synchronized fun wasCompleted(positionMs: Long): Boolean = positionMs in covered
 }
 
 /** Byte-based eviction; frame counts do not bound bitmap memory. */
@@ -81,16 +85,20 @@ internal object PreviewTiming {
     fun frameCueEnd(frameMs: Long, durationMs: Long): Long = minOf(durationMs, frameMs + 10_000).coerceAtLeast(frameMs + 1)
 }
 
+/** Busy and unavailable are different: queued samples must survive transient contention. */
+internal enum class PreviewWorkResult { COMPLETE, DEFERRED }
+
+/** Includes store and entry version, so providers and replacements never share the wrong bitmap. */
+internal data class PreviewImageKey(val store: String, val slot: Long, val offset: Long, val size: Int)
+
 /** Observed playback always wins. Counter resets do not look like new frame drops. */
 internal class PreviewPlaybackHealth {
     private var dropped = -1
-    private var decodedAt = -1L
     private var heldUntil = 0L
-    @Synchronized fun decoded(now: Long) { decodedAt = now }
     @Synchronized fun observe(now: Long, playing: Boolean, buffering: Boolean, droppedFrames: Int) {
         if (buffering) heldUntil = maxOf(heldUntil, now + 30_000)
-        if (playing && droppedFrames >= 0 && dropped >= 0 && droppedFrames > dropped &&
-            decodedAt >= 0 && now - decodedAt <= 20_000) heldUntil = maxOf(heldUntil, now + 60_000)
+        if (playing && droppedFrames >= 0 && dropped >= 0 && droppedFrames > dropped)
+            heldUntil = maxOf(heldUntil, now + 60_000)
         dropped = droppedFrames
     }
     @Synchronized fun allows(now: Long, playing: Boolean): Boolean = !playing || now >= heldUntil

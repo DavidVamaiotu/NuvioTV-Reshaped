@@ -17,6 +17,8 @@ import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewStore
 import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewOrigin
 import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewLru
 import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewResources
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewDecodeGate
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewWorkResult
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -100,7 +102,9 @@ internal class LocalPreviewTrack(
     private val keyframeSlots = HashMap<Long, Int>()
     private val decoded = PreviewLru<Int, Bitmap>(3 * 1024 * 1024) { it.allocationByteCount }
     private val blurred = PreviewLru<Int, Bitmap>(1024 * 1024) { it.allocationByteCount }
-    private val workResources = PreviewResources(context) { decoded.clear(); blurred.clear() }
+    @Volatile private var trimRequested = false
+    @Volatile private var imageRetryAt = 0L
+    private val workResources = PreviewResources(context) { trimRequested = true; decoded.clear(); blurred.clear() }
     @Volatile private var closed = false
 
     private val sinceSave = AtomicInteger()
@@ -293,16 +297,24 @@ internal class LocalPreviewTrack(
         val cache = if (small) blurred else decoded
         synchronized(lock) { cache[slot] }?.let { return it }
         val bitmap = withContext(Dispatchers.IO) {
+            if (closed || SystemClock.elapsedRealtime() < imageRetryAt || !workResources.allowsImages()) return@withContext null
             val store = diskStore()
             val entry = store.atSlot(slot.toLong()) ?: return@withContext null
             val bytes = store.read(entry) ?: return@withContext null
-            runCatching {
+            try {
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                if (bounds.outWidth !in 1..640 || bounds.outHeight !in 1..640) return@withContext null
                 val options = BitmapFactory.Options().apply {
                     inPreferredConfig = Bitmap.Config.RGB_565
                     inSampleSize = if (small) STAND_IN_SAMPLE_SIZE else 1
                 }
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-            }.getOrNull()
+            } catch (_: OutOfMemoryError) {
+                imageRetryAt = SystemClock.elapsedRealtime() + 30_000
+                decoded.clear(); blurred.clear()
+                null
+            } catch (_: Exception) { null }
         } ?: return null
         cache.put(slot, bitmap)
         return bitmap
@@ -311,8 +323,10 @@ internal class LocalPreviewTrack(
     // ---- Buffer tap ----------------------------------------------------------------------
 
     fun wantsKeyframes(): Boolean =
-        !closed && !unsupported && !decoder.gaveUp && !(spoolFull && playbackActive) &&
+        !closed && !unsupported && !workResources.hidden && !trimRequested && !decoder.gaveUp && !(spoolFull && playbackActive) &&
             synchronized(lock) { filledCount < slotCount || darkCount > 0 }
+
+    fun acceptsFormat(format: Format): Boolean = format.width.toLong() * format.height <= maxPixels
 
     fun wantsKeyframe(timeUs: Long): Boolean {
         if (closed) return false
@@ -357,7 +371,13 @@ internal class LocalPreviewTrack(
         val keyMs = timeUs / 1_000L
         val slot = slotFor(keyMs) ?: return
         val wanted = synchronized(lock) { isOpen(slot) && keyMs !in keyframeSlots }
-        val incoming = if (wanted) Candidate(slot, format, timeUs, data.copyOfRange(offset, offset + size)) else null
+        val incoming = if (wanted) try {
+            Candidate(slot, format, timeUs, data.copyOfRange(offset, offset + size))
+        } catch (_: OutOfMemoryError) {
+            unsupported = true
+            decoded.clear(); blurred.clear()
+            return
+        } else null
         val settled = ArrayList<Candidate>(2)
         synchronized(lock) {
             val waiting = candidate
@@ -387,9 +407,8 @@ internal class LocalPreviewTrack(
         if (!claim(slot)) return
         val submitted = runCatching {
             tapExecutor.execute {
-                if (mayDecodeNow()) {
-                    decodeInto(slot, chosen.format, chosen.bytes, chosen.timeUs)
-                } else if (!spoolKeyframe(slot, chosen.format, chosen.timeUs, chosen.bytes)) {
+                val done = mayDecodeNow() && decodeInto(slot, chosen.format, chosen.bytes, chosen.timeUs) == PreviewWorkResult.COMPLETE
+                if (!done && !spoolKeyframe(slot, chosen.format, chosen.timeUs, chosen.bytes)) {
                     release(slot)
                 }
                 if (mayDecodeNow()) scheduleDrain()
@@ -399,18 +418,33 @@ internal class LocalPreviewTrack(
     }
 
     /** Tap thread. */
-    private fun decodeInto(slot: Int, format: Format, bytes: ByteArray, timeUs: Long) {
-        if (closed || !mayDecodeNow() || !workResources.allowsDimensions(format.width, format.height)) { release(slot); return }
-        val frame = runCatching {
-            decoder.decode(MediaFormatUtil.createMediaFormatFromFormat(format).apply {
-                format.codecs?.let { setString("reshaped-codecs", it) }
-            }, bytes, 0, bytes.size, timeUs)
-        }.getOrNull()
+    private fun decodeInto(slot: Int, format: Format, bytes: ByteArray, timeUs: Long): PreviewWorkResult {
+        if (closed || unsupported) { release(slot); return PreviewWorkResult.COMPLETE }
+        if (!mayDecodeNow() || !workResources.allowsDimensions(format.width, format.height)) return PreviewWorkResult.DEFERRED
+        val attempt = try {
+            PreviewDecodeGate.tryRun {
+                runCatching {
+                    decoder.decode(MediaFormatUtil.createMediaFormatFromFormat(format).apply {
+                        format.codecs?.let { setString("reshaped-codecs", it) }
+                    }, bytes, 0, bytes.size, timeUs)
+                }.getOrElse {
+                    if (it is OutOfMemoryError) throw it
+                    null
+                } to true
+            }
+        } catch (_: OutOfMemoryError) {
+            unsupported = true
+            decoded.clear(); blurred.clear(); decoder.trim()
+            release(slot)
+            return PreviewWorkResult.COMPLETE
+        } ?: return PreviewWorkResult.DEFERRED
+        val frame = attempt.first
         if (frame != null) {
             store(slot, frame.jpeg, timeUs / 1_000L, frame.dark)
         } else {
             release(slot)
         }
+        return PreviewWorkResult.COMPLETE
     }
 
     /** Paused, or scrubbing: the viewer is not watching frames go by. */
@@ -444,16 +478,28 @@ internal class LocalPreviewTrack(
         }.onFailure { Log.w(TAG, "spool not written: ${it.message}") }.isSuccess
     }
 
-    private fun scheduleDrain() {
+    private fun scheduleDrain(waitMs: Long = 0) {
         if (closed || !drainScheduled.compareAndSet(false, true)) return
-        val submitted = runCatching { tapExecutor.execute(::drainOne) }.isSuccess
-        if (!submitted) drainScheduled.set(false)
+        scope.launch {
+            if (waitMs > 0) delay(waitMs)
+            val submitted = !closed && runCatching { tapExecutor.execute(::drainOne) }.isSuccess
+            if (!submitted) drainScheduled.set(false)
+        }
     }
 
     /** Decodes one spooled keyframe, nearest the scrub position first, then schedules the next. */
     private fun drainOne() {
         drainScheduled.set(false)
+        if (trimRequested) { trimRequested = false; decoder.trim() }
         if (closed || !mayDecodeNow()) return
+        if (unsupported) {
+            synchronized(lock) { spooled.clear() }
+            spoolEnd = 0L
+            runCatching { spool?.setLength(0L) }
+            return
+        }
+        // Avoid repeatedly allocating/read-copying multi-megabyte samples while another decode owns the gate.
+        if (PreviewDecodeGate.busyForTap) { scheduleDrain(150); return }
         val next = synchronized(lock) {
             val focus = focusSlot
             val slot = if (focus >= 0) spooled.keys.minByOrNull { drainCost(it, focus) } else spooled.keys.minOrNull()
@@ -469,15 +515,27 @@ internal class LocalPreviewTrack(
             return
         }
         val (slot, entry) = next
-        val bytes = runCatching {
+        if (!workResources.allowsDimensions(entry.format.width, entry.format.height)) {
+            synchronized(lock) { spooled[slot] = entry }
+            decoder.trim()
+            scheduleDrain(1_000)
+            return
+        }
+        val bytes = try {
             ByteArray(entry.size).also { buffer ->
                 val file = spool ?: error("no spool")
                 file.seek(entry.position)
                 file.readFully(buffer)
             }
-        }.getOrNull()
-        if (bytes != null) decodeInto(slot, entry.format, bytes, entry.timeUs) else release(slot)
-        scheduleDrain()
+        } catch (_: OutOfMemoryError) {
+            unsupported = true
+            decoded.clear(); blurred.clear(); decoder.trim()
+            null
+        } catch (_: Exception) { null }
+        val deferred = bytes != null && decodeInto(slot, entry.format, bytes, entry.timeUs) == PreviewWorkResult.DEFERRED
+        if (bytes == null) release(slot)
+        if (deferred) synchronized(lock) { spooled[slot] = entry }
+        scheduleDrain(if (deferred) 150 else 0)
     }
 
     /**

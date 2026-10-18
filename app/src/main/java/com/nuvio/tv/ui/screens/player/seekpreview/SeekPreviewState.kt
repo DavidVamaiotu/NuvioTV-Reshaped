@@ -157,13 +157,14 @@ class SeekPreviewState internal constructor(
                     // playback made the video judder. Buffering counts as playing.
                     controller.uiState
                         .combine(controller.playbackTimeline) { state, timeline ->
-                            val scrubbing = state.pendingPreviewSeekPosition != null || state.showSeekOverlay
-                            Triple((state.isPlaying || state.isBuffering) && !scrubbing, state.isBuffering, timeline.bufferedPosition)
+                            // Wait for playback to actually pause, rather than treating an open scrub overlay as paused.
+                            PreviewPlaybackSample(state.isPlaying || state.isBuffering, state.isBuffering,
+                                timeline.currentPosition, timeline.bufferedPosition, controller.previewDroppedFrames())
                         }
                         .distinctUntilChanged()
-                        .collect { (active, stalled, buffered) ->
+                        .collect { (active, stalled, position, buffered, dropped) ->
                             opened.playbackActive = active
-                            independent?.updatePlayback(active, stalled, controller.currentPlaybackPositionMs() ?: 0L, buffered, controller.previewDroppedFrames())
+                            independent?.updatePlayback(active, stalled, position, buffered, dropped)
                         }
                     awaitCancellation()
                 } finally {
@@ -354,3 +355,8 @@ class SeekPreviewState internal constructor(
 
 /** A change of the scrub position at least this large is a step, not a snap onto a cue start. */
 private const val SCRUB_STEP_MIN_MS = 6_000L
+
+/** Position/counters participate so a full read-ahead buffer does not freeze health observations. */
+private data class PreviewPlaybackSample(
+    val active: Boolean, val stalled: Boolean, val positionMs: Long, val bufferedMs: Long, val droppedFrames: Int,
+)

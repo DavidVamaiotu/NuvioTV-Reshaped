@@ -2,7 +2,7 @@ name: Isolated seek preview validation
 
 on:
   push:
-    branches: [feature/isolated-seek-preview-engine]
+    branches: [feature/isolated-seek-preview-engine, 'fix/seek-preview-*']
   workflow_dispatch:
 
 permissions:

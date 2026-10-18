@@ -1,8 +1,9 @@
 name: AutoSync TV Tester Release
 
 # Builds the Tester channel (TesterChannel.kt) from subtitle-autosync-tester. Runs only when started
-# by hand (Actions > AutoSync TV Tester Release > Run workflow): no file edit or push starts it, so
-# it can never be set off by accident and it never touches the beta or stable releases.
+# by hand (Actions > AutoSync TV Tester Release > Run workflow), or by the exact release-trigger
+# commit below when this workflow file changes. Ordinary code pushes never publish a release.
+# It never touches the beta or stable releases.
 #
 # Tags are <nuvio version>-tester.N, always pre-releases and never "latest". Stable and Beta apps
 # only follow tags ending in -autosync.N, so they never see these. Builds use the same app id,
@@ -344,16 +345,7 @@ jobs:
           # The APKs were built with the stamped version. Restore the source file so release
           # metadata stays ephemeral, then tag a unique empty commit.
           git restore --staged --worktree app/build.gradle.kts
-          # Restore manual-only releases in the same anchor commit, after all build checks pass.
-          python - <<'PYRESTORE'
-          from pathlib import Path
-          path = Path(".github/workflows/autosync-tester-release.yml")
-          text = path.read_text()
-          text = text.replace('  push:\n    branches: [subtitle-autosync-tester]\n    paths: [".github/workflows/autosync-tester-release.yml"]\n', '')
-          text = text.replace("    if: github.event_name != 'push' || github.event.head_commit.message == 'Trigger detached seek preview tester release'\n", '')
-          path.write_text(text)
-          PYRESTORE
-          git add .github/workflows/autosync-tester-release.yml
+          # GITHUB_TOKEN cannot modify workflow files. Keep the release anchor empty.
           git commit --allow-empty -m "Release $TESTER_TAG"
           git push origin HEAD:subtitle-autosync-tester
 

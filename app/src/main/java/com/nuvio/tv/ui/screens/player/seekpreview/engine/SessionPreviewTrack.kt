@@ -21,7 +21,10 @@ internal class SessionPreviewTrack(private val tap: SeekPreviewTrack, private va
     init { scope.launch { combine(tap.revision, range.revision) { a, b -> a to b }.collect { changes.value++ } } }
     override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? {
         val local = tap.thumbnailFor(positionMs)
-        if (local != null && !local.approximate) return local
+        if (local != null && !local.approximate) {
+            range.externalPreviewAvailable(positionMs)
+            return local
+        }
         return range.thumbnailFor(positionMs) ?: local
     }
     override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? {

@@ -2,7 +2,6 @@ package com.nuvio.tv.ui.screens.player.seekpreview.local
 
 import android.graphics.Bitmap
 import com.nuvio.tv.ui.screens.player.seekpreview.engine.NativeTapDecoder
-import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewDecodeGate
 import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -46,7 +45,7 @@ internal class KeyframeThumbnailDecoder(
     @Synchronized
     fun decode(format: MediaFormat, data: ByteArray, offset: Int, size: Int, timeUs: Long): Frame? {
         if (released) return null
-        return PreviewDecodeGate.tryRun { decodeWithPermit(format, data, offset, size, timeUs) }
+        return decodeWithPermit(format, data, offset, size, timeUs)
     }
 
     private fun decodeWithPermit(format: MediaFormat, data: ByteArray, offset: Int, size: Int, timeUs: Long): Frame? {
@@ -78,6 +77,8 @@ internal class KeyframeThumbnailDecoder(
         released = true
         releaseCodec()
     }
+
+    @Synchronized fun trim() = releaseCodec()
 
     private fun ensureCodec(format: MediaFormat, sampleSize: Int): MediaCodec? {
         val key = formatKey(format)
