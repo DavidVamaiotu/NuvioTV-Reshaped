@@ -58,6 +58,7 @@ interface SeekPreviewTrack {
      */
     fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? = null
     fun noteScrubDirection(direction: Int) = Unit
+    fun externalPreviewAvailable(positionMs: Long) = Unit
 
     /** Stops background work; the track is not fed again. */
     fun close() = Unit
@@ -115,23 +116,30 @@ internal class HybridSeekPreviewTrack(
     init { scope.launch { combine(local.revision, seekr.revision) { a, b -> a to b }.collect { changes.value++ } } }
     override fun close() = scope.cancel()
 
-    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
-        pick(positionMs, local.thumbnailFor(positionMs))
+    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? {
+        val cached = local.sideThumbnailFor(positionMs)
+        if (cached != null && !cached.approximate) return shifted(cached)
+        val external = seekr.thumbnailFor(positionMs)
+        if (external != null) {
+            local.externalPreviewAvailable(positionMs)
+            return external
+        }
+        return pick(positionMs, local.thumbnailFor(positionMs))
+    }
 
     override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
         pick(positionMs, local.sideThumbnailFor(positionMs), side = true)
 
     private suspend fun pick(positionMs: Long, localThumbnail: SeekPreviewThumbnail?, side: Boolean = false): SeekPreviewThumbnail? {
-        val shift = seekr.offsetMs
-        val own = localThumbnail?.let { thumbnail ->
-            if (shift == 0L) thumbnail else thumbnail.copy(
-                cueStartMs = thumbnail.cueStartMs + shift,
-                cueEndMs = thumbnail.cueEndMs + shift,
-            )
-        }
+        val own = localThumbnail?.let(::shifted)
         if (own != null && !own.approximate) return own
         return (if (side) seekr.sideThumbnailFor(positionMs) else seekr.thumbnailFor(positionMs)) ?: own
     }
+
+    private fun shifted(thumbnail: SeekPreviewThumbnail): SeekPreviewThumbnail =
+        if (seekr.offsetMs == 0L) thumbnail else thumbnail.copy(
+            cueStartMs = thumbnail.cueStartMs + seekr.offsetMs,
+            cueEndMs = thumbnail.cueEndMs + seekr.offsetMs)
 
     override fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? =
         local.keyframeNear(positionMs, toleranceMs)

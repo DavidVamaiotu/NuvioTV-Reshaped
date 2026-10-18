@@ -32,5 +32,6 @@ internal class SessionPreviewTrack(private val tap: SeekPreviewTrack, private va
     override fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? =
         range.keyframeNear(positionMs, toleranceMs) ?: tap.keyframeNear(positionMs, toleranceMs)
     override fun noteScrubDirection(direction: Int) = tap.noteScrubDirection(direction)
+    override fun externalPreviewAvailable(positionMs: Long) = range.externalPreviewAvailable(positionMs)
     override fun close() { range.close(); scope.cancel() }
 }

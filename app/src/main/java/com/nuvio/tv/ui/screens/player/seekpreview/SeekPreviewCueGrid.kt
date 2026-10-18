@@ -163,7 +163,8 @@ object SeekPreviewCueStepper {
 /**
  * How far a scrub target may move to land on a keyframe of the playing file. A keyframe is the
  * one position a player can seek to exactly without decoding forward, so this makes the seek
- * both precise and as fast as it gets. Seekr frames are themselves only within about 3 s of
- * their cue time, so moving by up to this much costs nothing visible.
+ * both precise and fast. Only rounding-sized differences are accepted; external or mapped-copy
+ * timestamps otherwise seek exactly and let the playback decoder advance to that moment.
  */
-internal const val SEEK_PREVIEW_KEYFRAME_SNAP_MS = 1_500L
+// Only timestamp-rounding differences may snap. A different keyframe can cross a scene boundary.
+internal const val SEEK_PREVIEW_KEYFRAME_SNAP_MS = 42L

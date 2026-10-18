@@ -42,6 +42,13 @@ internal class PreviewResources(context: Context, private val onTrim: () -> Unit
             memory.availMem / (1024 * 1024), (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()) / (1024 * 1024))
     }
     fun resume() { hidden = false }
+    fun allowsIndex(): Boolean {
+        val memory = ActivityManager.MemoryInfo()
+        am?.getMemoryInfo(memory) ?: return false
+        val runtime = Runtime.getRuntime()
+        return !hidden && !memory.lowMemory && memory.availMem >= 200L * 1024 * 1024 &&
+            runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory() >= 48L * 1024 * 1024
+    }
     fun allowsVerification(video: VideoTrack): Boolean {
         val memory = ActivityManager.MemoryInfo()
         am?.getMemoryInfo(memory) ?: return false

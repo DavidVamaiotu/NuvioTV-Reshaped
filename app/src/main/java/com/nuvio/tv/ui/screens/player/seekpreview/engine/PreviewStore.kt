@@ -47,6 +47,7 @@ internal class PreviewStore(
         private val indexFile = File(directory, "$key.index")
         private val entries = linkedMapOf<Long, StoredPreview>()
         private var dirty = 0
+        private val ioLock = Any()
         init { directory.mkdirs(); load() }
 
         @Synchronized fun nearest(positionMs: Long, toleranceMs: Long = 5_000): StoredPreview? = entries.values
@@ -55,7 +56,7 @@ internal class PreviewStore(
         @Synchronized fun has(positionMs: Long): Boolean = entries.containsKey(positionMs / 10_000)
         @Synchronized fun all(): List<StoredPreview> = entries.values.toList()
         @Synchronized fun atSlot(slot: Long): StoredPreview? = entries[slot]
-        @Synchronized fun read(entry: StoredPreview): ByteArray? {
+        fun read(entry: StoredPreview): ByteArray? {
             if (entry.size !in 1..MAX_PICTURE_BYTES || entry.offset < 0 || entry.offset + entry.size > dataFile.length()) return null
             return runCatching {
                 RandomAccessFile(dataFile, "r").use { file ->
@@ -64,16 +65,22 @@ internal class PreviewStore(
                 }
             }.getOrNull()
         }
-        @Synchronized fun put(positionMs: Long, actualTimeMs: Long, origin: PreviewOrigin, picture: ByteArray, replace: Boolean = false, endMs: Long = actualTimeMs + 10_000) {
+        fun put(positionMs: Long, actualTimeMs: Long, origin: PreviewOrigin, picture: ByteArray, replace: Boolean = false, endMs: Long = actualTimeMs + 10_000) {
             if (actualTimeMs < 0 || endMs <= actualTimeMs || picture.size !in 1..MAX_PICTURE_BYTES) return
             val slot = positionMs / 10_000
-            if ((!replace && slot in entries) || entries.size >= MAX_ENTRIES || dataFile.length() + picture.size > budgetBytes) return
-            if (directory.usableSpace < 128L * 1024 * 1024 + picture.size) return
-            runCatching {
-                val offset = dataFile.length()
-                dataFile.appendBytes(picture)
-                entries[slot] = StoredPreview(slot, actualTimeMs, origin, offset, picture.size, endMs)
-                if (++dirty >= 12) flush()
+            synchronized(ioLock) {
+                val accepted = synchronized(this) { (replace || slot !in entries) && entries.size < MAX_ENTRIES }
+                if (!accepted || dataFile.length() + picture.size > budgetBytes) return
+                if (directory.usableSpace < 128L * 1024 * 1024 + picture.size) return
+                runCatching {
+                    val offset = dataFile.length()
+                    dataFile.appendBytes(picture)
+                    val shouldFlush = synchronized(this) {
+                        entries[slot] = StoredPreview(slot, actualTimeMs, origin, offset, picture.size, endMs)
+                        ++dirty >= 12
+                    }
+                    if (shouldFlush) flush()
+                }
             }
         }
         private fun load() {
@@ -92,22 +99,28 @@ internal class PreviewStore(
                 indexFile.setLastModified(System.currentTimeMillis())
             }.onFailure { entries.clear() }
         }
-        @Synchronized fun flush() {
-            if (dirty == 0) return
+        fun flush() = synchronized(ioLock) {
+            val snapshot = synchronized(this) metadata@ {
+                if (dirty == 0) return@metadata emptyList<StoredPreview>()
+                entries.values.toList()
+            }
+            if (snapshot.isEmpty()) return@synchronized
             val temp = File(indexFile.path + ".tmp")
             runCatching {
                 DataOutputStream(temp.outputStream().buffered()).use { output ->
-                    output.writeInt(MAGIC); output.writeInt(entries.size)
-                    for (entry in entries.values) {
+                    output.writeInt(MAGIC); output.writeInt(snapshot.size)
+                    for (entry in snapshot) {
                         output.writeLong(entry.slot); output.writeLong(entry.timeMs); output.writeInt(entry.origin.ordinal)
                         output.writeLong(entry.offset); output.writeInt(entry.size); output.writeLong(entry.endMs)
                     }
                 }
                 check(temp.renameTo(indexFile))
-                dirty = 0
+                synchronized(this) { dirty = 0 }
             }
+            Unit
         }
     }
+
     companion object {
         private const val MAGIC = 0x52535034
         private const val MAX_ENTRIES = 20_000

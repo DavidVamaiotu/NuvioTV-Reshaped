@@ -137,7 +137,7 @@ internal class BoundedSheetCache(private val http: OkHttpClient, private val url
                             if (!closed) { decoded.put(key, bitmap); changes.value++ }
                         } finally { region.recycle() }
                     } catch (cancel: CancellationException) { throw cancel }
-                    catch (_: OutOfMemoryError) { decoded.clear(); encoded.clear(); break }
+                    catch (_: OutOfMemoryError) { closed = true; requests.close(); decoded.clear(); encoded.clear(); break }
                     catch (_: Exception) { if (latestTarget == target) failed[tile.sheetUrl] = System.currentTimeMillis() + 30_000 }
                 }
                 runningTarget = null

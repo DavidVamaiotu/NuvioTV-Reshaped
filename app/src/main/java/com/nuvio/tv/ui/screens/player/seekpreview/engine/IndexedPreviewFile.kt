@@ -16,11 +16,13 @@ internal class IndexedPreviewFile private constructor(
     fun nearestTime(positionMs: Long): Long? = index.keyframes.nearest(positionMs * 1000)
         .takeIf { it >= 0 }?.let { index.keyframes.ptsUs[it] / 1000 }
     fun frame(positionMs: Long, width: Int): Bitmap? {
+        reader.beginOperation()
         val key = index.keyframes.nearest(positionMs * 1000)
         if (key < 0) return null
         val unit = extractor.extractAu(key, buffer) ?: return null
         try {
             val frame = decoder.decode(unit, index.video, threads = 1) ?: return null
+            if (index.video.dolbyVision?.profile == 5 && !frame.colour.doviIpt) return null
             val colour = ColourClassifier.classify(index.video.colour, frame.colour, index.video.dolbyVision)
             val size = ThumbGeometry.outputSize(frame.width, frame.height, frame.sarNum, frame.sarDen, index.video.displayAspect)
             val outW = minOf(width, size[0])
@@ -35,8 +37,8 @@ internal class IndexedPreviewFile private constructor(
     fun cancel() = reader.cancel()
     override fun close() { reader.close(); decoder.close(); buffer.release() }
     companion object {
-        fun open(directory: File, contentIdentity: String, url: String, headers: Map<String, String>, register: (PreviewRangeReader) -> Unit): IndexedPreviewFile {
-            val reader = PreviewRangeReader(url, headers)
+        fun open(directory: File, contentIdentity: String, url: String, headers: Map<String, String>, register: (PreviewRangeReader) -> Unit, permitted: () -> Boolean = { true }): IndexedPreviewFile {
+            val reader = PreviewRangeReader(url, headers, permitted)
             register(reader)
             try {
                 val head = reader.read(0, MkvIndexReader.HEAD_BYTES)

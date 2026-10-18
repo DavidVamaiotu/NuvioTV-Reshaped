@@ -32,6 +32,7 @@ internal class RangePreviewTrack(
     private val copies: () -> List<PreviewCopy>,
     private val mediaServer: Boolean = false,
     serverSourceId: String? = null,
+    private val singleFile: Boolean = true,
 ) : SeekPreviewTrack {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val closed = AtomicBoolean(false)
@@ -54,6 +55,9 @@ internal class RangePreviewTrack(
     @Volatile private var foreground = true
     @Volatile private var bufferAheadMs = 0L
     @Volatile private var requestAt = 0L
+    @Volatile private var requested = false
+    @Volatile private var metadataBusy = false
+    @Volatile private var verifyingCopy = false
     private val revisionState = MutableStateFlow(0)
     override val revision: StateFlow<Int> = revisionState
     override var offsetMs = 0L
@@ -63,22 +67,31 @@ internal class RangePreviewTrack(
         scope.launch { runWorker() }
     }
     fun updatePlayback(playing: Boolean, stalled: Boolean, positionMs: Long, bufferedMs: Long, droppedFrames: Int = -1) {
+        val resumed = playing && !active
+        val newlyStalled = stalled && !buffering
         active = playing
         buffering = stalled
         bufferAheadMs = (bufferedMs - positionMs).coerceAtLeast(0)
         playbackHealth.observe(SystemClock.elapsedRealtime(), playing, stalled, droppedFrames)
-        if (playing || stalled) readers.forEach { it.cancel() }
+        if (resumed || newlyStalled) readers.forEach { it.cancel() }
     }
     override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? {
         if (closed.get()) return null
+        requested = true
         val previous = planner.latest
         val request = planner.request(positionMs)
         if (previous?.generation != request.generation) {
             requestAt = SystemClock.elapsedRealtime()
-            readers.forEach { it.cancel() }
+            if (!metadataBusy && !verifyingCopy) readers.forEach { it.cancel() }
             server?.cancel()
         }
         return lookup(positionMs)
+    }
+    override fun externalPreviewAvailable(positionMs: Long) {
+        requested = false
+        planner.request(positionMs)
+        readers.forEach { it.cancel() }
+        server?.cancel()
     }
     override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? = lookup(positionMs)
     private suspend fun lookup(positionMs: Long): SeekPreviewThumbnail? {
@@ -98,13 +111,12 @@ internal class RangePreviewTrack(
     private suspend fun runWorker() {
         var failures = 0
         var coverageBytes = 0L
+        val decodeFailures = mutableMapOf<Long, Int>()
         try {
             while (!closed.get()) {
                 val request = planner.latest
                 val waiting = SystemClock.elapsedRealtime() - requestAt < 150
-                val canWork = foreground && !resources.hidden && !buffering && !waiting &&
-                    playbackHealth.allows(SystemClock.elapsedRealtime(), active) &&
-                    (!active || (!resources.budget.small && bufferAheadMs >= 20_000))
+                val canWork = mayWorkNow() && !waiting
                 if (!canWork || request == null) { delay(100); continue }
                 try {
                     if (server != null && !serverUnavailable && (serverStore?.has(request.positionMs) != true)) {
@@ -127,14 +139,20 @@ internal class RangePreviewTrack(
                         }
                     }
                     if (serverStore?.has(request.positionMs) == true) { delay(250); continue }
+                    if (!singleFile) break // Server thumbnails may cover HLS; raw-file range extraction never does.
                     if (!ThumbNative.available) break
-                    val own = original ?: IndexedPreviewFile.open(directory, identity, url, headers, readers::add).also {
+                    if (original == null && !resources.allowsIndex()) { delay(500); continue }
+                    val own = original ?: openFile(url, headers).also {
                         original = it
                         store = PreviewStore(directory, it.identity, resources.budget.diskBytes)
                         revisionState.value++
                     }
                     if (!planner.isCurrent(request)) continue
-                    if (!triedCopies && !active && own.index.video.width.toLong() * own.index.video.height > 1920L * 1088) tryCopy(own, request)
+                    if (!triedCopies && !active && own.index.video.width.toLong() * own.index.video.height > 1920L * 1088) {
+                        verifyingCopy = true
+                        try { tryCopy(own) } finally { verifyingCopy = false }
+                    }
+                    if (!planner.isCurrent(request) || !requested) continue
                     val source = copy ?: own
                     if (!resources.allows(source.index.video)) { delay(500); continue }
                     val saved = store ?: continue
@@ -143,7 +161,10 @@ internal class RangePreviewTrack(
                     if (position == null) { delay(250); continue }
                     val before = source.reader.bytesRead
                     val mapped = (position * copyRatio).toLong()
-                    val made = PreviewDecodeGate.tryRun { source.frame(mapped, resources.budget.outputWidth) }
+                    val attempt = PreviewDecodeGate.tryRun {
+                        if (!mayWorkNow()) null else source.frame(mapped, resources.budget.outputWidth) to true
+                    }
+                    val made = attempt?.first
                     if (made != null) playbackHealth.decoded(SystemClock.elapsedRealtime())
                     if (made != null) {
                         try {
@@ -162,7 +183,12 @@ internal class RangePreviewTrack(
                             // A displayed bitmap may still be referenced by Compose; eviction uses GC, never recycle.
                         }
                     } else {
-                        // Native failure and a busy local-tap decoder both remain bounded; do not spin.
+                        // A busy tap is different from an undecodable frame. Never re-download a bad frame forever.
+                        if (attempt != null) {
+                            val attempts = (decodeFailures[position] ?: 0) + 1
+                            decodeFailures[position] = attempts
+                            if (attempts >= 2) planner.completed(position)
+                        }
                         delay(250)
                     }
                     if (position != request.positionMs / 10_000 * 10_000) coverageBytes += source.reader.bytesRead - before
@@ -173,11 +199,16 @@ internal class RangePreviewTrack(
                     images?.clear()
                     break // No retry loop after memory exhaustion.
                 } catch (_: Exception) {
-                    if (!planner.isCurrent(request) || buffering || active || !foreground) continue
+                    if (!requested || !planner.isCurrent(request) || buffering || active || !foreground) continue
                     val coolingUntil = readers.maxOfOrNull { it.retryAtMs } ?: 0L
                     if (coolingUntil > System.currentTimeMillis()) {
                         delay(minOf(30_000, coolingUntil - System.currentTimeMillis()).coerceAtLeast(1))
                         continue
+                    }
+                    if (copy != null) {
+                        copy?.close(); copy = null; copyRatio = 1.0
+                        failures = 0
+                        continue // A failed optional copy never terminates the original-file provider.
                     }
                     if (++failures >= 5) break
                     delay((1_000L shl failures).coerceAtMost(30_000))
@@ -185,27 +216,43 @@ internal class RangePreviewTrack(
             }
         } finally {
             readers.forEach { it.close() }
-            original?.close(); copy?.close(); store?.close(); serverStore?.close(); server?.close(); resources.close()
+            original?.close(); copy?.close(); server?.close(); resources.close()
+            // Stop generation on failure, but keep saved images readable until the session itself closes.
+            if (closed.get()) { store?.close(); serverStore?.close() }
         }
     }
 
-    private fun tryCopy(own: IndexedPreviewFile, request: PreviewPlanner.Request) {
+    private fun mayWorkNow(): Boolean = requested && !closed.get() && foreground && !resources.hidden && !buffering &&
+        playbackHealth.allows(SystemClock.elapsedRealtime(), active) &&
+        (!active || (!resources.budget.small && bufferAheadMs >= 20_000))
+
+    private fun openFile(address: String, requestHeaders: Map<String, String>): IndexedPreviewFile {
+        metadataBusy = true
+        return try {
+            IndexedPreviewFile.open(directory, identity, address, requestHeaders, register = { readers.add(it) },
+                permitted = { requested && !closed.get() && !buffering && !resources.hidden })
+        } finally { metadataBusy = false }
+    }
+
+    private fun tryCopy(own: IndexedPreviewFile) {
         val offers = PreviewCopies.candidates(copies(), playingLabel, durationMs)
         // Source lists arrive asynchronously. Do not permanently close discovery while they are still empty.
         if (offers.isEmpty()) return
         // Verifying 4K still needs a full frame's working memory. Test real headroom, even on a small TV.
         if (!resources.allowsVerification(own.index.video)) return
         for (offer in offers) {
-            if (closed.get() || !planner.isCurrent(request) || active) return
+            if (!requested || closed.get() || resources.hidden || active) return
+            if (!resources.allowsIndex()) return
             var candidate: IndexedPreviewFile? = null
             try {
-                val other = IndexedPreviewFile.open(directory, identity, offer.url, offer.headers, readers::add)
+                val other = openFile(offer.url, offer.headers)
                 candidate = other
                 val ratio = ReleaseMatch.ratio(own.index.durationUs / 1000, other.index.durationUs / 1000) ?: continue
                 if (!resources.allows(other.index.video)) continue
                 val scores = mutableListOf<Float>()
                 for (fraction in doubleArrayOf(1.0 / 6, 0.5, 5.0 / 6)) {
-                    if (!planner.isCurrent(request) || active || closed.get()) return
+                    if (!requested || resources.hidden || active || closed.get()) return
+                    if (!resources.allowsVerification(own.index.video)) return
                     val at = (durationMs * fraction).toLong()
                     val ownAt = own.nearestTime(at) ?: break
                     val copyAt = other.nearestTime((ownAt * ratio).toLong()) ?: break
@@ -237,5 +284,7 @@ internal class RangePreviewTrack(
         server?.close()
         scope.cancel()
         images?.clear()
+        // Flush manifests off the main thread; overlapping handles share one store state.
+        CoroutineScope(Dispatchers.IO).launch { store?.close(); serverStore?.close() }
     }
 }

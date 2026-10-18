@@ -1,12 +1,26 @@
 package com.nuvio.tv.ui.screens.player.seekpreview.engine
 
 import java.io.IOException
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
 
 class PreviewRangeReaderTest {
+    @Test fun obsoleteNetworkReadIsCancelledWithoutWaitingForTheBodyDeadline() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes 0-2/1000")
+                .setBody("abc").setBodyDelay(1, TimeUnit.SECONDS))
+            PreviewRangeReader(server.url("/file.mkv").toString(), emptyMap()).use { reader ->
+                val finished = CompletableFuture.supplyAsync { runCatching { reader.read(0, 3) }.exceptionOrNull() }
+                assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
+                reader.cancel()
+                assertTrue(finished.get(2, TimeUnit.SECONDS) is IOException)
+            }
+        }
+    }
     @Test fun validatesRangesAndNeverAcceptsAnIgnoredRange() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes 100-102/1000").setBody("abc"))

@@ -35,9 +35,8 @@ internal class ServerPreviewProvider private constructor(
 
     fun picture(positionMs: Long): Picture? {
         if (!discovered) {
-            discovered = true
-            val json = runCatching { JSONObject(String(get(endpoint("Items/$item", "Fields" to "Trickplay"), 512 * 1024))) }.getOrNull()
-            val manifest = json?.optJSONObject("Trickplay")
+            val json = JSONObject(String(get(endpoint("Items/$item", "Fields" to "Trickplay"), 512 * 1024)))
+            val manifest = json.optJSONObject("Trickplay")
             val listed = manifest?.keys()?.asSequence()?.firstOrNull { it == mediaSource }
             val levels = listed?.let { manifest?.optJSONObject(it) }
             grid = levels?.keys()?.asSequence()?.mapNotNull { key ->
@@ -47,6 +46,7 @@ internal class ServerPreviewProvider private constructor(
                 candidate.takeIf { it.width in 1..640 && it.height in 1..640 && it.columns in 1..50 && it.rows in 1..50 &&
                     it.count in 1..100000 && it.interval in 100..300000 }
             }?.minByOrNull { kotlin.math.abs(it.width - 320) }
+            discovered = true
         }
         val layout = grid ?: return bifPicture(positionMs)
         val index = (positionMs / layout.interval).toInt().coerceIn(0, layout.count - 1)

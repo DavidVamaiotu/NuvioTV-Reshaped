@@ -117,6 +117,7 @@ internal class LocalPreviewTrack(
     private val _revision = MutableStateFlow(0)
     override val revision: StateFlow<Int> = _revision.asStateFlow()
 
+    private val legacyDirectory = File(context.applicationContext.cacheDir, "seek_previews")
     private val cacheDirectory = File(context.applicationContext.cacheDir, "seek_preview_engine_v1")
     private var disk: PreviewStore? = null
     @Synchronized private fun diskStore(): PreviewStore = disk ?: PreviewStore(cacheDirectory, cacheKey, CACHE_LIMIT_BYTES).also { disk = it }
@@ -178,6 +179,8 @@ internal class LocalPreviewTrack(
             }
         }
         scope.launch(Dispatchers.IO) {
+            // Duration-only legacy caches are not safe to reuse across file versions.
+            legacyDirectory.listFiles()?.filter { it.extension in setOf("bin", "spool", "tmp") }?.forEach { it.delete() }
             deleteStaleSpools()
             loadCache()
             notifyChanged()
@@ -397,7 +400,7 @@ internal class LocalPreviewTrack(
 
     /** Tap thread. */
     private fun decodeInto(slot: Int, format: Format, bytes: ByteArray, timeUs: Long) {
-        if (closed || !workResources.allowsDimensions(format.width, format.height)) { release(slot); return }
+        if (closed || !mayDecodeNow() || !workResources.allowsDimensions(format.width, format.height)) { release(slot); return }
         val frame = runCatching {
             decoder.decode(MediaFormatUtil.createMediaFormatFromFormat(format).apply {
                 format.codecs?.let { setString("reshaped-codecs", it) }

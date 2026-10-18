@@ -5,6 +5,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PreviewStoreTest {
+    @Test fun preservesTheServerCueIntervalInsteadOfPretendingEveryPreviewIsTenSeconds() {
+        val directory = Files.createTempDirectory("preview-server").toFile()
+        try {
+            PreviewStore(directory, "server-file", 1_000_000).use {
+                it.put(20_000, 0, PreviewOrigin.SERVER, byteArrayOf(1), endMs = 30_000)
+                assertEquals(30_000L, it.nearest(20_000)!!.endMs)
+            }
+        } finally { directory.deleteRecursively() }
+    }
     @Test fun overlappingSessionsShareOneManifestAndDoNotOverwriteEachOther() {
         val directory = Files.createTempDirectory("preview-shared").toFile()
         try {

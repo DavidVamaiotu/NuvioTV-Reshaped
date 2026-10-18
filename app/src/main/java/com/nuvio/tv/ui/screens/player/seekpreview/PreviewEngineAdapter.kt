@@ -10,7 +10,9 @@ import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSource
 /** The only boundary that knows Nuvio's controller or Stream model. The engine takes immutable values. */
 internal fun PlayerRuntimeController.rangePreview(source: LocalPreviewSource, durationMs: Long): RangePreviewTrack? {
     val url = source.sourceKey
-    if (!previewSingleFileUrl(url) || playbackTimeline.value.isLive) return null
+    val singleFile = previewSingleFileUrl(url)
+    val mediaServer = serverPlayback.isServerSource(url)
+    if ((!singleFile && !mediaServer) || playbackTimeline.value.isLive || durationMs !in 1..172_800_000L) return null
     return RangePreviewTrack(context, listOf(contentId, currentSeason, currentEpisode).joinToString("|"), durationMs,
         url, source.headers, currentStreamDescription.orEmpty(), copies = {
             // Read the latest already-fetched list. Never searches addons, resolves torrents, or changes an account.
@@ -31,7 +33,7 @@ internal fun PlayerRuntimeController.rangePreview(source: LocalPreviewSource, du
                     Regex("(?i)(h[ ._-]?264|x264|avc)").containsMatchIn(text),
                     Regex("(?i)(hdr|dolby[ ._-]?vision|\\bDV\\b)").containsMatchIn(text), null)
             }
-        }, mediaServer = serverPlayback.isServerSource(url), serverSourceId = serverPlayback.session(url)?.mediaSourceId)
+        }, mediaServer = mediaServer, serverSourceId = serverPlayback.session(url)?.mediaSourceId, singleFile = singleFile)
 }
 
 internal fun previewSingleFileUrl(url: String): Boolean {

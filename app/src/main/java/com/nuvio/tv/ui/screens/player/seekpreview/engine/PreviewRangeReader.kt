@@ -14,10 +14,12 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 internal class PreviewRangeReader(
     private val url: String,
     private val headers: Map<String, String>,
+    private val permitted: () -> Boolean = { true },
 ) : RangeReader, Closeable {
     @Volatile private var closed = false
     @Volatile private var call: Call? = null
     @Volatile private var epoch = 0L
+    @Volatile private var lease = 0L
     @Volatile override var totalLength = -1L
         private set
     @Volatile var bytesRead = 0L
@@ -35,8 +37,9 @@ internal class PreviewRangeReader(
 
     @Synchronized override fun readInto(offset: Long, length: Int, dst: ByteBuffer): Int {
         require(offset >= 0 && length in 1..ThumbReads.MAX_READ && dst.remaining() >= length)
-        if (closed) throw IOException("preview session closed")
-        val started = epoch
+        if (closed || !permitted()) throw IOException("preview session suspended")
+        val started = lease
+        if (started != epoch) throw IOException("obsolete preview operation")
         if (System.currentTimeMillis() < retryAtMs) throw IOException("preview source cooling down")
         val request = Request.Builder().url(effectiveUrl).apply {
             headers.forEach { (key, value) ->
@@ -86,7 +89,7 @@ internal class PreviewRangeReader(
         val origin = url.toHttpUrl()
         val begin = System.nanoTime()
         repeat(6) {
-            if (closed || started != epoch || System.nanoTime() - begin > TimeUnit.SECONDS.toNanos(10)) throw IOException("preview request cancelled")
+            if (closed || !permitted() || started != epoch || System.nanoTime() - begin > TimeUnit.SECONDS.toNanos(10)) throw IOException("preview request cancelled")
             // A cached CDN address must not receive the origin's credentials on subsequent requests either.
             if (request.url.host != origin.host || request.url.port != origin.port || request.url.scheme != origin.scheme) {
                 request = request.newBuilder().apply {
@@ -109,6 +112,7 @@ internal class PreviewRangeReader(
     }
 
     fun cancel() { epoch++; call?.cancel() }
+    fun beginOperation() { lease = epoch }
     override fun close() { closed = true; cancel() }
     companion object {
         private val CONTENT_RANGE = Regex("bytes ([0-9]+)-([0-9]+)/([0-9]+)", RegexOption.IGNORE_CASE)

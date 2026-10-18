@@ -336,13 +336,13 @@ class SeekPreviewState internal constructor(
      * the closest keyframe at any distance, can land seconds away from the frame just shown (half
      * the gap between keyframes). A preview target is already a keyframe whenever the file's
      * index is known (see [onPreviewCueResolved]), and landing on it needs no decoding forward;
-     * otherwise a keyframe within Seekr's own precision is taken, and the seek is exact beyond it.
+     * otherwise the decoder advances to the preview's timestamp rather than landing on a different keyframe.
      */
     internal fun commitSeekParameters(): SeekParameters? =
         if (previewTrack.value != null) PreviewCommitSeek else null
 
     internal companion object {
-        private val PreviewCommitSeek = SeekParameters(3_000_000L, 3_000_000L)
+        private val PreviewCommitSeek = SeekParameters.EXACT
         // The value is weak too: the state references its controller, so a strong value would keep
         // the key, and with it every finished player session, alive for the whole app session.
         private val states = WeakHashMap<PlayerRuntimeController, WeakReference<SeekPreviewState>>()

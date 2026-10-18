@@ -106,7 +106,7 @@ internal object LocalPreviewSources {
      * The caller closes it.
      */
     fun open(source: LocalPreviewSource, cacheKey: String, durationMs: Long): LocalPreviewTrack? {
-        if (source.released || durationMs <= 0L) return null
+        if (source.released || durationMs !in 1..172_800_000L) return null
         val track = LocalPreviewTrack(source.context, cacheKey, durationMs, source::keyframeNear)
         source.track = track
         track.start()
