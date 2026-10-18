@@ -46,6 +46,8 @@ class TrailerPlayerPool @Inject constructor(
     @Volatile
     private var cachedForceNative: Boolean = false
 
+    private val lowMemory by lazy { TrailerMemoryPolicy.isLowMemory(context) }
+
     init {
         Thread {
             try {
@@ -136,6 +138,9 @@ class TrailerPlayerPool @Inject constructor(
                 /* bufferForPlaybackMs = */ 5_000,
                 /* bufferForPlaybackAfterRebufferMs = */ 10_000
             )
+            // Preview buffers coexist with the home artwork and decoder surfaces.
+            .setTargetBufferBytes((if (lowMemory) 48 else 100) * 1024 * 1024)
+            .setPrioritizeTimeOverSizeThresholds(false)
         if (forceNative) {
             val allocator = DefaultAllocator(
                 /* trimOnReset = */ true,
@@ -153,6 +158,12 @@ class TrailerPlayerPool @Inject constructor(
                     .clearVideoSizeConstraints()
                     .setForceHighestSupportedBitrate(true)
                     .setMaxVideoSize(Integer.MAX_VALUE, Integer.MAX_VALUE)
+                    .apply {
+                        if (lowMemory) {
+                            setMaxVideoSize(1920, TrailerMemoryPolicy.LOW_MEMORY_MAX_HEIGHT)
+                            setExceedVideoConstraintsIfNecessary(false)
+                        }
+                    }
             )
         }
         return ExoPlayer.Builder(context)

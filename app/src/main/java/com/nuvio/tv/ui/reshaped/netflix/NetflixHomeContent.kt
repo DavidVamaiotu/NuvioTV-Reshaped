@@ -25,6 +25,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -104,11 +105,14 @@ internal fun NetflixHomeRoute(
 ) {
     val focusState by viewModel.focusState.collectAsStateWithLifecycle()
     val scrollToTopTrigger by viewModel.scrollToTopTrigger.collectAsStateWithLifecycle()
+    // Pass the state through; visible tiles/details read it without rebuilding the entire page.
+    val enrichedPreviews = viewModel.enrichedPreviews.collectAsStateWithLifecycle()
     // Nuvio's Modern layout leaves its focused backdrop here for the detail screen; this look sets
     // none, so a stale one must not carry over when the look is switched on over Modern.
     LaunchedEffect(Unit) { com.nuvio.tv.ui.screens.home.HeroBackdropState.update(null) }
     NetflixHomeContent(
         uiState = uiState,
+        enrichedPreviews = enrichedPreviews,
         posterCardStyle = posterCardStyle,
         focusState = focusState,
         scrollToTopTrigger = scrollToTopTrigger,
@@ -147,6 +151,7 @@ private class NetflixFocusSnapshot(var rowIndex: Int, var itemIndex: Int, var ro
 @Composable
 private fun NetflixHomeContent(
     uiState: HomeUiState,
+    enrichedPreviews: State<Map<String, MetaPreview>>,
     posterCardStyle: PosterCardStyle,
     focusState: HomeScreenFocusState,
     scrollToTopTrigger: Int,
@@ -235,7 +240,9 @@ private fun NetflixHomeContent(
     val rowStates = remember { mutableMapOf<String, LazyListState>() }
     val rowFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
     val rowFocusedItemIndex = remember { mutableMapOf<String, Int>() }
+    val rowFocusedItemKeys = remember { focusState.focusedItemKeyByRow.toMutableMap() }
     val previousRowItemKeys = remember { mutableMapOf<String, List<String>>() }
+    var resetCatalogRowKey by remember { mutableStateOf<String?>(null) }
     val cwItemFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     val upcomingItemFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
     val cwRowFocusRequester = remember { FocusRequester() }
@@ -265,13 +272,10 @@ private fun NetflixHomeContent(
             snapshot.itemIndex = 0
             if (rowKey == CW_KEY) cwPendingScrollToStart.intValue++ else upcomingPendingScrollToStart.intValue++
         } else {
-            val listState = rowStates[rowKey]
             rowFocusedItemIndex[rowKey] = 0
             snapshot.itemIndex = 0
-            scope.launch {
-                listState?.scrollToItem(0, 0)
-                rowFocusRequesters[rowKey]?.let { runCatching { it.requestFocus() } }
-            }
+            // Ask the first tile directly; a row focus restorer would select the old title again.
+            resetCatalogRowKey = rowKey
         }
     }
 
@@ -287,18 +291,13 @@ private fun NetflixHomeContent(
     // Each row's lazy key: its catalog's own key, numbered only when a catalog repeats, so a row
     // keeps its key (and its focus and scroll) when rows above it come or go.
     val homeRowKeys = remember(visibleHomeRows) { netflixRowKeys(visibleHomeRows) }
-    val visibleRowKeys = remember(visibleHomeRows) {
-        visibleHomeRows.mapTo(mutableSetOf()) { row ->
-            when (row) {
-                is HomeRow.Catalog -> row.row.stableKey()
-                is HomeRow.CollectionRow -> "collection_${row.collection.id}"
-                is HomeRow.PlaceholderCatalog -> row.stableCatalogKey
-            }
-        }
-    }
+    val visibleRowKeys = remember(homeRowKeys) { homeRowKeys.toSet() }
     LaunchedEffect(visibleRowKeys) {
         rowStates.keys.retainAll(visibleRowKeys)
         rowFocusRequesters.keys.retainAll(visibleRowKeys)
+        rowFocusedItemIndex.keys.retainAll(visibleRowKeys)
+        rowFocusedItemKeys.keys.retainAll(visibleRowKeys)
+        previousRowItemKeys.keys.retainAll(visibleRowKeys)
     }
 
     DisposableEffect(Unit) {
@@ -307,9 +306,11 @@ private fun NetflixHomeContent(
                 columnListState.firstVisibleItemIndex,
                 columnListState.firstVisibleItemScrollOffset,
                 snapshot.rowKey,
-                emptyMap(),
+                rowFocusedItemKeys.toMap(),
                 focusState.catalogRowScrollStates + rowStates.mapValues { it.value.firstVisibleItemIndex },
-                focusState.catalogRowScrollAnchors,
+                focusState.catalogRowScrollAnchors + rowStates.mapNotNull { (key, state) ->
+                    previousRowItemKeys[key]?.getOrNull(state.firstVisibleItemIndex)?.let { key to it }
+                }.toMap(),
                 snapshot.rowIndex,
                 snapshot.itemIndex
             )
@@ -507,6 +508,7 @@ private fun NetflixHomeContent(
                 item(key = HERO_KEY, contentType = "netflix_billboard") {
                     NetflixBillboard(
                         items = uiState.heroItems,
+                        enrichedPreviews = enrichedPreviews,
                         initialIndex = savedHeroIndex.intValue,
                         focusRequester = heroFocusRequester,
                         showImdbRatings = uiState.homeImdbRatingsVisibility.showRatings,
@@ -628,7 +630,7 @@ private fun NetflixHomeContent(
                 when (homeRow) {
                     is HomeRow.Catalog -> {
                         val catalogRow = homeRow.row
-                        val catalogKey = catalogRow.stableKey()
+                        val catalogKey = homeRowKeys[index]
                         val currentItemKeys = remember(catalogRow.items) { catalogRow.stableItemKeys() }
                         rowFocusedItemIndex[catalogKey]?.let { storedIdx ->
                             previousRowItemKeys[catalogKey]
@@ -642,19 +644,27 @@ private fun NetflixHomeContent(
                         }
                         previousRowItemKeys[catalogKey] = currentItemKeys
                         val shouldRestoreFocus = restoringFocus &&
-                            (snapshot.rowKey == catalogKey || index == focusState.focusedRowIndex)
+                            (snapshot.rowKey == catalogKey ||
+                                (snapshot.rowKey == null && index == focusState.focusedRowIndex))
                         val shouldInitialFocusFirstRow = shouldRequestInitialFocus && !heroVisible &&
                             (!uiState.continueWatchingEnabled || uiState.continueWatchingItems.isEmpty()) && index == 0
                         val focusedItemIndex = when {
-                            shouldRestoreFocus -> focusState.focusedItemIndex
+                            resetCatalogRowKey == catalogKey -> 0
+                            shouldRestoreFocus -> netflixRestoreIndex(
+                                currentItemKeys, focusState.focusedItemKeyByRow[catalogKey], focusState.focusedItemIndex
+                            )
                             shouldInitialFocusFirstRow -> 0
                             else -> -1
                         }
                         val listState = rowStates.getOrPut(catalogKey) {
-                            LazyListState(firstVisibleItemIndex = focusState.catalogRowScrollStates[catalogKey] ?: 0)
+                            LazyListState(firstVisibleItemIndex = netflixRestoreIndex(
+                                currentItemKeys, focusState.catalogRowScrollAnchors[catalogKey],
+                                focusState.catalogRowScrollStates[catalogKey] ?: 0
+                            ))
                         }
                         NetflixCatalogRow(
                             catalogRow = catalogRow,
+                            enrichedPreviews = enrichedPreviews,
                             showImdbRatings = uiState.homeImdbRatingsVisibility.showRatings,
                             showAddonName = uiState.catalogAddonNameEnabled,
                             showCatalogTypeSuffix = uiState.catalogTypeSuffixEnabled,
@@ -672,10 +682,14 @@ private fun NetflixHomeContent(
                             rowFocusRequester = rowFocusRequesters.getOrPut(catalogKey) { FocusRequester() },
                             listState = listState,
                             focusedItemIndex = focusedItemIndex,
+                            forceFocusRequest = resetCatalogRowKey == catalogKey,
                             restorerFocusedIndex = rowFocusedItemIndex[catalogKey] ?: focusedItemIndex,
                             onItemFocused = { itemIndex ->
+                                if (resetCatalogRowKey == catalogKey && itemIndex == 0) resetCatalogRowKey = null
                                 if (!shouldRestoreFocus || itemIndex == focusedItemIndex) {
-                                    if (restoringFocus) restoringFocus = false
+                                    val realItem = catalogRow.items.getOrNull(itemIndex)
+                                        ?.takeUnless { it.id.startsWith("__placeholder_") }
+                                    if (restoringFocus && realItem != null) restoringFocus = false
                                     snapshot.rowIndex = index
                                     snapshot.itemIndex = itemIndex
                                     snapshot.rowKey = catalogKey
@@ -683,17 +697,21 @@ private fun NetflixHomeContent(
                                     focusedListKey.value = homeRowKeys.getOrNull(index)
                                     activeRowKeyState.value = catalogKey
                                     activeItemIndex.intValue = itemIndex
-                                    onFocusedRowKeyChanged(catalogKey)
+                                    onFocusedRowKeyChanged(catalogRow.stableKey())
                                     rowFocusedItemIndex[catalogKey] = itemIndex
+                                    if (realItem != null) {
+                                        currentItemKeys.getOrNull(itemIndex)?.let { rowFocusedItemKeys[catalogKey] = it }
+                                    }
                                 }
                             }
                         )
                     }
 
                     is HomeRow.CollectionRow -> {
-                        val collectionKey = "collection_${homeRow.collection.id}"
+                        val collectionKey = homeRowKeys[index]
                         val shouldRestoreCollectionFocus = restoringFocus &&
-                            (snapshot.rowKey == collectionKey || index == focusState.focusedRowIndex)
+                            (snapshot.rowKey == collectionKey ||
+                                (snapshot.rowKey == null && index == focusState.focusedRowIndex))
                         val listState = rowStates.getOrPut(collectionKey) {
                             LazyListState(firstVisibleItemIndex = focusState.catalogRowScrollStates[collectionKey] ?: 0)
                         }
@@ -702,9 +720,14 @@ private fun NetflixHomeContent(
                             onFolderClick = onNavigateToFolderDetail,
                             listState = listState,
                             posterCardStyle = posterCardStyle,
-                            focusedItemIndex = if (shouldRestoreCollectionFocus) focusState.focusedItemIndex else -1,
+                            focusedItemIndex = when {
+                                resetCatalogRowKey == collectionKey -> 0
+                                shouldRestoreCollectionFocus -> focusState.focusedItemIndex
+                                else -> -1
+                            },
                             rowFocusRequester = rowFocusRequesters.getOrPut(collectionKey) { FocusRequester() },
                             onItemFocused = { itemIndex ->
+                                if (resetCatalogRowKey == collectionKey && itemIndex == 0) resetCatalogRowKey = null
                                 billboardFocused = false
                                 if (restoringFocus) restoringFocus = false
                                 snapshot.rowIndex = index

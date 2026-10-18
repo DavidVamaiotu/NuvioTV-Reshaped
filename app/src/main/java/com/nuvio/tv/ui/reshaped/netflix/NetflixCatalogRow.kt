@@ -81,14 +81,14 @@ import com.nuvio.tv.ui.util.localizedContentType
 
 /**
  * One Netflix-style row. The focus logic (placeholder key pinning, index relocation on refresh,
- * restore after returning from details) is carried over unchanged from Nuvio's
- * CatalogRowSection, so the row behaves exactly like Nuvio's; only the look differs:
+ * restore after returning from details) builds on Nuvio's CatalogRowSection:
  * the focused tile stays pinned at the left edge and its details appear underneath the row.
  */
 @OptIn(ExperimentalTvMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
 internal fun NetflixCatalogRow(
     catalogRow: CatalogRow,
+    enrichedPreviews: State<Map<String, MetaPreview>>,
     onItemClick: (String, String, String) -> Unit,
     onSeeAll: () -> Unit,
     listState: LazyListState,
@@ -106,6 +106,7 @@ internal fun NetflixCatalogRow(
     focusedItemIndex: Int,
     restorerFocusedIndex: Int,
     onItemFocused: (itemIndex: Int) -> Unit,
+    forceFocusRequest: Boolean = false,
     modifier: Modifier = Modifier,
     seeAllLabel: String? = null,
     showSeeAll: Boolean = catalogRow.hasMore || catalogRow.items.size >= 15,
@@ -198,11 +199,11 @@ internal fun NetflixCatalogRow(
         if (lastRequestedFocusItemKey !in validKeys) lastRequestedFocusItemKey = null
     }
 
-    LaunchedEffect(focusedItemIndex, catalogRow.items) {
+    LaunchedEffect(focusedItemIndex, catalogRow.items, forceFocusRequest) {
         if (focusedItemIndex >= 0 && focusedItemIndex < catalogRow.items.size) {
             val targetItem = catalogRow.items[focusedItemIndex]
             val targetItemKey = rowItemFocusKey(focusedItemIndex, targetItem)
-            if (lastRequestedFocusItemKey == targetItemKey) return@LaunchedEffect
+            if (!forceFocusRequest && lastRequestedFocusItemKey == targetItemKey) return@LaunchedEffect
             val requester = itemFocusRequestersByKey.getOrPut(targetItemKey) { FocusRequester() }
             if (!listState.isScrollInProgress) {
                 runCatching { listState.scrollToItem(focusedItemIndex) }
@@ -254,7 +255,7 @@ internal fun NetflixCatalogRow(
             if (p < 0f) return@collect
             val index = kotlin.math.floor(p).toInt()
             val fraction = p - index
-            val item = latestItems.getOrNull(index)
+            val item = latestItems.getOrNull(index)?.let { netflixEnrichedPreview(it, enrichedPreviews.value) }
             val width = if (item == null) seeAllPx else with(motionDensity) {
                 val collapsed = item.netflixCollapsedWidth().toPx()
                 collapsed + (item.netflixExpandedWidth().toPx() - collapsed) * expansionAt(index)
@@ -269,7 +270,7 @@ internal fun NetflixCatalogRow(
         netflixPreloadRowArt(
             context = preloadContext,
             density = motionDensity,
-            items = { latestItems },
+            items = { latestItems.map { netflixEnrichedPreview(it, enrichedPreviews.value) } },
             center = {
                 // A held key glides past titles nobody will open: fetch nothing until it lands.
                 if (rowHasFocus && motion.held.targetValue == 0f) motion.position.targetValue.roundToInt() else null
@@ -363,7 +364,7 @@ internal fun NetflixCatalogRow(
                     val requester = itemFocusRequestersByKey.getOrPut(rowItemFocusKey(index, item)) { FocusRequester() }
                     val isPlaceholder = item.id.startsWith("__placeholder_")
                     NetflixTile(
-                        item = item,
+                        item = netflixEnrichedPreview(item, enrichedPreviews.value),
                         isWatched = latestIsItemWatched(item),
                         focusRequester = requester,
                         expansion = { expansionAt(index) },
@@ -405,7 +406,17 @@ internal fun NetflixCatalogRow(
             }
         }
 
-        NetflixRowDetails(motion = motion, item = focusedItem, showImdbRatings = showImdbRatings)
+        NetflixRowDetails(
+            motion = motion,
+            item = {
+                focusedItem.value?.let { selected ->
+                    val current = latestItems.firstOrNull { it.id == selected.id && it.apiType == selected.apiType }
+                        ?: selected
+                    netflixEnrichedPreview(current, enrichedPreviews.value)
+                }
+            },
+            showImdbRatings = showImdbRatings
+        )
     }
 }
 
@@ -444,7 +455,7 @@ internal fun NetflixRowHeader(title: String, subtitle: String?) {
  * text crossfades from title to title as focus slides along the row.
  */
 @Composable
-private fun NetflixRowDetails(motion: NetflixRowMotion, item: State<MetaPreview?>, showImdbRatings: Boolean) {
+private fun NetflixRowDetails(motion: NetflixRowMotion, item: () -> MetaPreview?, showImdbRatings: Boolean) {
     val openness = { motion.openness.value }
     // The space stays while a key is held (no rows jumping up and down); only the text fades.
     val textAlpha = { motion.openness.value * (1f - motion.held.value) }
@@ -462,13 +473,13 @@ private fun NetflixRowDetails(motion: NetflixRowMotion, item: State<MetaPreview?
             .graphicsLayer { alpha = textAlpha() }
     ) {
         Crossfade(
-            targetState = item.value,
+            targetState = item(),
             animationSpec = tween(NetflixTokens.META_FADE_MS),
             label = "netflixRowDetails"
         ) { current ->
             if (current == null) return@Crossfade
             val context = LocalContext.current
-            val tokens = remember(current.id, current.genres, current.releaseInfo, current.imdbRating, current.runtime, showImdbRatings) {
+            val tokens = remember(current, showImdbRatings, context) {
                 current.netflixMetaLine(context, showImdbRatings)
             }
             Column(

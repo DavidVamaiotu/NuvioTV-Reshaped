@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,6 +64,7 @@ import com.nuvio.tv.domain.model.MetaPreview
 @Composable
 internal fun NetflixBillboard(
     items: List<MetaPreview>,
+    enrichedPreviews: State<Map<String, MetaPreview>>,
     initialIndex: Int,
     focusRequester: FocusRequester,
     showImdbRatings: Boolean,
@@ -74,7 +76,7 @@ internal fun NetflixBillboard(
     if (items.isEmpty()) return
     var index by remember { mutableStateOf(initialIndex.coerceIn(0, items.lastIndex)) }
     if (index > items.lastIndex) index = 0
-    val item = items[index]
+    val item = netflixEnrichedPreview(items[index], enrichedPreviews.value)
     var focused by remember { mutableStateOf(false) }
     val latestOnActiveIndexChanged by rememberUpdatedState(onActiveIndexChanged)
     val latestOnFocused by rememberUpdatedState(onFocused)
@@ -228,7 +230,7 @@ private fun NetflixBillboardPage(item: MetaPreview, showImdbRatings: Boolean) {
                 )
             }
             Spacer(Modifier.height(14.dp))
-            val tokens = remember(item.id, item.genres, item.releaseInfo, item.imdbRating, item.runtime, showImdbRatings) {
+            val tokens = remember(item, showImdbRatings, context) {
                 item.netflixMetaLine(context, showImdbRatings)
             }
             NetflixMetaRow(tokens = tokens)
