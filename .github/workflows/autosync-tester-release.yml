@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Trigger detached seek preview tester release'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Port quieter AutoSync bubbles to tester and release'
     runs-on: ubuntu-latest
 
     steps:
@@ -315,6 +315,7 @@ jobs:
             --tests 'com.nuvio.tv.updater.*' \
             --tests '*seekpreview*' \
             --tests 'com.nuvio.tv.core.streams.ranking.*' \
+            --tests 'com.nuvio.tv.ui.screens.player.autosync.bubble.*' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSyncDiagnosticsTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.PcmTimestampTrackerTest' \

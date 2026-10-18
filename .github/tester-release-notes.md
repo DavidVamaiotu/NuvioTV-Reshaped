@@ -1,5 +1,2 @@
-- Seek previews can now request frames from later, uncached sections of supported MKV, MP4 and AVI files, independently of playback capture.
-- Preview requests follow the newest scrub position, cancel obsolete range reads and use bounded image caches. Seekr/server images and verified smaller copies provide additional coverage.
-- Added Arc-derived container readers and native HDR colour conversion, with attribution. Selected seek positions are preserved.
-- On 2 GB TVs, generation uses conservative memory checks and runs while paused or scrubbing. Ordinary original-4K decoding is disabled; available external images or verified smaller copies provide previews instead.
-- Tester validation: automated preview/native checks are included in the release build. Real-device feedback is still needed for cold seeks, rapid reverse scrubbing, 4K HDR/DV and long playback sessions.
+- Added “Only show sync failures” in the Nuvio Reshaped settings. It hides AutoSync and AudioSync progress and success messages, including plain toasts when bubbles are disabled.
+- Loading bubbles now hide after 15 seconds while syncing continues. They return for success or failure; progress updates do not restart the timer. Each new sync run gets a fresh loading window.

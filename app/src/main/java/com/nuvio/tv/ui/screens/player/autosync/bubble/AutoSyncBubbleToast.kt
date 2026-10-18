@@ -102,7 +102,7 @@ private const val FOLD_SETTLE_MS = 800L
 /** How long the working bubble keeps its words before settling to just the droplet. */
 private const val WORKING_LABEL_MS = 7_000L
 /** A run that never reports back fades away after this. */
-private const val WORKING_TIMEOUT_MS = 240_000L
+private const val WORKING_TIMEOUT_MS = 15_000L
 private const val SUCCESS_HOLD_MS = 1_800L
 /** A little longer than the phone: the explanation is read from across the room. */
 private const val FAILURE_HOLD_MS = 8_000L
@@ -157,6 +157,7 @@ internal fun BoxScope.AutoSyncBubbleToastHost(controlsVisible: Boolean) {
 
 @Composable
 private fun AutoSyncBubble(message: AutoSyncBubbleMessage, colors: BubbleColors, modifier: Modifier) {
+    val latestMessage by rememberUpdatedState(message)
     val kind = message.kind
     val kindState = rememberUpdatedState(kind)
     val colorsState = rememberUpdatedState(colors)
@@ -179,9 +180,10 @@ private fun AutoSyncBubble(message: AutoSyncBubbleMessage, colors: BubbleColors,
         label = "tinted",
     )
 
-    fun dismiss() {
+    fun dismiss(hideWorking: Boolean = false) {
         if (leaving) return
         leaving = true
+        if (hideWorking) AutoSyncBubbleToasts.hideWorking(message.session)
         AutoSyncBubbleToasts.leaving(message.session)
         scope.launch {
             cardOpen = false
@@ -189,7 +191,7 @@ private fun AutoSyncBubble(message: AutoSyncBubbleMessage, colors: BubbleColors,
             labelVisible = false
             delay(240)
             leave.animateTo(1f, tween(340, easing = FastOutSlowInEasing))
-            AutoSyncBubbleToasts.finished(message.id)
+            AutoSyncBubbleToasts.finished(latestMessage.id)
         }
     }
 
@@ -217,8 +219,12 @@ private fun AutoSyncBubble(message: AutoSyncBubbleMessage, colors: BubbleColors,
         delay(WORKING_LABEL_MS)
         labelFoldedAtMs = SystemClock.uptimeMillis()
         labelVisible = false
-        delay(WORKING_TIMEOUT_MS - WORKING_LABEL_MS)
-        dismiss()
+    }
+    // Progress updates keep the same session: they must not restart the loading timeout.
+    LaunchedEffect(message.session, kind) {
+        if (kind != AutoSyncBubbleKind.Working) return@LaunchedEffect
+        delay(WORKING_TIMEOUT_MS)
+        dismiss(hideWorking = true)
     }
     LaunchedEffect(kind) {
         when (kind) {

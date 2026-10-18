@@ -27,4 +27,17 @@ internal fun LazyListScope.autoSyncBubbleSettingsItems(enabled: Boolean) {
             enabled = enabled,
         )
     }
+    item(key = "autosync_failures_only") {
+        val context = LocalContext.current
+        AutoSyncBubbleToasts.ensureLoaded(context)
+        val checked by AutoSyncBubbleToasts.failuresOnly.collectAsStateWithLifecycle()
+        ToggleSettingsItem(
+            icon = Icons.Default.ChatBubble,
+            title = stringResource(R.string.settings_autosync_failures_only),
+            subtitle = stringResource(R.string.settings_autosync_failures_only_description),
+            isChecked = checked,
+            onCheckedChange = { AutoSyncBubbleToasts.setFailuresOnly(context, it) },
+            enabled = enabled,
+        )
+    }
 }
