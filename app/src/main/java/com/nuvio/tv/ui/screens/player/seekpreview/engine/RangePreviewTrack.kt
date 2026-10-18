@@ -199,7 +199,8 @@ internal class RangePreviewTrack(
                     images?.clear()
                     break // No retry loop after memory exhaustion.
                 } catch (_: Exception) {
-                    if (!requested || !planner.isCurrent(request) || buffering || active || !foreground) continue
+                    // A permitted background attempt needs the same backoff as a paused attempt.
+                    if (!mayWorkNow() || !planner.isCurrent(request)) continue
                     val coolingUntil = readers.maxOfOrNull { it.retryAtMs } ?: 0L
                     if (coolingUntil > System.currentTimeMillis()) {
                         delay(minOf(30_000, coolingUntil - System.currentTimeMillis()).coerceAtLeast(1))
