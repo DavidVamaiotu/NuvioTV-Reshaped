@@ -12,6 +12,8 @@ import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewTrack
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalSeekPreviewSettings
 import com.nuvio.tv.ui.screens.player.seekpreview.local.localSeekPreviewCacheKey
 import com.nuvio.tv.ui.screens.player.seekpreview.engine.SessionPreviewTrack
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewPreferences
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewOptions
 import androidx.media3.exoplayer.SeekParameters
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
@@ -45,8 +47,16 @@ class SeekPreviewState internal constructor(
     scope: CoroutineScope,
     private val controller: PlayerRuntimeController,
 ) {
+    @Volatile private var activeGenerated: ArcPreviewTrack? = null
+    private var firstGeneratedSession = true
     @Volatile private var ownedSeekr: BoundedSeekrTrack? = null
-    init { scope.coroutineContext[Job]?.invokeOnCompletion { ownedSeekr?.close() } }
+    init {
+        // A newly opened player (including MPV) supersedes any detached after-playback pass.
+        com.nuvio.tv.ui.screens.player.seekpreview.engine.SeekThumbnails.stopSession(handBackPlayer = false)
+        com.nuvio.tv.ui.screens.player.seekpreview.engine.NextEpisodeThumbs.cancel()
+        com.nuvio.tv.ui.screens.player.seekpreview.engine.NextEpisodeThumbs.resume()
+        scope.coroutineContext[Job]?.invokeOnCompletion { ownedSeekr?.close() }
+    }
     private val _previewCue = MutableStateFlow<SeekPreviewCue?>(null)
 
     /**
@@ -128,12 +138,13 @@ class SeekPreviewState internal constructor(
             controller.playbackTimeline.map { if (it.isLive) 0L else it.duration }
                 .distinctUntilChanged { old, new -> (old > 0L) == (new > 0L) && abs(old - new) <= 1_000L },
             LocalSeekPreviewSettings.enabled(controller.context),
-            LocalPreviewSources.sourceFor(controller)
-        ) { durationMs, enabled, source ->
-            Triple(durationMs, enabled, source)
+            LocalPreviewSources.sourceFor(controller),
+            PreviewPreferences.options(controller.context)
+        ) { durationMs, enabled, source, options ->
+            PreviewLocalRequest(durationMs, enabled, source, options)
         }
             .distinctUntilChanged()
-            .transformLatest<Triple<Long, Boolean, LocalPreviewSource?>, SeekPreviewTrack?> { (durationMs, enabled, source) ->
+            .transformLatest<PreviewLocalRequest, SeekPreviewTrack?> { (durationMs, enabled, source) ->
                 if (!enabled || source == null || durationMs <= 0L) {
                     emit(null)
                     return@transformLatest
@@ -144,33 +155,39 @@ class SeekPreviewState internal constructor(
                     episode = controller.currentEpisode,
                     durationMs = durationMs
                 ) + "|" + com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewStore.digest(source.sourceKey.toByteArray())
-                val opened = LocalPreviewSources.open(source, cacheKey, durationMs)
-                if (opened == null) {
-                    emit(null)
-                    return@transformLatest
-                }
-                val independent = controller.rangePreview(source, durationMs)
-                val combined = independent?.let { SessionPreviewTrack(opened, it) }
+                val adapter = ArcPreviewAdapter(controller, source)
+                val serverSource = previewServerSource(source.sourceKey)
+                val generated = if (previewSingleFileUrl(source.sourceKey)) ArcPreviewTrack(controller.context,
+                    source, listOf(controller.contentId ?: "source:" + com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewStore.digest(source.sourceKey.toByteArray()), controller.currentSeason, controller.currentEpisode).joinToString("|"),
+                    identityExact = !controller.contentId.isNullOrBlank(), durationMs = durationMs, adapter = adapter, holdBeforePlay = firstGeneratedSession,
+                    startImmediately = serverSource == null) else null
+                firstGeneratedSession = false
+                val captured = if (generated == null) LocalPreviewSources.open(source, cacheKey, durationMs) else null
+                val local = generated ?: captured ?: run { emit(null); return@transformLatest }
+                val server = if (serverSource != null) controller.serverPreview(source, durationMs,
+                    onUnavailable = { generated?.start() }) else null
+                if (serverSource != null && server == null) generated?.start()
+                val combined = server?.let { SessionPreviewTrack(local, it) }
+                activeGenerated = generated
                 try {
-                    emit(combined ?: opened)
-                    // Keyframes are only decoded while paused or scrubbing: decoding during
-                    // playback made the video judder. Buffering counts as playing.
-                    controller.uiState
-                        .combine(controller.playbackTimeline) { state, timeline ->
-                            // Wait for playback to actually pause, rather than treating an open scrub overlay as paused.
-                            PreviewPlaybackSample(state.isPlaying || state.isBuffering, state.isBuffering,
-                                timeline.currentPosition, timeline.bufferedPosition, controller.previewDroppedFrames())
-                        }
-                        .distinctUntilChanged()
-                        .collect { (active, stalled, position, buffered, dropped) ->
-                            opened.playbackActive = active
-                            independent?.updatePlayback(active, stalled, position, buffered, dropped)
-                        }
-                    awaitCancellation()
+                    emit(combined ?: local)
+                    controller.uiState.combine(controller.playbackTimeline) { state, timeline ->
+                        PreviewPlaybackSample(state.isPlaying || state.isBuffering, state.isBuffering,
+                            timeline.currentPosition, timeline.bufferedPosition, controller.previewDroppedFrames())
+                    }.distinctUntilChanged().collect { (active, stalled, position, buffered, dropped) ->
+                        captured?.playbackActive = active
+                        adapter.sampleSignals()
+                        server?.updatePlayback(active, stalled, position, buffered, dropped)
+                    }
                 } finally {
+                    if (activeGenerated === generated) activeGenerated = null
                     combined?.close()
-                    LocalPreviewSources.close(source, opened)
+                    generated?.close(afterPlayback = scope.coroutineContext[Job]?.isActive == false,
+                        resumeIfHeld = !source.released && scope.coroutineContext[Job]?.isActive == true)
+                    captured?.let { LocalPreviewSources.close(source, it) }
+                    if (generated == null) adapter.detach()
                 }
+
             }
             .stateIn(scope, SharingStarted.Eagerly, null)
 
@@ -274,7 +291,7 @@ class SeekPreviewState internal constructor(
         val basePosition = controller.pendingPreviewSeekPosition
             ?: controller.currentPlaybackPositionMs()?.coerceAtLeast(0L)
             ?: 0L
-        val target = SeekPreviewCueStepper.targetMs(
+        val target = activeGenerated?.gridStep(basePosition, event.deltaMs) ?: SeekPreviewCueStepper.targetMs(
             cue = _previewCue.value,
             fromMs = basePosition,
             deltaMs = event.deltaMs,
@@ -304,6 +321,8 @@ class SeekPreviewState internal constructor(
         controller.pendingPreviewSeekPosition = aligned
         controller.updatePlaybackTimeline(currentPosition = aligned)
     }
+
+    internal fun stopGenerationForError() { activeGenerated?.close() }
 
     fun showSyncOverlay() {
         controller.hideControls()
@@ -360,3 +379,5 @@ private const val SCRUB_STEP_MIN_MS = 6_000L
 private data class PreviewPlaybackSample(
     val active: Boolean, val stalled: Boolean, val positionMs: Long, val bufferedMs: Long, val droppedFrames: Int,
 )
+
+private data class PreviewLocalRequest(val durationMs: Long, val enabled: Boolean, val source: LocalPreviewSource?, val options: PreviewOptions)

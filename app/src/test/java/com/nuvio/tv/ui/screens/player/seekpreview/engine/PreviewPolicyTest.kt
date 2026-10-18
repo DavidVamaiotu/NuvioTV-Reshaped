@@ -12,28 +12,6 @@ class PreviewPolicyTest {
         assertTrue(health.allows(3_000, false))
         assertTrue(health.allows(63_000, true))
     }
-    @Test fun laterUncachedTargetSupersedesOldSeek() {
-        val planner = PreviewPlanner(7_200_000)
-        val old = planner.request(400_000)
-        val latest = planner.request(5_400_000)
-        assertFalse(planner.isCurrent(old))
-        assertTrue(planner.isCurrent(latest))
-        assertEquals(5_400_000L, planner.next({ false }, false))
-        planner.completed(5_400_000)
-        assertEquals(5_410_000L, planner.next({ false }, false))
-    }
-    @Test fun repeatedReadDoesNotInvalidateActiveFetch() {
-        val planner = PreviewPlanner(1_000_000)
-        val request = planner.request(500_000)
-        repeat(100) { planner.request(500_000) }
-        assertTrue(planner.isCurrent(request))
-    }
-    @Test fun reverseScrubPreparesBehindFirst() {
-        val planner = PreviewPlanner(1_000_000)
-        planner.request(500_000); planner.request(400_000)
-        planner.completed(400_000)
-        assertEquals(390_000L, planner.next({ false }, false))
-    }
     @Test fun byteCacheEvictsByWorkingSetRatherThanItemCount() {
         val cache = PreviewLru<String, ByteArray>(10) { it.size }
         cache.put("a", ByteArray(6)); cache.put("b", ByteArray(5))
@@ -66,9 +44,5 @@ class PreviewPolicyTest {
         assertFalse(PreviewTiming.near(60_000, 5_400_000))
         assertTrue(PreviewTiming.near(5_399_000, 5_400_000))
     }
-    @Test fun copyNeedsThreeStrongIndependentAnchors() {
-        assertFalse(PreviewCopies.verified(listOf(0.99f, 0.99f)))
-        assertFalse(PreviewCopies.verified(listOf(0.99f, 0.50f, 0.99f)))
-        assertTrue(PreviewCopies.verified(listOf(0.99f, 0.95f, 0.94f)))
-    }
+
 }

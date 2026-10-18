@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /** Combines providers, owns only the independent provider; the caller owns the existing playback tap. */
-internal class SessionPreviewTrack(private val tap: SeekPreviewTrack, private val range: RangePreviewTrack) : SeekPreviewTrack {
+internal class SessionPreviewTrack(private val tap: SeekPreviewTrack, private val range: ServerPreviewTrack) : SeekPreviewTrack {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val changes = MutableStateFlow(0)
     override val revision: StateFlow<Int> = changes

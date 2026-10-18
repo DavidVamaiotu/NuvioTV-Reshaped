@@ -19,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -159,8 +161,13 @@ internal fun SeekPreviewFilmstripRow(
                     ) {
                         frame?.thumbnail?.let { thumbnail ->
                             val image = remember(thumbnail.bitmap) { thumbnail.bitmap.asImageBitmap() }
+                            val painter = remember(image, thumbnail.crop) {
+                                val crop = thumbnail.crop
+                                if (crop == null) BitmapPainter(image) else BitmapPainter(image,
+                                    srcOffset = IntOffset(crop.left, crop.top), srcSize = IntSize(crop.width(), crop.height()))
+                            }
                             Image(
-                                bitmap = image,
+                                painter = painter,
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
