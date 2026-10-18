@@ -54,19 +54,20 @@ internal class PlayerAutoSourceRecovery(
         attempted += "url:${player.currentStreamUrl}"
         job = player.scope.launch {
             try {
-                var previousPosition = player.currentPlaybackPositionMs()
+                var previousPosition: Long? = null
                 while (active) {
                     val now = SystemClock.elapsedRealtime()
                     val position = player.currentPlaybackPositionMs()
+                    val readyToConfirm = player.isPlaybackCurrentlyPlaying() &&
+                        (player.hasRenderedFirstFrame || !player.currentStreamHasVideoTrack)
                     val previous = previousPosition
-                    val progressing = previous != null && position != null && position - previous >= 250L
-                    previousPosition = position
+                    val progressing = readyToConfirm && previous != null && position != null && position - previous >= 250L
+                    // Seed only after playback is active: a restored seek position is not progress.
+                    previousPosition = if (readyToConfirm) position else null
                     val state = player._uiState.value
                     val interrupted = player.isInBackground || player.userPausedManually || state.showSourcesPanel || state.showEpisodesPanel
                     if (interrupted) break
-                    val started = player.isPlaybackCurrentlyPlaying() &&
-                        (player.hasRenderedFirstFrame || (!player.currentStreamHasVideoTrack && progressing))
-                    when (policy.evaluate(now, started, interrupted = false, failed = definitiveFailure || state.error != null)) {
+                    when (policy.evaluate(now, progressing, interrupted = false, failed = definitiveFailure || state.error != null)) {
                         StartupSourceRecovery.Decision.Complete -> break
                         StartupSourceRecovery.Decision.Wait -> delay(minOf(500L, remainingMs()).coerceAtLeast(1L))
                         StartupSourceRecovery.Decision.Stop -> { showPicker(); break }
