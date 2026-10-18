@@ -174,9 +174,11 @@ class KeyframeReadLimitTest {
             assertTrue(au.data.isDirect)
             assertArrayEquals(annexB(m.keyframes[k]), au.toByteArray())
             au.release()
+            assertEquals("released backing memory", 0, buf.data.capacity())
         }
-        assertEquals(2, memory.allocations)
-        assertEquals(2, memory.frees)
+        // A Matroska frame may grow its initial peek buffer. Every allocation must still be released.
+        assertTrue(memory.allocations >= 2)
+        assertEquals(memory.allocations, memory.frees)
     }
 
     @Test

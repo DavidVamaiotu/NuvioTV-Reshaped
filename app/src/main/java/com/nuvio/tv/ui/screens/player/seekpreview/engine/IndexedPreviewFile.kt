@@ -19,7 +19,7 @@ internal class IndexedPreviewFile private constructor(
         reader.beginOperation()
         val key = index.keyframes.nearest(positionMs * 1000)
         if (key < 0) return null
-        val unit = extractor.extractAu(key, buffer) ?: return null
+        val unit = extractor.extractAu(key, buffer) ?: run { buffer.release(); return null }
         try {
             val frame = decoder.decode(unit, index.video, threads = 1) ?: return null
             if (index.video.dolbyVision?.profile == 5 && !frame.colour.doviIpt) return null

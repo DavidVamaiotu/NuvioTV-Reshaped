@@ -9,6 +9,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PreviewRangeReaderTest {
+    @Test fun cancellationInvalidatesAllReadsOfAnOperationUntilTheNextTargetBegins() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes 0-2/1000").setBody("abc"))
+            server.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes 3-5/1000").setBody("def"))
+            PreviewRangeReader(server.url("/file.mkv").toString(), emptyMap()).use { reader ->
+                assertEquals("abc", String(reader.read(0, 3)))
+                reader.cancel()
+                assertTrue(runCatching { reader.read(3, 3) }.exceptionOrNull() is IOException)
+                assertEquals(1, server.requestCount)
+                reader.beginOperation()
+                assertEquals("def", String(reader.read(3, 3)))
+            }
+        }
+    }
     @Test fun obsoleteNetworkReadIsCancelledWithoutWaitingForTheBodyDeadline() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Range", "bytes 0-2/1000")

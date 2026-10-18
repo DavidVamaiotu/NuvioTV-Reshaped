@@ -4,6 +4,7 @@ import java.io.Closeable
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -18,7 +19,7 @@ internal class PreviewRangeReader(
 ) : RangeReader, Closeable {
     @Volatile private var closed = false
     @Volatile private var call: Call? = null
-    @Volatile private var epoch = 0L
+    private val epoch = AtomicLong()
     @Volatile private var lease = 0L
     @Volatile override var totalLength = -1L
         private set
@@ -39,7 +40,7 @@ internal class PreviewRangeReader(
         require(offset >= 0 && length in 1..ThumbReads.MAX_READ && dst.remaining() >= length)
         if (closed || !permitted()) throw IOException("preview session suspended")
         val started = lease
-        if (started != epoch) throw IOException("obsolete preview operation")
+        if (started != epoch.get()) throw IOException("obsolete preview operation")
         if (System.currentTimeMillis() < retryAtMs) throw IOException("preview source cooling down")
         val request = Request.Builder().url(effectiveUrl).apply {
             headers.forEach { (key, value) ->
@@ -73,7 +74,7 @@ internal class PreviewRangeReader(
                 dst.limit(initial + expected)
                 try {
                     while (dst.hasRemaining()) {
-                        if (closed || started != epoch) throw IOException("obsolete preview request")
+                        if (closed || started != epoch.get()) throw IOException("obsolete preview request")
                         if (body.source().read(dst) < 0) throw IOException("truncated range")
                     }
                 } finally { dst.limit(oldLimit) }
@@ -89,7 +90,7 @@ internal class PreviewRangeReader(
         val origin = url.toHttpUrl()
         val begin = System.nanoTime()
         repeat(6) {
-            if (closed || !permitted() || started != epoch || System.nanoTime() - begin > TimeUnit.SECONDS.toNanos(10)) throw IOException("preview request cancelled")
+            if (closed || !permitted() || started != epoch.get() || System.nanoTime() - begin > TimeUnit.SECONDS.toNanos(10)) throw IOException("preview request cancelled")
             // A cached CDN address must not receive the origin's credentials on subsequent requests either.
             if (request.url.host != origin.host || request.url.port != origin.port || request.url.scheme != origin.scheme) {
                 request = request.newBuilder().apply {
@@ -100,7 +101,7 @@ internal class PreviewRangeReader(
             }
             val current = client.newCall(request)
             call = current
-            if (closed || started != epoch) current.cancel()
+            if (closed || started != epoch.get()) current.cancel()
             val response = current.execute()
             if (response.code !in setOf(301, 302, 303, 307, 308)) return response
             val next = response.header("Location")?.let { response.request.url.resolve(it) }
@@ -111,8 +112,8 @@ internal class PreviewRangeReader(
         throw IOException("too many preview redirects")
     }
 
-    fun cancel() { epoch++; call?.cancel() }
-    fun beginOperation() { lease = epoch }
+    fun cancel() { epoch.incrementAndGet(); call?.cancel() }
+    fun beginOperation() { lease = epoch.get() }
     override fun close() { closed = true; cancel() }
     companion object {
         private val CONTENT_RANGE = Regex("bytes ([0-9]+)-([0-9]+)/([0-9]+)", RegexOption.IGNORE_CASE)
