@@ -98,6 +98,14 @@ class AutoSourceRecoveryPlanTest {
         assertNotEquals(recoverySourceKey(a), recoverySourceKey(b.copy(addonName = "B")))
     }
 
+    @Test fun `cached P2P identity is stable when addon name was not saved`() = runBlocking {
+        val cached = stream("cached", "").copy(url = null, infoHash = "ABC", fileIdx = 1)
+        val duplicate = cached.copy(addonName = "A", name = "fresh metadata", infoHash = "abc")
+        val other = stream("other")
+        assertEquals(recoverySourceKey(cached), recoverySourceKey(duplicate))
+        assertEquals(other, plan(listOf(duplicate, other)).next(setOf(recoverySourceKey(cached))))
+    }
+
     @Test fun `handoff is single use and checked against profile and video`() {
         val p = plan(listOf(stream("one")))
         val token = AutoSourceRecoveryHandoff.put(p)

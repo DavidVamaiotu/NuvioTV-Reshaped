@@ -131,7 +131,10 @@ internal class PlayerAutoSourceRecovery(
         attempted += recoverySourceKey(resolved)
         resolved.getStreamUrl()?.let { attempted += "url:$it" }
         Log.i(PlayerRuntimeController.TAG, "AUTO_SOURCE_RECOVERY: trying next eligible source")
-        player.switchToSourceStream(resolved)
+        player.switchToSourceStream(
+            resolved,
+            resumeSavedProgress = !player.navigationArgs.startFromBeginning || player.currentVideoId != player.navigationArgs.videoId
+        )
         return NextResult.Started
     }
 

@@ -786,8 +786,13 @@ private fun PlayerRuntimeController.openExternalStreamInBrowser(
 
 @androidx.annotation.OptIn(UnstableApi::class)
 internal fun PlayerRuntimeController.switchToSourceStream(
-    stream: Stream
+    stream: Stream,
+    resumeSavedProgress: Boolean = true
 ) {
+    if (!resumeSavedProgress) {
+        pendingResumeProgress = null
+        _uiState.update { it.copy(pendingSeekPosition = null) }
+    }
     sourceStreamsScope?.cancel()
     sourceStreamsScope = null
     sourceStreamsJob = null
@@ -803,7 +808,7 @@ internal fun PlayerRuntimeController.switchToSourceStream(
             val resolved = resolveYouTubeStream(stream)
             debridResolveJob = null
             if (resolved != null) {
-                switchToSourceStream(resolved)
+                switchToSourceStream(resolved, resumeSavedProgress)
             } else {
                 _uiState.update {
                     it.copy(
@@ -823,9 +828,9 @@ internal fun PlayerRuntimeController.switchToSourceStream(
             val resolved = resolveDirectDebridStreamIfNeeded(stream, currentSeason, currentEpisode)
             debridResolveJob = null
             if (resolved != null && !resolved.getStreamUrl().isNullOrBlank()) {
-                switchToSourceStream(resolved)
+                switchToSourceStream(resolved, resumeSavedProgress)
             } else if (resolved != null) {
-                switchToTorrentSourceStream(resolved)
+                switchToTorrentSourceStream(resolved, resumeSavedProgress)
             } else {
                 _uiState.update {
                     it.copy(
@@ -847,7 +852,7 @@ internal fun PlayerRuntimeController.switchToSourceStream(
                 val resolved = resolveDirectDebridStreamIfNeeded(stream, currentSeason, currentEpisode)
                 if (resolved != null && !resolved.getStreamUrl().isNullOrBlank()) {
                     debridResolveJob = null
-                    switchToSourceStream(resolved)
+                    switchToSourceStream(resolved, resumeSavedProgress)
                 } else {
                     debridResolveJob = null
                     _uiState.update {
@@ -955,7 +960,7 @@ internal fun PlayerRuntimeController.switchToSourceStream(
         initializePlayer(playbackUrl, playbackHeaders)
     }
 
-    loadSavedProgressFor(currentSeason, currentEpisode)
+    if (resumeSavedProgress) loadSavedProgressFor(currentSeason, currentEpisode)
 }
 
 internal fun PlayerRuntimeController.dismissEpisodesPanel() {
@@ -994,7 +999,8 @@ internal fun PlayerRuntimeController.selectEpisodesSeason(season: Int) {
 
 @androidx.annotation.OptIn(UnstableApi::class)
 private fun PlayerRuntimeController.switchToTorrentSourceStream(
-    stream: Stream
+    stream: Stream,
+    resumeSavedProgress: Boolean = true
 ) {
     val infoHash = stream.getEffectiveInfoHash() ?: return
     sourceStreamsScope?.cancel()
@@ -1035,7 +1041,7 @@ private fun PlayerRuntimeController.switchToTorrentSourceStream(
     currentFilename = stream.behaviorHints?.filename ?: navigationArgs.filename
     showStreamSourceIndicator(stream)
     resetPostPlayOverlayState(clearEpisode = false)
-    launchTorrentSourceStream(stream, infoHash, loadSavedProgress = true)
+    launchTorrentSourceStream(stream, infoHash, loadSavedProgress = resumeSavedProgress)
     persistTorrentStreamForReuse(stream)
 }
 

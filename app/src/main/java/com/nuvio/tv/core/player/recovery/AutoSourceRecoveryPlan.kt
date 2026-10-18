@@ -63,7 +63,8 @@ fun recoverySourceKey(stream: Stream): String {
     return if (hash != null) {
         val file = stream.getEffectiveFileIdx()?.toString()
             ?: stream.clientResolve?.filename ?: stream.behaviorHints?.filename.orEmpty()
-        "file:${stream.addonName}:${hash.lowercase()}:$file"
+        if (stream.isTorrent()) "torrent:${hash.lowercase()}:$file"
+        else "file:${stream.addonName}:${hash.lowercase()}:$file"
     } else {
         "url:${stream.getStreamUrl() ?: stream.youTubeIdToResolve() ?: stream.toString()}"
     }

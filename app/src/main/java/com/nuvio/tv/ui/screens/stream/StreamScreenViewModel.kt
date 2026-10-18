@@ -1521,7 +1521,13 @@ class StreamScreenViewModel @Inject constructor(
 
     suspend fun attachAutoSourceRecovery(info: StreamPlaybackInfo): StreamPlaybackInfo {
         if (info.isExternal || info.autoSourceRecoveryToken != null) return info
-        val plan = autoSourceRecoveryPlan(_uiState.value.autoPlayStream) ?: return info
+        val initial = _uiState.value.autoPlayStream ?: Stream(
+            name = info.streamName, title = null, description = info.streamDescription, url = info.url,
+            ytId = info.ytId, infoHash = info.infoHash, fileIdx = info.fileIdx, externalUrl = null,
+            behaviorHints = com.nuvio.tv.domain.model.StreamBehaviorHints(null, null, null, null, filename = info.filename),
+            addonName = info.addonName.orEmpty(), addonLogo = info.addonLogo
+        )
+        val plan = autoSourceRecoveryPlan(initial) ?: return info
         return info.copy(autoSourceRecoveryToken = AutoSourceRecoveryHandoff.put(plan))
     }
 
