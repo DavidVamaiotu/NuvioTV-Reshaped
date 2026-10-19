@@ -35,6 +35,19 @@ idle/pacing waits. On low-RAM devices, changing the target cancels an obsolete o
 read using the preview reader's existing cancellation epoch. Playback and smaller-copy readers
 are separate. Superseded results do not consume failed-request attempts or start stale decodes.
 
+Background ordering starts near playback, then covers both title edges and splits the remaining
+gaps across the entire timeline. Whole-title minute coverage precedes fine local detail, on the
+original and smaller-copy paths. A bounded second sweep revisits failed decodes. Exhausted frame
+attempts can be retried by foreground seeks after a cooldown; skipped frames are never counted as
+stored coverage. Five consecutive network failures cool down for a minute instead of permanently
+disabling the session. Transport cancellation is identified separately from host failures.
+
+The background request/byte limits still stop background filling. Foreground requests retain a
+separate renewable allowance (250 requests per five minutes after the background cap). A copy
+keeps its range reader available for later seek targets after background filling ends, closing its
+decoder while idle. It follows the latest target and retains the same playback/memory gates and
+edition/visual checks. Original gates re-plan when copy adoption satisfies the waiting slot.
+
 Decoded images are published before WebP compression or disk writes. Each session's single writer
 admits one outstanding image, including the in-progress write. Producer backpressure suspends the
 preview worker, never playback or the UI. Cleanup drains that writer before flushing the store or

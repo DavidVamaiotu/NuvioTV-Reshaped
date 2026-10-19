@@ -88,7 +88,7 @@ class HttpRangeReaderTest {
         worker.start()
         assertNotNull(server.takeRequest(2, TimeUnit.SECONDS)); reader.cancel(); worker.join(3000)
         try {
-            assertFalse(worker.isAlive); assertTrue(failure.get() is IOException)
+            assertFalse(worker.isAlive); assertTrue(failure.get() is HttpRangeReader.ReadCancelledException)
             assertArrayEquals("def".toByteArray(), reader.read(3, 3))
         } finally { reader.close() }
     }

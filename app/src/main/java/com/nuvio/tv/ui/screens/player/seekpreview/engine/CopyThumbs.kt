@@ -100,7 +100,7 @@ internal class CopyPass(
         const val OPEN_TIMEOUT_MS = 45_000L
         const val MAX_OPENS = 4
         const val MAX_BYTES = 200L * 1024 * 1024
-        const val READY_PICTURES = 12
+        const val READY_PICTURES = ReleaseMatch.CHECKS_NEEDED
         const val FULL_AHEAD_MS = 14_000L
         const val QUIET_AFTER_STALL_MS = 60_000L
         const val TROUBLE_WINDOW_MS = 20_000L
@@ -144,6 +144,8 @@ internal class CopyPass(
     /** The store the pass writes now; verdicts about any other store are old and ignored. */
     @Volatile private var currentKey: String? = null
     @Volatile private var reader: HttpRangeReader? = null
+    @Volatile private var priorityMs = -1L
+    fun notePriority(positionMs: Long) { priorityMs = positionMs }
     @Volatile private var stopping = false
     @Volatile private var rejectedKey: String? = null
     @Volatile private var confirmedKey: String? = null
@@ -410,19 +412,22 @@ internal class CopyPass(
         val kfSlots = HashMap<Int, MutableList<Int>>()
         kfOf.forEachIndexed { m, kf -> if (kf >= 0) kfSlots.getOrPut(kf) { ArrayList() }.add(m) }
         val anchor = ReleaseMatch.mapSlot(own.anchorSlot, ratio, copyCount).coerceAtLeast(0)
-        val order = UsenetCopy.screenFirst(
-            SeekGrid.latticeOrder(copyCount, STRIDES, anchor, LOCAL_BEFORE_SLOTS, LOCAL_AFTER_SLOTS), owners, own.screenStride)
+        val background = PreviewCoveragePlan.order(copyCount, STRIDES, anchor, LOCAL_BEFORE_SLOTS, LOCAL_AFTER_SLOTS)
+        val order = if (screenUp()) UsenetCopy.screenFirst(background, owners, own.screenStride) else background
         val coarse = (0 until copyCount step STRIDES.first()).toList()
         val extractors = ArrayList<KeyframeExtractor>()
         val spare = ArrayDeque<KeyframeExtractor>()
         fun bytesRead() = extractors.sumOf { it.bytesRead }
         val decoder = FfmpegThumbDecoder()
-        val attempts = HashMap<Int, Int>()
+        val attempts = PreviewFrameAttempts()
+        val foregroundRequests = PreviewRequestWindow()
+        val targets = PreviewScrubPlan()
         val dv5 = idx.video.dolbyVision?.profile == 5
         val smallBox = !MemoryGovernor.isStrongBox
         var pictures = 0
         val t0 = SystemClock.elapsedRealtime()
         state = State.FILLING
+        if (store.slots().isNotEmpty()) ready = CopySet(store, ratio, copyCount, offer.label)
         Log.i(TAG, "making thumbnails from ${offer.label} (${order.size} slots, ${store.slots().size} stored already)" +
             if (pacer != null) ", behind the dropped-frame pacer while playing" else "")
         try {
@@ -432,6 +437,7 @@ internal class CopyPass(
                 val underWay = HashSet<Int>()
                 val refused = AtomicBoolean(false)
                 var next = 0
+                var retried = false
                 var out: Outcome? = null
                 try {
                     work@ while (true) {
@@ -447,44 +453,65 @@ internal class CopyPass(
                             out = Outcome.STOP
                             break@work
                         }
-                        if (bytesRead() >= MAX_BYTES) {
-                            Log.i(TAG, "byte limit reached (${bytesRead() / (1024 * 1024)} MB)")
-                            break@work
-                        }
                         val lanes = UsenetCopy.fetches(screenUp(), lastPlaying, ConnectionLedger.app.thumbnailCap(r.resolvedUrl),
                             smallBox, rateLimited = RateLimitedHosts.appSession.contains(r.resolvedUrl))
                         if (lanes == 1 && pending.size > 1 && !refused.get()) {
                             // Back to one at a time (the screen went down): the queued pictures are fetched again later.
                             for (f in pending.asReversed()) {
                                 f.result.cancel()
-                                attempts[f.kf] = ((attempts[f.kf] ?: 1) - 1).coerceAtLeast(0)
+                                attempts.postponed(f.kf)
                                 underWay -= f.kf
                                 again.addFirst(f.m)
                             }
                             pending.clear()
                             r.cancel()
                         }
-                        while (!refused.get() && pending.size < lanes && bytesRead() < MAX_BYTES) {
-                            val retried = again.isNotEmpty()
-                            val m = if (retried) again.first() else order.getOrNull(next) ?: break
+                        while (!refused.get() && pending.size < lanes) {
+                            val now = SystemClock.elapsedRealtime()
+                            fun needed(m: Int, foreground: Boolean = false): Boolean = kfOf[m] >= 0 && !store.has(slotUs(m)) &&
+                                owners[m]?.any { !own.store.has(slotUs(it)) } == true && attempts.available(kfOf[m], now, foreground)
+                            val target = priorityMs.takeIf { it >= 0 }?.let {
+                                ReleaseMatch.mapSlot((it / SPACING_MS).toInt(), ratio, copyCount)
+                            } ?: -1
+                            val urgent = if (target >= 0)
+                                targets.next(target, copyCount, now) { needed(it, foreground = true) && kfOf[it] !in underWay }
+                            else null
+                            val byteLimit = bytesRead() >= MAX_BYTES
+                            if (byteLimit && (urgent == null || foregroundRequests.waitMs(now, r.requests) > 0)) break
+                            val retry = urgent == null && again.isNotEmpty()
+                            val m = urgent ?: if (retry) again.first() else order.getOrNull(next) ?: break
                             val kf = kfOf[m]
                             if (kf >= 0 && kf in underWay) break
-                            val served = owners[m]
-                            if (retried) again.removeFirst() else next++
-                            if (kf < 0 || store.has(slotUs(m)) || served == null ||
-                                served.all { own.store.has(slotUs(it)) } || (attempts[kf] ?: 0) >= 2) continue
+                            if (urgent == null) { if (retry) again.removeFirst() else next++ }
+                            if (!needed(m, foreground = urgent != null)) continue
+                            state = State.FILLING
                             if (!awaitReady(decoder, host)) {
                                 out = if (isRejected()) Outcome.REJECTED else Outcome.STOP
                                 break@work
                             }
-                            attempts[kf] = (attempts[kf] ?: 0) + 1
+                            attempts.started(kf, SystemClock.elapsedRealtime())
                             val ex = spare.removeFirstOrNull() ?: KeyframeExtractor(idx, r).also { extractors += it }
                             underWay += kf
                             pending += Fetch(m, kf, ex, shared = lanes > 1, async(Dispatchers.IO) {
                                 runCatching { fetchKeyframe(ex, kf, host) }.also { if (it.exceptionOrNull() is Halt) refused.set(true) }
                             })
                         }
-                        val f = pending.removeFirstOrNull() ?: break@work
+                        val f = pending.removeFirstOrNull()
+                        if (f == null) {
+                            if (!retried && next >= order.size && bytesRead() < MAX_BYTES) {
+                                retried = true
+                                again.addAll(order.filter { m ->
+                                    kfOf[m] >= 0 && !store.has(slotUs(m)) && attempts.count(kfOf[m]) == 1
+                                })
+                                if (again.isNotEmpty()) continue@work
+                            }
+                            // Keep a confirmed copy available for future seeks after its bounded background pass.
+                            if (ready == null && store.slots().isNotEmpty()) ready = CopySet(store, ratio, copyCount, offer.label)
+                            state = State.WAITING
+                            decoder.close()
+                            delay(250L)
+                            continue@work
+                        }
                         val got = f.result.await()
                         underWay -= f.kf
                         spare += f.extractor
@@ -505,7 +532,11 @@ internal class CopyPass(
                             out = if (isRejected()) Outcome.REJECTED else Outcome.STOP
                             break@work
                         }
-                        if (swapLow && !MemoryGovernor.swapAllows(funded = false).allowed) continue@work
+                        if (swapLow && !MemoryGovernor.swapAllows(funded = false).allowed) {
+                            attempts.postponed(f.kf)
+                            again.addFirst(f.m)
+                            continue@work
+                        }
                         val kf = f.kf
                         val playing = lastPlaying
                         val decodeStarted = SystemClock.elapsedRealtime()

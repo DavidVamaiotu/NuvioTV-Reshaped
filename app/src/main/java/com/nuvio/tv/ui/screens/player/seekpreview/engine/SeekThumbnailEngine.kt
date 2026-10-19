@@ -564,6 +564,7 @@ internal object SeekThumbnails {
         private var copySetKey: String? = null
         private var copyAdoptedAt = 0
         private var copyChecksAt = 0
+        private var copySeenMade = -1
         /** Positions (ms) of the newest thumbnails, oldest first. Guarded by itself. */
         private val recentMade = ArrayDeque<Long>()
         /** Guarded by [recentMade]. */
@@ -659,11 +660,12 @@ internal object SeekThumbnails {
         private var laneClockAt = 0L
         private var laneHeldUntil = 0L
         private var laneClockLoweredAt = 0L
-        private val attempts = HashMap<Int, Int>()
+        private val attempts = PreviewFrameAttempts(MAX_ATTEMPTS_PER_KEYFRAME)
         private var rateLimitedUntil = 0L
         private val fetchFailures = FetchFailureStreak(MAX_FETCH_FAILURES)
         private val giveUp = GiveUpNotes()
         private var fetchesStopped = false
+        private var networkRetryAt = 0L
         private val diskLoadsInFlight = HashSet<Pair<String, Int>>()
         /** Last bitmap handed to the pane; shown while the exact frame loads from disk. */
         @Volatile private var lastServed: Shown? = null
@@ -692,6 +694,7 @@ internal object SeekThumbnails {
         private var latticeBytes = 0L
         private var latticeMaxRequests = 0
         @Volatile private var hardMaxRequests = Int.MAX_VALUE
+        private val foregroundRequests = PreviewRequestWindow()
         private var lastDeferLogAt = 0L
         private var deferredSinceLog = 0
         private val trimListener: (Int) -> Unit = { onTrim() }
@@ -958,7 +961,7 @@ internal object SeekThumbnails {
 
         private fun coverageStored(st: ThumbStore): Boolean {
             val lattice = SeekGrid.latticeOrder(slotKeyframe.size, latticeStrides, 0, 0, 0)
-            return lattice.isNotEmpty() && lattice.none { needs(st, it) }
+            return lattice.isNotEmpty() && lattice.all { st.has(it.toLong() * SPACING_MS * 1000L) }
         }
 
         private fun inBackground(): Boolean = ForegroundGate.waits(hostResumed, afterPlayback)
@@ -1228,6 +1231,7 @@ internal object SeekThumbnails {
 
         fun notePriority(positionMs: Long) {
             pendingPriorityMs = positionMs
+            copy?.notePriority(positionMs)
             lastScrubAt = SystemClock.elapsedRealtime()
             if (slotKeyframe.isEmpty()) return
             val target = slotOf(positionMs)
@@ -1270,14 +1274,17 @@ internal object SeekThumbnails {
             // while the screen is up, and go back to the detail around the playhead once it is gone.
             fun gridFirst() = if (beforePlay != ThumbsBeforePlay.FULL && prepareStage in 1..4) prepareStride() else 0
             var orderedGridFirst = gridFirst()
-            fun order(anchor: Int) = SeekGrid.latticeOrder(slotKeyframe.size, latticeStrides, anchor,
-                beforeSlots = (LOCAL_BEFORE_MS / SPACING_MS).toInt(), afterSlots = (LOCAL_AFTER_MS / SPACING_MS).toInt(),
-                gridFirst = orderedGridFirst)
+            fun order(anchor: Int) = if (orderedGridFirst > 0) {
+                SeekGrid.latticeOrder(slotKeyframe.size, latticeStrides, anchor,
+                    (LOCAL_BEFORE_MS / SPACING_MS).toInt(), (LOCAL_AFTER_MS / SPACING_MS).toInt(), orderedGridFirst)
+            } else PreviewCoveragePlan.order(slotKeyframe.size, latticeStrides, anchor,
+                (LOCAL_BEFORE_MS / SPACING_MS).toInt(), (LOCAL_AFTER_MS / SPACING_MS).toInt())
             var lattice = order(anchorSlot)
             latticeMaxRequests = lattice.size * 5 / 4 + 10
             hardMaxRequests = (if (onDemand) (reader?.requests ?: 0) else latticeMaxRequests) + SCRUB_REQUEST_ALLOWANCE
             var latticeLogged = false
             var latticePos = 0
+            var retriedCoverage = false
             var neighbourCenter = -1
             var neighbourDirection = 0
             var neighbours: List<Int> = emptyList()
@@ -1287,12 +1294,27 @@ internal object SeekThumbnails {
             Log.i(TAG, "decode lanes start=${laneCtl.lanes} ceiling=${laneCtl.ceiling()} " +
                 "cpus=${Runtime.getRuntime().availableProcessors()}")
             while (true) {
+                if (networkRetryAt > 0 && SystemClock.elapsedRealtime() >= networkRetryAt && !memoryStop.stopped) {
+                    networkRetryAt = 0L
+                    fetchFailures.succeeded()
+                    fetchesStopped = false
+                    latticeFinished = onDemand || latticeLogged || latticeBudgetSpent()
+                    PreviewDiagnostics.note("retrying preview requests after network cooldown")
+                }
                 tendReserve()
                 naturalFunding()
                 settleFetches(st)
                 settleDecodes()
                 tendLanes()
                 tendCopy()
+                if (MemoryGovernor.isLowRam && copy?.filling == true && decoderLanes.none { it.inUse }) closeDecoders()
+                // A stationary blank seek has no new UI event when its retry cooldown expires.
+                if (prioritySlot < 0 && pendingPriorityMs >= 0) {
+                    val target = slotOf(pendingPriorityMs)
+                    val kf = slotKeyframe[target]
+                    if (kf >= 0 && !st.has(target.toLong() * SPACING_MS * 1000L) &&
+                        attempts.available(kf, SystemClock.elapsedRealtime(), foreground = true)) prioritySlot = target
+                }
                 if (decodeJobs.size >= laneCtl.lanes) {
                     awaitAnyDecode()
                     continue
@@ -1402,14 +1424,23 @@ internal object SeekThumbnails {
                 }
                 if (slot < 0 && !latticeLogged && latticePos >= lattice.size) {
                     frameWriter.drain() // Never mark transient in-memory coverage as durably complete.
+                    // A failed decode advanced the cursor, but still has one attempt left. Revisit it once.
+                    if (!retriedCoverage && !fetchesStopped && !latticeBudgetSpent() &&
+                        !st.isMemoryOnly && lattice.any { wanted(st, it) }) {
+                        retriedCoverage = true
+                        latticePos = 0
+                        continue
+                    }
                     latticeLogged = true
                     latticeFinished = true
                     latticeComplete = lattice.isNotEmpty() &&
-                        lattice.count { st.has(it.toLong() * SPACING_MS * 1000L) } >= lattice.size * 97 / 100
+                        lattice.count { st.has(it.toLong() * SPACING_MS * 1000L) }.toLong() * 100 >= lattice.size.toLong() * 97
                     if (latticeComplete) st.markComplete(lattice.map { it.toLong() * SPACING_MS * 1000L })
                     bumpTick()                            // hides the paused progress hint
                     Log.i(TAG, "lattice done: slots=${lattice.size} requests=$latticeRequests/$latticeMaxRequests " +
                         "kb=${latticeBytes / 1024} stored=${st.slots().size}")
+                    PreviewDiagnostics.note("coverage pass ended: stored=${st.slots().size}/${lattice.size} " +
+                        "complete=$latticeComplete budgetSpent=${latticeBudgetSpent()}")
                 }
                 if (slot < 0) {
                     // Nothing to do. A 4K context (~80 MB) is closed outright, and at once when 4K may not decode.
@@ -1431,16 +1462,16 @@ internal object SeekThumbnails {
                     awaitWakeup(500L)
                     continue
                 }
-                if (!awaitGates(priority)) continue      // new priority while waiting: re-plan
+                if (priority == 2 && latticeBudgetSpent()) {
+                    latticePos = lattice.size             // background ends; foreground and playback taps remain usable
+                    latticeFinished = true
+                    continue
+                }
+                if (!awaitGates(priority, st, slot)) continue // target filled, or new priority while waiting: re-plan
                 if (priority == 0 && prioritySlot >= 0 && prioritySlot != slot) continue
                 if (priority == 0 && scrubPlan.remaining(SystemClock.elapsedRealtime()) > 0) {
                     awaitWakeup(scrubPlan.remaining(SystemClock.elapsedRealtime()))
                     continue // re-plan after settlement; never decode an obsolete intermediate target
-                }
-                if (priority == 2 && latticeBudgetSpent()) {
-                    latticePos = lattice.size             // coverage ends for this session; P0/P1 continue
-                    latticeFinished = true
-                    continue
                 }
                 topUpFetches(st, slot, priority, if (priority <= 1) neighbours else emptyList(), lattice, latticePos)
                 if (priority == 2 && lattice.getOrNull(latticePos) == slot && fetchLimit() > 1) {
@@ -1473,7 +1504,7 @@ internal object SeekThumbnails {
         private fun needs(st: ThumbStore, slot: Int): Boolean {
             val kf = slotKeyframe.getOrElse(slot) { -1 }
             if (kf < 0) return false
-            if ((attempts[kf] ?: 0) >= MAX_ATTEMPTS_PER_KEYFRAME) return false
+            if (!attempts.available(kf, SystemClock.elapsedRealtime(), foreground = slot == prioritySlot)) return false
             return !st.has(slot.toLong() * SPACING_MS * 1000L)
         }
 
@@ -1482,10 +1513,11 @@ internal object SeekThumbnails {
             needs(st, slot) && slotKeyframe.getOrElse(slot) { -1 } !in decodeJobs
 
         private fun latticeBudgetSpent(): Boolean =
-            latticeRequests >= latticeMaxRequests || latticeBytes >= (if (fourK) LATTICE_4K_MAX_BYTES else LATTICE_MAX_BYTES)
+            latticeRequests >= latticeMaxRequests || (reader?.requests ?: 0) >= hardMaxRequests ||
+                latticeBytes >= (if (fourK) LATTICE_4K_MAX_BYTES else LATTICE_MAX_BYTES)
 
         /** P0 only waits out a rebuffer and rate limits; P1/P2 also need a healthy buffer. False = re-plan. */
-        private suspend fun awaitGates(priority: Int): Boolean {
+        private suspend fun awaitGates(priority: Int, st: ThumbStore, slot: Int): Boolean {
             val bufferGate = PreviewBufferGate(GATE_BUFFER_AHEAD_MS)
             var notedDecodeWait = false
             val entryPriority = prioritySlot
@@ -1494,14 +1526,19 @@ internal object SeekThumbnails {
                 settleDecodes()
                 tendPrepareWhileWaiting()
                 tendCopy()
+                if (MemoryGovernor.isLowRam && copy?.filling == true && decoderLanes.none { it.inUse }) closeDecoders()
+                // Copy adoption can satisfy this slot while the original decoder is waiting for resources.
+                if (!wanted(st, slot)) return false
+                if (prioritySlot >= 0 && prioritySlot != entryPriority) return false
                 if (afterPlaybackExpired()) return false
                 awaitForeground()
                 val now = SystemClock.elapsedRealtime()
                 val r = reader
-                if (r != null && r.requests >= hardMaxRequests) {
+                if (r != null && r.requests >= hardMaxRequests && priority != 3) {
                     if (afterPlayback) return false  // the loop then ends the session
-                    delay(5_000L)
-                    continue
+                    if (priority > 1) return false
+                    val wait = foregroundRequests.waitMs(now, r.requests)
+                    if (wait > 0) { awaitWakeup(minOf(wait, 500L)); continue }
                 }
                 if (now < rateLimitedUntil) {
                     delay(1_000L)
@@ -1577,7 +1614,7 @@ internal object SeekThumbnails {
             val verdict = MemoryGovernor.allow(tier, decoderWarm = lane.decoder.warm, funded = funded)
             refusedForSwap = verdict.swapLow
             if (!verdict.allowed) return deferForMemory(verdict, tier, slot, priority, busy, funded, afterFetch = false)
-            attempts[kf] = (attempts[kf] ?: 0) + 1
+            attempts.started(kf, SystemClock.elapsedRealtime())
             val make = makeExtractor ?: return Outcome.FAILED
             val t0 = SystemClock.elapsedRealtime()
             val tapped = spooledAccessUnit(kf, idx)
@@ -1589,12 +1626,12 @@ internal object SeekThumbnails {
             val tWaited = SystemClock.elapsedRealtime() - t0
             if ((prioritySlot >= 0 && prioritySlot != targetAtStart && slotKeyframe.getOrElse(prioritySlot) { -1 } != kf) ||
                 (tapped == null && fetchSuperseded && fetched?.error != null)) {
-                attempts[kf] = (attempts[kf] ?: 1) - 1
+                attempts.postponed(kf)
                 (tapped ?: fetched?.au)?.release()
                 return Outcome.POSTPONED // cancellation for a newer target is not a failed network request
             }
             if (fetched != null && fetched.error != null) {
-                attempts[kf] = (attempts[kf] ?: 1) - 1
+                attempts.postponed(kf)
                 fetchFailed(fetched, st, slot)
                 return Outcome.POSTPONED
             }
@@ -1612,12 +1649,13 @@ internal object SeekThumbnails {
             }
             if (au == null) {
                 Log.w(TAG, "slot=$slot kf=$kf: keyframe not located")
+                PreviewDiagnostics.note("preview keyframe not located at ${slot * SPACING_MS / 1000}s; attempt=${attempts.count(kf)}")
                 return Outcome.FAILED
             }
             // The fetch can take a while: swap is read again before the decode starts. The keyframe is kept for later.
             val late = if (MemoryGovernor.isStrongHardware) null else MemoryGovernor.swapAllows(funded)
             if (late != null && !late.allowed) {
-                attempts[kf] = (attempts[kf] ?: 1) - 1
+                attempts.postponed(kf)
                 if (fetched != null) {
                     fetches[kf] = CompletableDeferred(Fetched(fetched.au, null, 0, 0L, fetched.ms, fetched.startedAt))
                 } else {
@@ -1738,6 +1776,7 @@ internal object SeekThumbnails {
             }
             val bmp = d.bitmap ?: run {
                 giveUp.decodeFailed()
+                PreviewDiagnostics.note("preview decode failed at ${job.slot * SPACING_MS / 1000}s; attempt=${attempts.count(job.kf)}")
                 return Outcome.FAILED
             }
             if (!d.cold) laneChange(laneCtl.onDecode(d.decodeMs + d.renderMs, job.concurrent, laneHeld()))
@@ -2010,6 +2049,7 @@ internal object SeekThumbnails {
                     giveUp.noConnectionFree()
                     rateLimitedUntil = maxOf(rateLimitedUntil, SystemClock.elapsedRealtime() + 1_000L)
                 }
+                is HttpRangeReader.ReadCancelledException -> Unit // superseded work is not a host failure
                 is IOException -> {
                     rethrowIfStopping(e)
                     giveUp.fetchFailed(e)
@@ -2018,11 +2058,13 @@ internal object SeekThumbnails {
                     val waitMs = fetchFailures.failedFetch(f.startedAt, SystemClock.elapsedRealtime()) ?: return
                     if (fetchFailures.gaveUp) {
                         fetchesStopped = true
+                        networkRetryAt = SystemClock.elapsedRealtime() + 60_000L
                         latticeFinished = true
                         releasePrepareHold()
                         bumpTick()
                         Log.w(TAG, "${fetchFailures.count} fetches failed in a row (${e.javaClass.simpleName}): " +
-                            "no new thumbnails this session (stored=${st.slots().size})")
+                            "thumbnail requests cool down for 60s (stored=${st.slots().size})")
+                        PreviewDiagnostics.note("preview network failures; retrying after 60s cooldown")
                         return
                     }
                     rateLimitedUntil = maxOf(rateLimitedUntil, SystemClock.elapsedRealtime() + waitMs)
@@ -2544,7 +2586,7 @@ internal object SeekThumbnails {
                 copyHoldMade = c.made
                 copyHoldSince = now
             }
-            if (MemoryGovernor.isStrongBox && now - copyHoldSince > COPY_STALL_HOLD_MS) {
+            if (now - copyHoldSince > COPY_STALL_HOLD_MS) {
                 if (!copyHoldReleased) {
                     copyHoldReleased = true
                     Log.i(COPY_TAG, "no copy progress in ${COPY_STALL_HOLD_MS / 60_000} min - the 4K pass carries on")
@@ -2610,6 +2652,10 @@ internal object SeekThumbnails {
             val b = borrow ?: return
             if (b.copy !== c) return
             val made = c.made
+            if (made != copySeenMade) {
+                copySeenMade = made
+                bumpTick() // A newly requested copy frame is visible before the next adoption batch.
+            }
             if (b.confirmed) {
                 val every = if (prepareStage in 1..4) COPY_CHECK_REFILL_EVERY else COPY_ADOPT_EVERY
                 if (made - copyAdoptedAt >= every || (!c.filling && made != copyAdoptedAt)) {
@@ -2652,7 +2698,10 @@ internal object SeekThumbnails {
                 pacer = if (MemoryGovernor.isStrongBox) null else copyPacer,
                 screenUp = { usenet && prepareStage in 1..4 },
                 workBudget = workBudget,
-            ).also { it.start() }
+            ).also { pass ->
+                pendingPriorityMs.takeIf { it >= 0 }?.let(pass::notePriority)
+                pass.start()
+            }
         }
 
         private fun setUpCopyBorrow(idx: MediaIndex, st: ThumbStore, c: CopyPass, set: CopySet) {

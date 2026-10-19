@@ -18,6 +18,12 @@ internal class PreviewScrubPlan(private val settleMs: Long = 120L) {
 
     fun remaining(nowMs: Long): Long = if (direction == 0) 0 else (settleMs - (nowMs - changedAt)).coerceAtLeast(0)
 
+    /** Copy generation uses the latest landing too, even when its background pass is far away or exhausted. */
+    fun next(slot: Int, count: Int, nowMs: Long, wanted: (Int) -> Boolean): Int? {
+        target(slot, nowMs)
+        return if (remaining(nowMs) > 0) null else neighbors(slot, count, 2).firstOrNull(wanted)
+    }
+
     fun neighbors(center: Int, count: Int, radius: Int): List<Int> = buildList {
         if (center !in 0 until count) return@buildList
         add(center)

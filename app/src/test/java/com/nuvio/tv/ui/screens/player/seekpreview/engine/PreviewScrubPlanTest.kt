@@ -31,4 +31,16 @@ class PreviewScrubPlanTest {
         assertEquals(listOf(0, 1, 2), plan.neighbors(0, 3, 3))
         assertTrue(plan.neighbors(-1, 3, 3).isEmpty())
     }
+
+    @Test fun copySeeksJumpOverUnfinishedBackgroundCoverage() {
+        val plan = PreviewScrubPlan()
+        assertEquals(700, plan.next(700, 720, 0L) { true })
+        val saved = setOf(700, 701)
+        assertEquals(699, plan.next(700, 720, 1L) { it !in saved })
+        // A jump back supersedes the previous landing; refreshing it cannot extend settlement.
+        assertNull(plan.next(200, 720, 10L) { true })
+        assertNull(plan.next(200, 720, 100L) { true })
+        assertEquals(200, plan.next(200, 720, 130L) { true })
+        assertNull(plan.next(200, 720, 131L) { false })
+    }
 }

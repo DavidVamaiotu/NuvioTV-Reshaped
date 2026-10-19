@@ -118,6 +118,7 @@ internal class HttpRangeReader(
     }
 
     class HttpStatusException(val code: Int, val tooMany: Boolean) : IOException("HTTP $code")
+    class ReadCancelledException : IOException("preview request cancelled")
 
     private fun readFrom(target: String, offset: Long, length: Int, dst: ByteBuffer): Int {
         val builder = Request.Builder().url(target)
@@ -183,6 +184,7 @@ internal class HttpRangeReader(
                 return n
             }
         } catch (e: IOException) {
+            if (closed || cancelEpoch.get() != cancels0) throw ReadCancelledException()
             val refusal = ConnectionLedger.refusalOf(e) ?: (e as? HttpStatusException)?.let {
                 when {
                     it.tooMany -> Refusal.TOO_MANY
