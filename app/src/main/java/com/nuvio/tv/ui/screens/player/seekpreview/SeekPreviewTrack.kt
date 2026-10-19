@@ -52,6 +52,15 @@ interface SeekPreviewTrack {
      */
     suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? = thumbnailFor(positionMs)
 
+    /** Adjacent distinct frame; generated tracks use their index rather than guessing from cue windows. */
+    suspend fun neighborThumbnailFor(frame: SeekPreviewThumbnail, forward: Boolean): SeekPreviewThumbnail? {
+        val probe = if (forward) frame.cueEndMs - offsetMs else frame.cueStartMs - offsetMs - 1
+        if (probe < 0L) return null
+        return sideThumbnailFor(probe)?.takeIf {
+            if (forward) it.cueStartMs > frame.cueStartMs else it.cueStartMs < frame.cueStartMs
+        }
+    }
+
     /**
      * The playing file's keyframe nearest [positionMs] (playback timeline) when one is within
      * [toleranceMs], read from the file's own index; null when unknown. Seeking onto a keyframe
@@ -133,6 +142,12 @@ internal class HybridSeekPreviewTrack(
 
     override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
         pick(positionMs, local.sideThumbnailFor(positionMs), side = true)
+
+    override suspend fun neighborThumbnailFor(frame: SeekPreviewThumbnail, forward: Boolean): SeekPreviewThumbnail? =
+        if (frame.origin == "ORIGINAL" || frame.origin == "VERIFIED_COPY") {
+            local.neighborThumbnailFor(frame.copy(cueStartMs = frame.cueStartMs - offsetMs,
+                cueEndMs = frame.cueEndMs - offsetMs), forward)?.let(::shifted)
+        } else super<SeekPreviewTrack>.neighborThumbnailFor(frame, forward)
 
     private suspend fun pick(positionMs: Long, localThumbnail: SeekPreviewThumbnail?, side: Boolean = false): SeekPreviewThumbnail? {
         val own = localThumbnail?.let(::shifted)

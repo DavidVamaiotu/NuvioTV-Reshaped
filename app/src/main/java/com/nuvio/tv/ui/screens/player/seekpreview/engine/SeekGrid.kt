@@ -46,6 +46,29 @@ internal object SeekGrid {
         return gridMs
     }
 
+    /** Use an indexed landing only when it moves in the requested direction; preserve reachable title edges. */
+    fun landingTarget(baseMs: Long, deltaMs: Long, landingMs: Long, durationMs: Long): Long =
+        (if (if (deltaMs > 0) landingMs > baseMs else deltaMs < 0 && landingMs < baseMs) landingMs
+         else baseMs + deltaMs).coerceIn(0L, durationMs)
+
+    /** Closest stored frame strictly on one side of [frameMs]. Slot PTS are monotonic, but may repeat. */
+    fun neighborSlot(frameMs: Long, forward: Boolean, slotCount: Int, slotPtsMs: (Int) -> Long,
+                     stored: (Int) -> Boolean): Int? {
+        var low = 0
+        var high = slotCount
+        while (low < high) {
+            val middle = low + (high - low) / 2
+            val pts = slotPtsMs(middle)
+            if (if (forward) pts <= frameMs else pts < frameMs) low = middle + 1 else high = middle
+        }
+        var slot = if (forward) low else low - 1
+        while (slot in 0 until slotCount) {
+            if (slotPtsMs(slot) >= 0 && stored(slot)) return slot
+            slot += if (forward) 1 else -1
+        }
+        return null
+    }
+
     /**
      * Coverage-pass order: first the finest-stride slots around [anchorSlot] (the playback position), nearest first
      * and ahead before behind, then the whole title coarse to fine ([strides]). With [gridFirst] above 0 the sweeps

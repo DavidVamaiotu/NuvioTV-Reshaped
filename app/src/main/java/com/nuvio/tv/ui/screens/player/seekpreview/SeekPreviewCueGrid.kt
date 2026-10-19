@@ -18,7 +18,9 @@ import kotlin.math.roundToLong
  */
 data class SeekPreviewCue(
     val startMs: Long,
-    val endMs: Long
+    val endMs: Long,
+    /** Stand-ins and generated frames must not rewrite the requested seek position. */
+    val canAlignSeek: Boolean = true,
 ) {
     /** Length of the cue window; the effective scrub granularity. */
     val durationMs: Long get() = endMs - startMs
@@ -108,7 +110,7 @@ object SeekPreviewCueStepper {
     ): Long {
         val maxMs = if (durationMs > 0L) durationMs else Long.MAX_VALUE
         val free = { (fromMs + deltaMs).coerceIn(0L, maxMs) }
-        if (cue == null || !cue.isValid || !cue.represents(fromMs) || deltaMs == 0L) return free()
+        if (cue == null || !cue.canAlignSeek || !cue.isValid || !cue.represents(fromMs) || deltaMs == 0L) return free()
 
         val cueMs = cue.durationMs
         val steps = (abs(deltaMs).toDouble() / cueMs).roundToLong().coerceAtLeast(1L)
@@ -146,7 +148,7 @@ object SeekPreviewCueStepper {
         durationMs: Long,
         snap: (Long) -> Long = { it },
     ): Long? {
-        if (cue == null || !cue.isValid || pendingMs == null) return null
+        if (cue == null || !cue.canAlignSeek || !cue.isValid || pendingMs == null) return null
         if (!cue.represents(pendingMs)) return null
         // The ends of the media are destinations in their own right.
         if (pendingMs <= 0L) return null

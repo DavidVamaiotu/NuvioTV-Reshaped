@@ -110,7 +110,7 @@ fun SeekPreviewThumbnailHost(
             val covering = cachedCovering
             if (offset == cachedOffsetMs &&
                 (rev == cachedRevision || !visible) &&
-                covering != null &&
+                covering != null && covering.canAlignSeek &&
                 covering.contains(positionMs) &&
                 covering.prefersSuccessorFor(positionMs) == cachedPrefersSuccessor
             ) {
@@ -145,12 +145,13 @@ fun SeekPreviewThumbnailHost(
             // compared with, and assigned to, playback positions.
             val coveringCue = SeekPreviewCue(
                 startMs = coveringThumbnail.cueStartMs - offset,
-                endMs = coveringThumbnail.cueEndMs - offset
+                endMs = coveringThumbnail.cueEndMs - offset,
+                canAlignSeek = !coveringThumbnail.approximate && coveringThumbnail.actualFrameMs == null,
             )
 
             // A cue's frame is captured at its start, so past the halfway mark the next cue's
             // frame is the closer one.
-            val prefersSuccessor = coveringCue.prefersSuccessorFor(positionMs)
+            val prefersSuccessor = coveringCue.canAlignSeek && coveringCue.prefersSuccessorFor(positionMs)
             val successor = if (prefersSuccessor) {
                 activeTrack.sideThumbnailFor(coveringCue.endMs)
                     ?.takeIf { it.cueStartMs != coveringThumbnail.cueStartMs }
@@ -169,7 +170,8 @@ fun SeekPreviewThumbnailHost(
             val seeded = Filmstrip.around(center, previous, steps, rev, offset)
             strip = seeded
             seekPreview.onPreviewCueResolved(
-                SeekPreviewCue(center.cueStartMs - offset, center.cueEndMs - offset)
+                SeekPreviewCue(center.cueStartMs - offset, center.cueEndMs - offset,
+                    canAlignSeek = !center.approximate && center.actualFrameMs == null)
             )
             // Each step shows the next frame at once. Sliding it there lagged behind a held scrub,
             // every repeat restarting the slide, so the strip sat off centre until release.

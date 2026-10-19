@@ -246,4 +246,28 @@ class SeekPreviewCueStepperTest {
         // The snapped position is still represented by the same cue, so it settles.
         assertNull(SeekPreviewCueStepper.alignedTargetMs(cue, keyframe, 7_200_000L, snap))
     }
+    @Test fun `a stand in cannot undo a single tap or enlarge its step`() {
+        val fallback = SeekPreviewCue(60_000L, 120_000L, canAlignSeek = false)
+        for (delta in listOf(-10_000L, 10_000L)) {
+            val next = SeekPreviewCueStepper.targetMs(fallback, 80_000L, delta, duration)
+            assertEquals(80_000L + delta, next)
+            assertNull(SeekPreviewCueStepper.alignedTargetMs(fallback, next, duration))
+        }
+    }
+
+    @Test fun `repeated taps advance while the same generated frame stays on screen`() {
+        val frame = SeekPreviewCue(100_000L, 160_000L, canAlignSeek = false)
+        var target = 100_000L
+        repeat(4) {
+            val next = SeekPreviewCueStepper.targetMs(frame, target, 10_000L, duration)
+            target = SeekPreviewCueStepper.alignedTargetMs(frame, next, duration) ?: next
+        }
+        assertEquals(140_000L, target)
+        repeat(4) {
+            val next = SeekPreviewCueStepper.targetMs(frame, target, -10_000L, duration)
+            target = SeekPreviewCueStepper.alignedTargetMs(frame, next, duration) ?: next
+        }
+        assertEquals(100_000L, target)
+    }
+
 }

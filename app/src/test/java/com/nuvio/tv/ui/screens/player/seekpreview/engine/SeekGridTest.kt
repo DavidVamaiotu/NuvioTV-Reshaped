@@ -115,4 +115,50 @@ class SeekGridTest {
         assertEquals(720, gridFirst.size)
         assertEquals(plain.toSet(), gridFirst.toSet())
     }
+    @Test fun neighborsUseFrameTimesRatherThanTheTenSecondLookupSlot() {
+        // PTS 16s belongs to slot 1: probing 15.999s used to return slot 1 again.
+        val pts = longArrayOf(4_000, 16_000, 24_000, 36_000, 44_000)
+        fun neighbor(at: Long, forward: Boolean) = SeekGrid.neighborSlot(at, forward, pts.size, { pts[it] }) { true }
+        assertEquals(0, neighbor(16_000, false))
+        assertEquals(2, neighbor(16_000, true))
+        assertEquals(null, neighbor(4_000, false))
+        assertEquals(null, neighbor(44_000, true))
+    }
+
+    @Test fun sparseAndRepeatedFramesHaveDistinctOrderedNeighbors() {
+        val pts = longArrayOf(1_000, 1_000, 21_000, 21_000, 41_000, 41_000, 61_000)
+        val saved = setOf(1, 3, 6)
+        fun neighbor(at: Long, forward: Boolean) = SeekGrid.neighborSlot(at, forward, pts.size, { pts[it] }) { it in saved }
+        assertEquals(1, neighbor(21_000, false))
+        assertEquals(6, neighbor(21_000, true))
+        assertEquals(3, neighbor(61_000, false))
+        assertEquals(null, SeekGrid.neighborSlot(10_000, true, 0, { error("empty index") }) { true })
+    }
+
+    @Test fun neighborsMatchTheNearestStoredFrameOnBothSidesAcrossSparseIndexes() {
+        val random = java.util.Random(77)
+        repeat(50) {
+            var ptsMs = 0L
+            val pts = LongArray(200) { ptsMs += random.nextInt(15_000); ptsMs }
+            val saved = BooleanArray(pts.size) { random.nextBoolean() }
+            repeat(20) {
+                val target = random.nextInt(pts.last().toInt()).toLong()
+                for (forward in listOf(false, true)) {
+                    val expected = pts.indices.filter { saved[it] && if (forward) pts[it] > target else pts[it] < target }
+                        .minOfOrNull { kotlin.math.abs(pts[it] - target) }
+                    val result = SeekGrid.neighborSlot(target, forward, pts.size, { pts[it] }) { saved[it] }
+                    assertEquals(expected, result?.let { kotlin.math.abs(pts[it] - target) })
+                }
+            }
+        }
+    }
+
+    @Test fun repeatedLandingsNeverSwallowTapsAndTitleEdgesStayReachable() {
+        assertEquals(110_000L, SeekGrid.landingTarget(100_000, 10_000, 100_000, 200_000))
+        assertEquals(90_000L, SeekGrid.landingTarget(100_000, -10_000, 100_000, 200_000))
+        assertEquals(110_000L, SeekGrid.landingTarget(100_000, 10_000, 95_000, 200_000))
+        assertEquals(200_000L, SeekGrid.landingTarget(195_000, 10_000, 190_000, 200_000))
+        assertEquals(0L, SeekGrid.landingTarget(2_000, -10_000, 2_000, 200_000))
+    }
+
 }

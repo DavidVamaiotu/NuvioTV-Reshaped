@@ -32,6 +32,9 @@ internal class SessionPreviewTrack(private val tap: SeekPreviewTrack, private va
         if (local != null && !local.approximate) return local
         return range.sideThumbnailFor(positionMs) ?: local
     }
+    override suspend fun neighborThumbnailFor(frame: SeekPreviewThumbnail, forward: Boolean): SeekPreviewThumbnail? =
+        if (frame.origin == "ORIGINAL" || frame.origin == "VERIFIED_COPY") tap.neighborThumbnailFor(frame, forward)
+        else super<SeekPreviewTrack>.neighborThumbnailFor(frame, forward)
     override fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? =
         range.keyframeNear(positionMs, toleranceMs) ?: tap.keyframeNear(positionMs, toleranceMs)
     override fun noteScrubDirection(direction: Int) = tap.noteScrubDirection(direction)

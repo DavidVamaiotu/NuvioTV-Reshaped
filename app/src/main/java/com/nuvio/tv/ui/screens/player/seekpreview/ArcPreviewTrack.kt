@@ -65,12 +65,16 @@ internal class ArcPreviewTrack(
     }
     override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
         if (ownsSession()) SeekThumbnails.tileFor(positionMs)?.picture() else null
+    override suspend fun neighborThumbnailFor(frame: SeekPreviewThumbnail, forward: Boolean): SeekPreviewThumbnail? =
+        if (ownsSession()) SeekThumbnails.neighborFor(frame.actualFrameMs ?: frame.cueStartMs, forward)?.picture() else null
     override fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? =
         if (ownsSession()) SeekThumbnails.landingFor(positionMs)?.takeIf { kotlin.math.abs(it - positionMs) <= toleranceMs } else null
     fun gridStep(positionMs: Long, deltaMs: Long): Long? {
         if (!ownsSession()) return null
         val grid = SeekThumbnails.gridStep(positionMs, deltaMs) ?: return null
-        return SeekThumbnails.landingFor(grid) ?: grid
+        val landing = SeekThumbnails.landingFor(grid) ?: grid
+        // Repeated keyframes and title boundaries must never reverse or swallow a tap.
+        return SeekGrid.landingTarget(positionMs, deltaMs, landing, durationMs)
     }
     private fun SeekThumbnails.Shown.picture(): SeekPreviewThumbnail = SeekPreviewThumbnail(bitmap,
         ptsMs, minOf(durationMs, ptsMs + (SeekThumbnails.stripSpacingMs() ?: SeekThumbnails.SPACING_MS)).coerceAtLeast(ptsMs + 1),

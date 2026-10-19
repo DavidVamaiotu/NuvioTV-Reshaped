@@ -56,16 +56,17 @@ class SeekThumbnailSkipTest {
 
     @Test
     fun `a reject while the decoder loads still starts no session`() = runBlocking {
-        var asked = 0
+        var loaded = false
+        every { ThumbNative.load() } answers { loaded = true; true }
         SeekThumbnails.startWhenEligible(
             context = context,
             source = source,
             playerProvider = { player },
             pauseForPrepare = pause,
-            skipReason = { if (asked++ == 0) null else "error card" }
+            skipReason = { if (loaded) "error card" else null }
         )
 
-        assertEquals(2, asked)
+        verify(exactly = 1) { ThumbNative.load() }
         verify(exactly = 1) { MemoryGovernor.initForSession(any()) }
         verify(exactly = 0) { pause.invoke() }
         assertFalse(SeekThumbnails.pausesPlaybackWhileScrubbing())

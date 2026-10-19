@@ -148,8 +148,8 @@ internal object SeekThumbnails {
     }
 
     /**
-     * Starts a session for [source] once the player has a format and duration (waits up to 30 s).
-     * [skipReason] is asked once the duration is known; non-null means this stream gets no thumbnails.
+     * Starts a session for [source] once the player has a format and duration; cancelled with its owning track.
+     * [skipReason] is checked throughout startup; non-null means this stream gets no thumbnails.
      */
     internal suspend fun startWhenEligible(
         context: Context,
@@ -294,7 +294,7 @@ internal object SeekThumbnails {
      * A picture for the pane. [ptsMs] is its keyframe's time; [exact] is false for a nearby stand-in. [borrowed]: from
      * another release of the title, not confirmed yet.
      */
-    class Shown(
+    data class Shown(
         val bitmap: Bitmap, val ptsMs: Long, val exact: Boolean, val crop: ThumbCrop.Bars?, val borrowed: Boolean = false,
     )
 
@@ -311,6 +311,9 @@ internal object SeekThumbnails {
     fun tileFor(positionMs: Long): Shown? {
         return session?.tileFor(positionMs)
     }
+
+    /** Adjacent stored picture by actual frame time, without changing the decoding priority. */
+    fun neighborFor(frameMs: Long, forward: Boolean): Shown? = session?.neighborFor(frameMs, forward)
 
     /** Loader thread, called per video sample: should the next samples be copied? Must be cheap. */
     internal fun tapWants(timeUs: Long): Boolean = session?.tapWants(timeUs) ?: false
@@ -645,8 +648,7 @@ internal object SeekThumbnails {
         private var fetchesStopped = false
         private val diskLoadsInFlight = HashSet<Pair<String, Int>>()
         /** Last bitmap handed to the pane; shown while the exact frame loads from disk. */
-        @Volatile private var lastServed: Bitmap? = null
-        @Volatile private var lastServedSlot = -1
+        @Volatile private var lastServed: Shown? = null
         val hasSlots: Boolean get() = !ended && slotKeyframe.isNotEmpty()
         private var lastNotedMs = -1L
         private var lastNotedAt = 0L
@@ -799,7 +801,6 @@ internal object SeekThumbnails {
                 store = null
                 index = null
                 lastServed = null
-                lastServedSlot = -1
                 crop = ThumbCrop.Estimator()
                 dropBorrow()
                 known = null
@@ -2247,6 +2248,19 @@ internal object SeekThumbnails {
             return Shown(bmp, slotPtsMs(slot), exact = slot == target, crop = crop.current)
         }
 
+        fun neighborFor(frameMs: Long, forward: Boolean): Shown? {
+            val st = store ?: return null
+            val slot = SeekGrid.neighborSlot(frameMs, forward, slotKeyframe.size, ::slotPtsMs) {
+                st.has(it.toLong() * SPACING_MS * 1000L)
+            } ?: return null
+            val bitmap = st.memGet(slot.toLong() * SPACING_MS * 1000L)
+            if (bitmap == null) {
+                requestDiskLoad(st, slot)
+                return null
+            }
+            return Shown(bitmap, slotPtsMs(slot), exact = true, crop = crop.current)
+        }
+
         fun shownFor(positionMs: Long): Shown? {
             val st = store ?: return null
             if (slotKeyframe.isEmpty()) return null
@@ -2255,22 +2269,19 @@ internal object SeekThumbnails {
             // A borrowed picture only when it is nearer than our own stand-in.
             val ownGap = nearest?.let { kotlin.math.abs(it - target) } ?: Int.MAX_VALUE
             if (ownGap > 0) borrowedFor(target, within = ownGap)?.let { b ->
-                lastServed = b.bitmap
-                lastServedSlot = target
+                lastServed = b
                 return b
             }
             val slot = nearest ?: return null
             val key = slot.toLong() * SPACING_MS * 1000L
             val bmp = st.fullColourGet(key) ?: st.memGet(key)?.also { requestFullColour(st, slot) }
             if (bmp != null) {
-                lastServed = bmp
-                lastServedSlot = slot
-                return Shown(bmp, slotPtsMs(slot), exact = slot == target, crop = crop.current)
+                return Shown(bmp, slotPtsMs(slot), exact = slot == target, crop = crop.current).also { lastServed = it }
             }
             // On disk only: load it, and keep the previous picture until it lands rather than blanking the pane.
             requestDiskLoad(st, slot)
             val prev = lastServed ?: return null
-            return Shown(prev, slotPtsMs(lastServedSlot), exact = false, crop = crop.current)
+            return prev.copy(exact = false)
         }
 
         fun landingFor(targetMs: Long): Long? {

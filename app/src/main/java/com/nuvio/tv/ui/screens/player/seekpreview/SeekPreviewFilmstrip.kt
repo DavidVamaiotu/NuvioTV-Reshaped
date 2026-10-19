@@ -92,7 +92,6 @@ internal class Filmstrip(
  */
 internal suspend fun SeekPreviewTrack.fillFilmstrip(strip: Filmstrip, refreshAll: Boolean): Filmstrip {
     val frames = strip.frames.toMutableList()
-    val offset = strip.offsetMs
     for (direction in intArrayOf(1, -1)) {
         var from: SeekPreviewThumbnail? = strip.center ?: break
         for (distance in 1..FilmstripSideFrames) {
@@ -107,12 +106,7 @@ internal suspend fun SeekPreviewTrack.fillFilmstrip(strip: Filmstrip, refreshAll
             val frame = if (known != null && !refreshAll) {
                 known
             } else {
-                val probe = if (direction > 0) edge.cueEndMs - offset else edge.cueStartMs - offset - 1
-                val found = sideThumbnailFor(probe)?.takeIf { candidate ->
-                    // No progress means the title ends (or starts) here.
-                    if (direction > 0) candidate.cueStartMs > edge.cueStartMs else candidate.cueStartMs < edge.cueStartMs
-                }
-                FilmstripFrame(found)
+                FilmstripFrame(neighborThumbnailFor(edge, forward = direction > 0))
             }
             frames[index] = frame
             from = frame.thumbnail
