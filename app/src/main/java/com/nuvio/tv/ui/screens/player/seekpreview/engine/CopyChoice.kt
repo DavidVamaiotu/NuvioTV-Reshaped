@@ -41,12 +41,23 @@ internal class CopyOffer(
     val text: String,
 )
 
-/** Which copy of a 4K title, or of a title playing from Usenet, its thumbnails are made from. */
+/** Chooses a cheaper preview source without changing the playing source. */
 internal object CopyChoice {
     /** Copies checked by pictures before falling back to the 4K file. */
     const val MAX_TRIES = 2
     private val CONTAINERS = setOf("mkv", "mp4", "m4v")
     private val HEIGHTS = listOf(1080, 720)
+    private val READY_KINDS = setOf(CopyKind.SERVER, CopyKind.LINK, CopyKind.DEBRID)
+
+    fun eligible(playingHeight: Int, usenet: Boolean, memoryConstrained: Boolean): Boolean =
+        usenet || playingHeight >= 2160 || memoryConstrained && playingHeight == 1080
+
+    /** Ordinary HD playback only borrows an actually cheaper, ready source. Usenet keeps its own policy. */
+    fun cheaperHd(playingHeight: Int, usenet: Boolean): Boolean = playingHeight == 1080 && !usenet
+
+    fun cheaperHdVideo(video: VideoTrack): Boolean =
+        heightClass(video.width, video.height) == 720 && video.codec == VideoCodec.H264 &&
+            video.bitDepth <= 8 && video.dolbyVision == null && video.colour.transfer != 16 && video.colour.transfer != 18
 
     enum class Edition(val word: Regex) {
         EXTENDED(Regex("(?<![a-z])extended(?![a-z])")),
@@ -123,6 +134,10 @@ internal object CopyChoice {
      */
     fun rejection(offer: CopyOffer, playingText: String, ownMs: Long, maxHeight: Int = 2160, usenet: Boolean = false): String? {
         if (usenet && offer.kind == CopyKind.USENET) return "another Usenet link"
+        if (cheaperHd(maxHeight, usenet)) {
+            if (offer.kind !in READY_KINDS) return "not an already available HD copy"
+            if (offer.height != 720 || offer.codec != CopyCodec.H264 || offer.hdr) return "HD previews need a 720p SDR H.264 copy"
+        }
         offer.container?.let { if (it !in CONTAINERS) return "container $it" }
         when {
             offer.height == 0 -> return "resolution not stated"

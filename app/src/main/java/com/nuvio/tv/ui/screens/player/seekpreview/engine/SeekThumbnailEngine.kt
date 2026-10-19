@@ -512,7 +512,7 @@ internal object SeekThumbnails {
 
         private class Decoded(
             val bitmap: Bitmap?, val decodeMs: Long, val renderMs: Long, val cold: Boolean, val width: Int, val height: Int,
-            val reason: String, val error: Throwable? = null,
+            val reason: String, val error: Throwable? = null, val memoryRefusal: GovernorVerdict? = null,
         )
 
         /** A keyframe handed to a decode lane; the worker stores and logs it once [result] is in. */
@@ -622,6 +622,7 @@ internal object SeekThumbnails {
         private val wakeups = Channel<Unit>(Channel.CONFLATED)
         private val workBudget = PreviewWorkBudget(MemoryGovernor.isLowRam)
         private val compactGate = PreviewCompactGate()
+        private val decodeGate = PreviewSessionDecodeGate()
         private val rgb565 = runCatching { PreviewPreferences.rgb565(context) }.getOrDefault(true)
         @Volatile private var store: ThumbStore? = null
         @Volatile private var index: MediaIndex? = null
@@ -1435,8 +1436,7 @@ internal object SeekThumbnails {
                     }
                     latticeLogged = true
                     latticeFinished = true
-                    latticeComplete = lattice.isNotEmpty() &&
-                        lattice.count { st.has(it.toLong() * SPACING_MS * 1000L) }.toLong() * 100 >= lattice.size.toLong() * 97
+                    latticeComplete = lattice.isNotEmpty() && lattice.all { st.has(it.toLong() * SPACING_MS * 1000L) }
                     if (latticeComplete) st.markComplete(lattice.map { it.toLong() * SPACING_MS * 1000L })
                     bumpTick()                            // hides the paused progress hint
                     Log.i(TAG, "lattice done: slots=${lattice.size} requests=$latticeRequests/$latticeMaxRequests " +
@@ -1520,7 +1520,7 @@ internal object SeekThumbnails {
             latticeRequests >= latticeMaxRequests || (reader?.requests ?: 0) >= hardMaxRequests ||
                 latticeBytes >= (if (fourK) LATTICE_4K_MAX_BYTES else LATTICE_MAX_BYTES)
 
-        /** P0 only waits out a rebuffer and rate limits; P1/P2 also need a healthy buffer. False = re-plan. */
+        /** Small devices also pace foreground work against playback health. False = re-plan. */
         private suspend fun awaitGates(priority: Int, st: ThumbStore, slot: Int): Boolean {
             val bufferGate = PreviewBufferGate(GATE_BUFFER_AHEAD_MS)
             var notedDecodeWait = false
@@ -1588,7 +1588,7 @@ internal object SeekThumbnails {
                     continue
                 }
                 decodeOpen = true
-                if (priority == 0 || !ps.isPlaying) return true
+                if (!ps.isPlaying || priority == 0 && !MemoryGovernor.isLowRam) return true
                 if (prioritySlot >= 0 && prioritySlot != entryPriority) return false
                 val workWait = workBudget.remaining(now)
                 if (workWait > 0) { awaitWakeup(minOf(workWait, 500L)); continue }
@@ -1692,7 +1692,16 @@ internal object SeekThumbnails {
             // ATOMIC: the lane is always released, even when the session ends before the decode starts.
             val result = decodeScope.async(start = CoroutineStart.ATOMIC) {
                 try {
-                    decodeOn(lane, au, idx, compactHd = verdict.compactHd || late?.compactHd == true)
+                    decodeGate.run(serial = MemoryGovernor.isLowRam) {
+                        // The copy may have decoded while this lane waited; admit against current headroom.
+                        val admission = if (MemoryGovernor.isLowRam) MemoryGovernor.allow(tier,
+                            decoderWarm = lane.decoder.warm, funded = funded, compactHd = !fourK) else null
+                        if (admission != null && (!admission.allowed || admission.compactHd && !verdict.compactHd)) {
+                            lane.decoder.close()
+                            Decoded(null, 0L, 0L, false, 0, 0, "", memoryRefusal = admission)
+                        } else decodeOn(lane, au, idx, compactHd = verdict.compactHd || late?.compactHd == true ||
+                            admission?.compactHd == true || MemoryGovernor.isLowRam && copy?.ended == false)
+                    }
                 } catch (t: Throwable) {
                     Decoded(null, 0L, 0L, false, 0, 0, "", error = t)
                 } finally {
@@ -1812,6 +1821,11 @@ internal object SeekThumbnails {
 
         private suspend fun finishDecode(job: DecodeJob): Outcome {
             val d = job.result.getCompleted()
+            d.memoryRefusal?.let {
+                attempts.postponed(job.kf)
+                return deferForMemory(it, MemoryGovernor.tierFor(job.idx.video.width, job.idx.video.height),
+                    job.slot, job.priority, decodeJobs.size, funded = false, afterFetch = true)
+            }
             d.error?.let {
                 if (it !is OutOfMemoryError) throw it
                 stopForMemory("out of memory decoding")
@@ -2632,7 +2646,7 @@ internal object SeekThumbnails {
             if (now - copyHoldSince > COPY_STALL_HOLD_MS) {
                 if (!copyHoldReleased) {
                     copyHoldReleased = true
-                    Log.i(COPY_TAG, "no copy progress in ${COPY_STALL_HOLD_MS / 60_000} min - the 4K pass carries on")
+                    Log.i(COPY_TAG, "no copy progress in ${COPY_STALL_HOLD_MS / 60_000} min - original previews carry on")
                 }
                 return false
             }
@@ -2712,12 +2726,14 @@ internal object SeekThumbnails {
         }
 
         /**
-         * A 4K or Usenet title with an incomplete store, no other release in use and no server thumbnails: try a copy.
+         * A 4K/Usenet title, or low-RAM 1080p playback, with an incomplete store: try a cheaper copy.
          * A Usenet title starts at once, also behind the generating screen.
          */
         private fun maybeStartCopy(idx: MediaIndex, st: ThumbStore) {
             if (!memoryStop.allowsSideWork) return
-            if (copyTried || !copyAllowed || !(fourK || usenet) || !source.identityExact) return
+            val playingHeight = CopyChoice.heightClass(idx.video.width, idx.video.height)
+            if (copyTried || !copyAllowed || !source.identityExact ||
+                !CopyChoice.eligible(playingHeight, usenet, MemoryGovernor.isLowRam)) return
             val sources = source.copySources ?: return
             if (afterPlayback || ended || (prepareStage in 1..4 && !usenet) || borrow != null || slotKeyframe.isEmpty()) return
             copyTried = true
@@ -2742,6 +2758,7 @@ internal object SeekThumbnails {
                 screenUp = { usenet && prepareStage in 1..4 },
                 workBudget = workBudget,
                 compactGate = compactGate,
+                decodeGate = decodeGate,
             ).also { pass ->
                 pendingPriorityMs.takeIf { it >= 0 }?.let(pass::notePriority)
                 pass.start()

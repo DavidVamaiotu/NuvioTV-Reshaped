@@ -14,6 +14,49 @@ class CopyChoiceTest {
     private val ownMs = 7_200_000L
     private val playing = "Film.2019.2160p.UHD.BluRay.REMUX.HDR.HEVC.TrueHD-GRP"
 
+    @Test fun lowMemoryHdPlaybackCanDiscoverCopiesWithoutExpandingOtherHdWork() {
+        assertTrue(CopyChoice.eligible(1080, usenet = false, memoryConstrained = true))
+        assertFalse(CopyChoice.eligible(1080, usenet = false, memoryConstrained = false))
+        assertFalse(CopyChoice.eligible(720, usenet = false, memoryConstrained = true))
+        assertTrue(CopyChoice.eligible(2160, usenet = false, memoryConstrained = false))
+        assertTrue(CopyChoice.eligible(720, usenet = true, memoryConstrained = true))
+    }
+
+    @Test fun ordinaryHdOnlyBorrowsAnAvailable720pSdrH264Copy() {
+        val hd = "Film.2019.1080p.WEB-DL.H264-GRP"
+        fun rejected(o: CopyOffer) = CopyChoice.rejection(o, hd, ownMs, maxHeight = 1080)
+        for (kind in listOf(CopyKind.SERVER, CopyKind.LINK, CopyKind.DEBRID)) {
+            assertNull(rejected(offer("720", height = 720, kind = kind)))
+        }
+        assertNotNull(rejected(offer("same resolution")))
+        assertNotNull(rejected(offer("unknown codec", height = 720, codec = CopyCodec.UNKNOWN)))
+        assertNotNull(rejected(offer("hevc", height = 720, codec = CopyCodec.HEVC)))
+        assertNotNull(rejected(offer("hdr", height = 720, hdr = true)))
+        for (kind in listOf(CopyKind.TORBOX_ADD, CopyKind.PREMIUMIZE, CopyKind.USENET)) {
+            assertNotNull(rejected(offer("extra work", height = 720, kind = kind)))
+        }
+        assertNotNull(rejected(offer("edition", height = 720, text = "Film Extended 720p")))
+        assertNotNull(rejected(offer("duration", height = 720, durationMs = ownMs + 5_000)))
+        // The existing Usenet same-resolution/codec policy is separate.
+        assertNull(CopyChoice.rejection(offer("usenet fallback", codec = CopyCodec.HEVC), hd, ownMs,
+            maxHeight = 1080, usenet = true))
+    }
+
+    @Test fun parsedCopyMustActuallyBeCheapEvenWhenOfferMetadataSays720p() {
+        fun video(width: Int = 1280, height: Int = 720, codec: VideoCodec = VideoCodec.H264,
+                  depth: Int = 8, transfer: Int = 1, dv: DolbyVisionConfig? = null) =
+            VideoTrack(codec, width, height, 0.0, 4, ByteArray(0), depth,
+                ContainerColour(transfer = transfer), dv, 1L)
+        assertTrue(CopyChoice.cheaperHdVideo(video()))
+        assertTrue(CopyChoice.cheaperHdVideo(video(height = 536)))
+        assertFalse(CopyChoice.cheaperHdVideo(video(width = 1920, height = 1080)))
+        assertFalse(CopyChoice.cheaperHdVideo(video(codec = VideoCodec.HEVC)))
+        assertFalse(CopyChoice.cheaperHdVideo(video(depth = 10)))
+        assertFalse(CopyChoice.cheaperHdVideo(video(transfer = 16)))
+        assertFalse(CopyChoice.cheaperHdVideo(video(transfer = 18)))
+        assertFalse(CopyChoice.cheaperHdVideo(video(dv = DolbyVisionConfig(8, 2, false))))
+    }
+
     @Test fun smallDevicesPreferTheCheaperDecodeWithoutRelaxingSourceSafety() {
         val choices = listOf(offer("1080", height = 1080), offer("720", height = 720),
             offer("hevc", height = 720, codec = CopyCodec.HEVC), offer("added", height = 720, kind = CopyKind.TORBOX_ADD))
