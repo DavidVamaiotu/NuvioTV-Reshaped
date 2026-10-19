@@ -1,2 +1,5 @@
-- Added “Only show sync failures” in the Nuvio Reshaped settings. It hides AutoSync and AudioSync progress and success messages, including plain toasts when bubbles are disabled.
-- Loading bubbles now hide after 15 seconds while syncing continues. They return for success or failure; progress updates do not restart the timer. Each new sync run gets a fresh loading window.
+- Seek previews now use Arc's adaptive generation, warm decoder reuse, preparation coverage and next-episode pre-generation.
+- Preview scheduling stays isolated behind feature-owned playback and buffer interfaces, with stronger player/source handover and manual-pause handling.
+- Memory-bounded thumbnail caches, reusable native buffers and safer HTTP range requests and redirects improve resource handling and reliability.
+- Existing server thumbnails, Seekr and segmented-stream capture remain integrated. Alternate-copy previews use ready or already cached playable links.
+- Automated preview tests and four-ABI debug builds passed. Please report seek responsiveness, playback stability and memory behavior on low-memory TVs.

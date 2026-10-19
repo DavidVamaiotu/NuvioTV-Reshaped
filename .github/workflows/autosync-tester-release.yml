@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Port quieter AutoSync bubbles to tester and release'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Trigger Arc seek preview tester release'
     runs-on: ubuntu-latest
 
     steps:
