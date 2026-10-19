@@ -227,8 +227,11 @@ internal class ThumbStore private constructor(
     private class Entry(val offset: Long, val length: Int, val keyframePtsUs: Long)
 
     private val entries = HashMap<Long, Entry>()
-    private fun bytesForFrames(frames: Int): Int = frames.coerceAtLeast(0) * ThumbGeometry.MAX_WIDTH *
-        (ThumbGeometry.MAX_WIDTH * 3 / 4) * if (rgb565) 2 else 4
+    private fun bytesForFrames(frames: Int): Int {
+        val requested = frames.coerceAtLeast(0) * ThumbGeometry.MAX_WIDTH *
+            (ThumbGeometry.MAX_WIDTH * 3 / 4) * if (rgb565) 2 else 4
+        return if (MemoryGovernor.isLowRam) minOf(requested, 4 * 1024 * 1024) else requested
+    }
     private val mem = object : LruCache<Long, Bitmap>(bytesForFrames(memFrames)) {
         override fun sizeOf(key: Long, value: Bitmap): Int = value.allocationByteCount.coerceAtLeast(1)
     }

@@ -43,6 +43,7 @@ internal class ArcPreviewTrack(
     }
     fun start() {
         if (closed.get() || !started.compareAndSet(false, true)) return
+        PreviewDiagnostics.note("background generation scheduled")
         scope.launch {
             try {
                 SeekThumbnails.startWhenEligible(appContext,
@@ -84,6 +85,7 @@ internal class ArcPreviewTrack(
     override fun wantsKeyframe(timeUs: Long) = ownsSession() && SeekThumbnails.tapAccepts(timeUs)
     override fun mayWantKeyframesNear(timeUs: Long) = ownsSession() && (SeekThumbnails.tapWants(timeUs) || SeekThumbnails.tapAccepts(timeUs))
     override fun onKeyframe(format: Format, timeUs: Long, data: ByteArray, offset: Int, size: Int) {
+        if (MemoryGovernor.isLowRam && size > 2 * 1024 * 1024) return
         if (wantsKeyframe(timeUs)) SeekThumbnails.tapOffer(timeUs, data.copyOfRange(offset, offset + size))
     }
     override fun close() = close(afterPlayback = false)

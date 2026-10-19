@@ -28,15 +28,21 @@ internal class ArcPreviewAdapter(controller: PlayerRuntimeController, source: Lo
     private data class PlaybackBinding(val player: WeakReference<ExoPlayer>, val control: WeakReference<DefaultLoadControl>)
     @Volatile private var binding: PlaybackBinding? = null
     fun player(): PreviewPlayer? {
-        val c = owner.get()?.takeIf { it.currentStreamUrl == sourceKey && it.hasRenderedFirstFrame } ?: return null
-        val player = c._exoPlayer ?: return null
-        val control = c._loadControl ?: return null
+        val c = owner.get() ?: return unavailable("player closed")
+        if (c.currentStreamUrl != sourceKey) return unavailable("source changed")
+        if (!c.hasRenderedFirstFrame) return unavailable("first video frame")
+        val player = c._exoPlayer ?: return unavailable("ExoPlayer instance")
+        val control = c._loadControl ?: return unavailable("buffer control")
         val known = binding
         if (known == null) binding = PlaybackBinding(WeakReference(player), WeakReference(control))
-        else if (known.player.get() !== player || known.control.get() !== control) return null
+        else if (known.player.get() !== player || known.control.get() !== control) return unavailable("player rebuilt")
         return PlayerView(player) {
             owner.get()?.let { !it.userPausedManually && it.currentStreamUrl == sourceKey && it._exoPlayer === player } == true
         }
+    }
+    private fun unavailable(reason: String): PreviewPlayer? {
+        PreviewDiagnostics.note("waiting for player: $reason")
+        return null
     }
     fun reserve(): PlaybackBufferReserve? {
         val c = owner.get()?.takeIf { it.currentStreamUrl == sourceKey } ?: return null

@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Fix preview load-control delegation and release tester'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Fix background preview startup and low-RAM limits; release tester'
     runs-on: ubuntu-latest
 
     steps:

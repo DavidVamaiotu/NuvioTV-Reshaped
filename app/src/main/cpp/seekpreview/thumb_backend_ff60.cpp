@@ -40,7 +40,7 @@ bool load_symbols(Api &api, char *version, size_t n) {
         LOGW("ff60: dlopen libmediainfo.so failed: %s", dlerror());
         return false;
     }
-    if (!resolve_all(api, &h, 1)) return false;
+    if (!resolve_all(api, &h, 1)) { dlclose(h); return false; }
     snprintf(version, n, "libmediainfo FFmpeg 6.0 (avcodec %d.%d.%d headers)",
              LIBAVCODEC_VERSION_MAJOR, LIBAVCODEC_VERSION_MINOR, LIBAVCODEC_VERSION_MICRO);
     return true;

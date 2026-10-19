@@ -55,7 +55,9 @@ internal fun DebugLogQrDialog(onDismiss: () -> Unit) {
                     } else {
                         // Where AutoSyncDebugLog saves its reports.
                         val reports = File(context.cacheDir, "autosync-debug")
-                        val server = DebugLogServer.startOnAvailablePort(reports) { SyncLog.text() }
+                        val server = DebugLogServer.startOnAvailablePort(reports,
+                            audioSyncLog = SyncLog::text,
+                            previewLog = { com.nuvio.tv.ui.screens.player.seekpreview.engine.previewDiagnosticReport(context.applicationContext) })
                         running = server
                         if (server == null) {
                             DebugLogQrState(null, null, context.getString(R.string.error_server_ports_unavailable))

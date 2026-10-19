@@ -1,3 +1,4 @@
-- Fixed playback failing with “getBackBufferDurationUs not implemented” after the Arc seek-preview update.
-- The preview buffer wrapper now explicitly forwards Media3 lifecycle, back-buffer, playback-start and preloading callbacks to the original player buffering control. Preview memory reservations and loading coordination remain active.
-- Added regression tests against the bundled player library, including preservation of configured back buffers, runtime updates and preview loading yields.
+- Preview generation can recover from late player readiness and transient native-runtime loading failures without blocking playback. A full but deliberately small playback buffer no longer leaves background generation waiting for unreachable buffer thresholds. Optional preparation remains off by default.
+- On low-RAM TVs, original generation is limited to one decoder, one range fetch and two raw buffers, with a 4 MB image cache. Large playback-tap copies and full saved-file preloading are reduced, and decoder headroom checks are more conservative for high-bitrate movies. Unknown or changed resolutions cannot enter the wrong decoding tier.
+- Added a bounded Seek preview diagnostics report to the existing phone QR log page. On Android 11 or later it also includes recent app exit reasons and memory measurements, helping distinguish low-memory exits from Java or native crashes.
+- Startup, memory/concurrency and native checks are included in tester validation. Physical-device testing is still required for the reported blank previews and high-bitrate crash.

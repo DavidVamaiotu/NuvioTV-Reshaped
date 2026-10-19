@@ -16,6 +16,7 @@ internal class DebugLogServer(
     port: Int,
     private val reportDir: File,
     private val audioSyncLog: () -> String,
+    private val previewLog: () -> String,
 ) : NanoHTTPD(port) {
 
     val token: String = newToken()
@@ -28,6 +29,7 @@ internal class DebugLogServer(
         return when {
             uri == pagePath || uri == "/$token" -> html(page())
             uri == "$filePrefix$AUDIO_SYNC_LOG" -> text(AUDIO_SYNC_LOG, audioSyncLog())
+            uri == "$filePrefix$PREVIEW_LOG" -> text(PREVIEW_LOG, previewLog())
             uri.startsWith(filePrefix) -> reports().firstOrNull { it.name == uri.removePrefix(filePrefix) }
                 ?.let { file -> runCatching { text(file.name, file.readText()) }.getOrNull() }
                 ?: newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
@@ -80,6 +82,8 @@ border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.04);color:
   <p class="subtitle">Tap a log to download it, then send the file with your report.</p>
   <h2>AutoSync</h2>
   $rows
+  <h2>Seek previews</h2>
+  <a class="row" href="${h(filePrefix + PREVIEW_LOG)}" download="$PREVIEW_LOG"><span>Seek preview diagnostics</span></a>
   <h2>Audio sync</h2>
   <a class="row" href="${h(filePrefix + AUDIO_SYNC_LOG)}" download="$AUDIO_SYNC_LOG"><span>Audio sync log</span></a>
 </div>
@@ -99,6 +103,7 @@ border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.04);color:
         newFixedLengthResponse(Response.Status.FORBIDDEN, MIME_PLAINTEXT, "Forbidden").apply { closeConnection(true) }
 
     companion object {
+        private const val PREVIEW_LOG = "seek-preview-log.txt"
         private const val AUDIO_SYNC_LOG = "audio-sync-log.txt"
         private const val MAX_REPORTS = 10
         /** After the phone entry pages (8120+), so they never collide. */
@@ -111,10 +116,10 @@ border:1px solid rgba(255,255,255,0.14);background:rgba(255,255,255,0.04);color:
             return bytes.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
         }
 
-        fun startOnAvailablePort(reportDir: File, audioSyncLog: () -> String): DebugLogServer? {
+        fun startOnAvailablePort(reportDir: File, audioSyncLog: () -> String, previewLog: () -> String): DebugLogServer? {
             for (port in START_PORT until START_PORT + MAX_ATTEMPTS) {
                 try {
-                    return DebugLogServer(port, reportDir, audioSyncLog).apply { start(SOCKET_READ_TIMEOUT, false) }
+                    return DebugLogServer(port, reportDir, audioSyncLog, previewLog).apply { start(SOCKET_READ_TIMEOUT, false) }
                 } catch (_: Exception) {
                 }
             }

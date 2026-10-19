@@ -21,8 +21,9 @@ internal object ThumbFetchLanes {
         rateLimited: Boolean,
         smallBox4K: Boolean,
         ledgerCap: Int = MAX,
+        memoryConstrained: Boolean = false,
     ): Int {
-        if (rateLimited) return 1
+        if (rateLimited || memoryConstrained) return 1
         val lanes = when (phase) {
             FetchPhase.PLAYER_CLOSED, FetchPhase.GENERATING -> MAX
             // Small boxes pace 4K decodes while playing: a second fetch would only wait.

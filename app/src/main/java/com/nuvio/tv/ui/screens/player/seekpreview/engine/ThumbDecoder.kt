@@ -39,7 +39,7 @@ internal object ThumbNative {
             try {
                 if (!libraryLoaded) { System.loadLibrary("reshaped_preview"); libraryLoaded = true }
                 if (nativeInit()) { ready = true; return true }
-            } catch (_: LinkageError) { }
+            } catch (error: LinkageError) { PreviewDiagnostics.note("native load failed: ${error.message}") }
             retry.failed(now)
             return false
         }
@@ -134,6 +134,7 @@ internal class FfmpegThumbDecoder : Closeable {
                 track.codec.ffmpegName, track.extradata.takeIf { it.isNotEmpty() }, track.width, track.height, threads,
             )
             if (handle == 0L) {
+                PreviewDiagnostics.note("decoder unavailable: ${track.codec.ffmpegName}")
                 Log.w("ThumbDecode", "no ${track.codec.ffmpegName} decoder in this FFmpeg")
                 return false
             }
@@ -145,6 +146,7 @@ internal class FfmpegThumbDecoder : Closeable {
 
     private fun frame(r: Int): DecodedFrame? {
         if (r < 0) {
+            PreviewDiagnostics.note("decode failed: $r")
             Log.w("ThumbDecode", "decode failed: $r")
             return null
         }
@@ -180,6 +182,7 @@ internal class FfmpegThumbDecoder : Closeable {
             decision.peakNits, rowSkip,
         )
         if (r < 0) {
+            PreviewDiagnostics.note("render failed: $r")
             Log.w("ThumbDecode", "render failed: $r")
             bmp.recycle()
             return null

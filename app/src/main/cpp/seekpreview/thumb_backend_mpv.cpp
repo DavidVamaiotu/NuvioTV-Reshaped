@@ -39,7 +39,12 @@ bool load_symbols(Api &api, char *version, size_t n) {
     // Dependency order, so each DT_NEEDED resolves to the instance already loaded.
     static const char *const kLibs[] = {"libavutil.so", "libswresample.so", "libavcodec.so", "libswscale.so"};
     constexpr int kCount = sizeof kLibs / sizeof kLibs[0];
-    void *handles[kCount] = {};
+    struct Handles {
+        void *values[kCount] = {};
+        bool retained = false;
+        ~Handles() { if (!retained) for (void *h : values) if (h) dlclose(h); }
+    } opened;
+    auto &handles = opened.values;
     for (int i = 0; i < kCount; i++) {
         handles[i] = dlopen(kLibs[i], RTLD_NOW | RTLD_LOCAL);
         if (!handles[i]) {
@@ -66,6 +71,7 @@ bool load_symbols(Api &api, char *version, size_t n) {
     if (!resolve_all(api, handles, kCount)) return false;
     snprintf(version, n, "avcodec %u.%u.%u avutil %u.%u.%u swscale %u.%u.%u", cv >> 16, (cv >> 8) & 0xff, cv & 0xff,
              uv >> 16, (uv >> 8) & 0xff, uv & 0xff, sv >> 16, (sv >> 8) & 0xff, sv & 0xff);
+    opened.retained = true; // Keep successful function pointers backed by loaded libraries.
     return true;
 }
 }  // namespace

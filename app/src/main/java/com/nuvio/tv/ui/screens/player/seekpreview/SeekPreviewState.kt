@@ -145,6 +145,8 @@ class SeekPreviewState internal constructor(
         }
             .distinctUntilChanged()
             .transformLatest<PreviewLocalRequest, SeekPreviewTrack?> { (durationMs, enabled, source) ->
+                com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewDiagnostics.note(
+                    "local preview request: enabled=$enabled source=${source != null} duration=$durationMs")
                 if (!enabled || source == null || durationMs <= 0L) {
                     emit(null)
                     return@transformLatest

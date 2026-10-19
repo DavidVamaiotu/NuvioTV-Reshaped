@@ -12,6 +12,7 @@ internal class ThumbDecodeLanes(
     private val fourK: Boolean,
     processors: Int,
     phase: FetchPhase,
+    private val memoryConstrained: Boolean = false,
 ) {
     class Change(val from: Int, val to: Int, val reason: String, val medianMs: Long)
 
@@ -44,6 +45,7 @@ internal class ThumbDecodeLanes(
     private var blockedUntil = 0
 
     fun ceiling(p: FetchPhase = phase): Int {
+        if (memoryConstrained) return 1
         val spare = (processors - 1).coerceAtLeast(1)
         return when (p) {
             FetchPhase.PLAYBACK -> minOf(spare, if (strongBox || !fourK) 2 else 1)
@@ -51,7 +53,7 @@ internal class ThumbDecodeLanes(
         }
     }
 
-    private fun startLanes(): Int = if (!strongBox && fourK) 1 else 2
+    private fun startLanes(): Int = if (memoryConstrained || !strongBox && fourK) 1 else 2
 
     fun onPhase(p: FetchPhase): Change? {
         if (p == phase) return null

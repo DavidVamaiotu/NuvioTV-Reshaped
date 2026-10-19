@@ -187,24 +187,26 @@ internal object SeekThumbnails {
         var width = 0
         var height = 0
         var video = ""
-        var ready = false
-        while (SystemClock.elapsedRealtime() - t0 < 30_000L) {
+        var waitingLogged = false
+        while (true) {
+            skipReason()?.let { PreviewDiagnostics.note("startup cancelled: $it"); return }
             val p = playerProvider()
             val fmt = p?.videoFormat
-            if (p != null && fmt != null && p.duration != C.TIME_UNSET && p.duration > 0) {
+            if (p != null && fmt != null && fmt.width > 0 && fmt.height > 0 &&
+                p.duration != C.TIME_UNSET && p.duration > 0) {
                 width = fmt.width
                 height = fmt.height
                 video = GiveUpNotes.videoNote(fmt.width, fmt.height, fmt.sampleMimeType, fmt.codecs,
                     fmt.colorInfo?.colorTransfer ?: Format.NO_VALUE)
-                ready = true
                 break
             }
-            delay(500L)
+            if (!waitingLogged && SystemClock.elapsedRealtime() - t0 >= 30_000L) {
+                waitingLogged = true
+                PreviewDiagnostics.note("waiting for playback format/duration; generation remains scheduled")
+            }
+            delay(if (waitingLogged) 1_000L else 500L)
         }
-        if (!ready) {
-            Log.i(TAG, "skip: ExoPlayer format/duration not available in time")
-            return
-        }
+        PreviewDiagnostics.note("playback ready: ${width}x$height")
         fun skipped(): Boolean = skipReason()?.also { Log.i(TAG, "skip: $it") } != null
         if (skipped()) return
         // Decide on 4K before any network access: a 4K remux's index alone can be several MB.
@@ -214,10 +216,12 @@ internal object SeekThumbnails {
             return
         }
         // Loading the native library takes 150-440 ms: never on the main thread.
-        if (!withContext(Dispatchers.IO) { ThumbNative.load() }) {
-            Log.i(TAG, "skip: native thumbnail decoder unavailable (${ThumbNative.state()})")
-            return
+        while (!withContext(Dispatchers.IO) { ThumbNative.load() }) {
+            skipReason()?.let { return }
+            PreviewDiagnostics.note("native decoder waiting: ${ThumbNative.state()}")
+            delay(5_000L) // ThumbNative owns the bounded retry backoff; playback keeps running.
         }
+        PreviewDiagnostics.note("native decoder ready")
         stopSession()
         awaitStoppedSession()          // one writer per store
         withContext(Dispatchers.IO) { MemoryGovernor.initForSession(context) }
@@ -225,6 +229,7 @@ internal object SeekThumbnails {
         if (skipped()) return
         val s = Session(context.applicationContext, source, playerProvider, reserveProvider, fourK, pauseForPrepare, video)
         synchronized(sessionLock) { session = s }
+        PreviewDiagnostics.note("memory limits: lowRam=${MemoryGovernor.isLowRam} strong=${MemoryGovernor.isStrongBox}")
         s.start()
     }
 
@@ -379,6 +384,7 @@ internal object SeekThumbnails {
         val durationMs: Long,
         val failed: Boolean = false,
         val playWhenReady: Boolean = isPlaying,
+        val loading: Boolean = false,
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -624,9 +630,10 @@ internal object SeekThumbnails {
         private val decodeJobs = LinkedHashMap<Int, DecodeJob>()
         private val laneCtl = ThumbDecodeLanes(
             MemoryGovernor.isStrongBox, fourK, Runtime.getRuntime().availableProcessors(), FetchPhase.PLAYBACK,
+            memoryConstrained = MemoryGovernor.isLowRam,
         )
         /** Raw keyframe reads land here, outside the Java heap; sized to the decode lanes. */
-        private val buffers = ThumbBufferPool(ThumbBufferPool.limitFor(laneCtl.lanes, fourK, MemoryGovernor.isStrongBox))
+        private val buffers = ThumbBufferPool(ThumbBufferPool.limitFor(laneCtl.lanes, fourK, MemoryGovernor.isStrongBox, MemoryGovernor.isLowRam))
         @Volatile private var laneTrimRequested = false
         private var laneClockAt = 0L
         private var laneHeldUntil = 0L
@@ -688,6 +695,7 @@ internal object SeekThumbnails {
                     throw ce
                 } catch (t: Throwable) {
                     giveUp.ended(t)
+                    PreviewDiagnostics.note("generation ended: ${t.javaClass.simpleName}: ${t.message}")
                     Log.w(TAG, "session ended: ${giveUp.endedBy}")
                 } finally {
                     withContext(NonCancellable) { finish() }
@@ -759,13 +767,16 @@ internal object SeekThumbnails {
                     }
                 }
             }
+            PreviewDiagnostics.note("waiting for playback buffer before index")
             awaitIndexGate()
+            PreviewDiagnostics.note("starting background header download")
             val r = HttpRangeReader(source.url, source.headers, thumbnailHttpClient(source.headers),
                 slotWaitMs = ConnectionLedger.START_SLOT_WAIT_MS)
             reader = r
             val tIndex0 = SystemClock.elapsedRealtime()
             val head = startRead { r.read(0, HEAD_BYTES) }
             val fileLength = r.totalLength
+            PreviewDiagnostics.note("header downloaded: ${head.size} bytes")
             ConnectionLedger.app.notePlayingUrl(r.resolvedUrl)
             if (!usenet && PreviewSourcePolicy.isUsenet(r.resolvedUrl)) usenet = true
             if ((fourK || usenet) && source.copySources != null && !onDemand) {
@@ -817,6 +828,9 @@ internal object SeekThumbnails {
                 "${idx.video.bitDepth}-bit keyframes=${idx.keyframes.count} cached=${cached != null} " +
                 "requests=${r.requests} kb=${r.bytes / 1024} t=${SystemClock.elapsedRealtime() - tIndex0}ms " +
                 "stored=${s.slots().size} dv=${idx.video.dolbyVision?.profile}")
+            if (!fourK && MemoryGovernor.tierFor(idx.video.width, idx.video.height) == DecodeTier.SW_4K) {
+                throw UnsupportedMediaException("container resolution exceeds the playback format; keeping external previews")
+            }
             if (known == null) applyIndex(idx, s, fileLength)
             if (fourK) {
                 val durationMs = lastDurationMs.takeIf { it > 0 } ?: (idx.durationUs / 1000L)
@@ -824,6 +838,7 @@ internal object SeekThumbnails {
                 Log.i(TAG, "4K session: strongBox=${MemoryGovernor.isStrongBox} " +
                     "bitrate=${bps / 1_000_000} Mb/s lattice=${latticeStrides.last() * SPACING_MS / 1000}s")
             }
+            PreviewDiagnostics.note("index ready: ${idx.kind} ${idx.video.codec}, ${idx.keyframes.count} keyframes")
             r.slotWaitMs = ConnectionLedger.SLOT_WAIT_MS
             makeExtractor = { KeyframeExtractor(idx, r) }
             tapOpen = true
@@ -952,8 +967,8 @@ internal object SeekThumbnails {
                     continue
                 }
                 val ps = sample() ?: return
-                if (!ps.buffering && (!ps.isPlaying || ps.bufferedMs - ps.positionMs >= INDEX_GATE_AHEAD_MS ||
-                        (ps.durationMs > 0 && ps.bufferedMs >= ps.durationMs - 1_000L))) return
+                if (previewBufferReady(ps.isPlaying, ps.buffering, ps.loading, ps.bufferedMs - ps.positionMs,
+                        ps.durationMs > 0 && ps.bufferedMs >= ps.durationMs - 1_000L, INDEX_GATE_AHEAD_MS)) return
                 delay(1_000L)
             }
         }
@@ -1496,7 +1511,7 @@ internal object SeekThumbnails {
                     anchorSince = now
                 }
                 val plateau = ahead >= PLATEAU_MIN_AHEAD_MS && now - anchorSince >= PLATEAU_WINDOW_MS
-                if (ahead >= GATE_BUFFER_AHEAD_MS || toEnd || plateau) return true
+                if (previewBufferReady(ps.isPlaying, ps.buffering, ps.loading, ahead, toEnd, GATE_BUFFER_AHEAD_MS) || plateau) return true
                 delay(1_000L)
             }
         }
@@ -1608,6 +1623,7 @@ internal object SeekThumbnails {
                 if (++p0Deferrals >= P0_MAX_DEFERRALS && prioritySlot == slot) prioritySlot = -1
             }
             giveUp.memoryRefused(verdict.reason)
+            PreviewDiagnostics.note("decode waiting for memory: ${verdict.reason}")
             // Playback first: give our working set back, so the next decode must clear floor + charge again.
             if (!close) trimDecoders()
             buffers.releaseIdle()
@@ -1683,6 +1699,7 @@ internal object SeekThumbnails {
             synchronized(recentMade) {
                 recentMade.addLast(job.slot.toLong() * SPACING_MS)
                 madeSeq++
+                if (madeSeq == 1) PreviewDiagnostics.note("first preview ready: ${d.width}x${d.height}")
                 while (recentMade.size > 9) recentMade.removeFirst()
             }
             bumpTick()
@@ -1719,7 +1736,7 @@ internal object SeekThumbnails {
             c ?: return
             Log.i(TAG, "decode lanes ${c.from} -> ${c.to} (${c.reason}, medianMs=${c.medianMs})")
             for (i in c.to until c.from) decoderLanes[i].close()
-            buffers.limit = ThumbBufferPool.limitFor(c.to, fourK, MemoryGovernor.isStrongBox)
+            buffers.limit = ThumbBufferPool.limitFor(c.to, fourK, MemoryGovernor.isStrongBox, MemoryGovernor.isLowRam)
         }
 
         private fun laneHeld(): Boolean = SystemClock.elapsedRealtime() < laneHeldUntil
@@ -1764,6 +1781,7 @@ internal object SeekThumbnails {
             rateLimited = fetchRateLimited,
             smallBox4K = fourK && !MemoryGovernor.isStrongBox,
             ledgerCap = ConnectionLedger.app.thumbnailCap(reader?.resolvedUrl ?: source.url),
+            memoryConstrained = MemoryGovernor.isLowRam,
         )))
 
         /** Remembers the host that answered 429, and lets a held generating screen start playback. */
@@ -2145,11 +2163,12 @@ internal object SeekThumbnails {
             val st = store ?: return false
             val slots = keyframeSlots[kf] ?: return false
             return slots.any { !st.has(it.toLong() * SPACING_MS * 1000L) } &&
-                spoolPending.get() < SPOOL_MAX_PENDING && spoolBytes.get() < SPOOL_MAX_BYTES
+                spoolPending.get() < (if (MemoryGovernor.isLowRam) 1 else SPOOL_MAX_PENDING) && spoolBytes.get() < SPOOL_MAX_BYTES
         }
 
         fun tapOffer(timeUs: Long, sample: ByteArray) {
             if (ended || !tapOpen) return
+            if (MemoryGovernor.isLowRam && sample.size > 2 * 1024 * 1024) return
             val idx = index ?: return
             val kf = idx.keyframes.nearest(timeUs)
             if (kf < 0) return
@@ -2162,7 +2181,7 @@ internal object SeekThumbnails {
                 return
             }
             if (spool.putIfAbsent(kf, false) != null) return
-            if (spoolPending.incrementAndGet() > SPOOL_MAX_PENDING) {
+            if (spoolPending.incrementAndGet() > (if (MemoryGovernor.isLowRam) 1 else SPOOL_MAX_PENDING)) {
                 spoolPending.decrementAndGet()
                 spool.remove(kf)
                 return
@@ -2316,7 +2335,7 @@ internal object SeekThumbnails {
         /** A title with saved pictures: their bytes go to memory, and the ones around the position are decoded. */
         private fun preloadSaved(st: ThumbStore) {
             if (st.isEmpty()) return
-            CoroutineScope(Dispatchers.IO).launch {
+            worker.launch {
                 val cap = MemoryGovernor.preloadBytes()
                 if (!st.preloadCompressed(cap)) return@launch
                 val here = slotOf(lastPositionMs.coerceAtLeast(0L))
@@ -3224,6 +3243,7 @@ internal object SeekThumbnails {
                 durationMs = if (p.duration == C.TIME_UNSET) 0L else p.duration,
                 failed = ConnectionLedger.sourceTrouble(p.playerError?.errorCode),
                 playWhenReady = p.playWhenReady,
+                loading = p.isLoading,
             )
         }
 

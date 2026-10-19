@@ -108,6 +108,7 @@ internal object MemoryGovernor {
      * 4K thumbnails may also decode during playback. Otherwise the protected path (playback monitor, pacer) runs.
      */
     val isStrongBox: Boolean get() = strongBox
+    val isLowRam: Boolean get() = lowRam
 
     /**
      * The box class alone (64-bit, RAM, Java heap limit), without the memory free at the moment: for media-server
@@ -234,7 +235,7 @@ internal object MemoryGovernor {
     private const val PRELOAD_SMALL_BYTES = 6L * 1024 * 1024
 
     /** Saved pictures held compressed in memory at play start. */
-    fun preloadBytes(): Long = if (isStrongBox) PRELOAD_STRONG_BYTES else PRELOAD_SMALL_BYTES
+    fun preloadBytes(): Long = if (lowRam) 0L else if (isStrongBox) PRELOAD_STRONG_BYTES else PRELOAD_SMALL_BYTES
 
     /**
      * Worst case shown in settings, for this box class: the memory LRU at 4:3, the full-colour centre picture, the
@@ -242,7 +243,8 @@ internal object MemoryGovernor {
      * Display only.
      */
     fun displayChargeMb(rgb565: Boolean, fourK: Boolean): Int =
-        displayChargeMb(rgb565, fourK, isStrongHardware)
+        if (lowRam) (if (fourK) 512 else 80) + 4 + 17 + 2
+        else displayChargeMb(rgb565, fourK, isStrongHardware)
 
     internal fun displayChargeMb(rgb565: Boolean, fourK: Boolean, strong: Boolean): Int {
         val tier = if (fourK) DecodeTier.SW_4K else DecodeTier.SW_UP_TO_1080P
@@ -273,14 +275,18 @@ internal object MemoryGovernor {
         tier: DecodeTier, decoderWarm: Boolean = false, funded: Boolean = false, addressSpace: Boolean = tier == DecodeTier.SW_4K,
     ): GovernorVerdict {
         // When 4K may decode is the scheduler's rule, this only checks that it is affordable.
-        if (addressSpace && !is64Bit && !decoderWarm) {
+        if ((addressSpace || lowRam) && !is64Bit && !decoderWarm) {
             val vm = readVmSizeMb()
-            if (vm != null && vm + tier.addressSpaceMb > VA_CEILING_32BIT_MB) {
-                return GovernorVerdict(false, "32-bit address space ${vm} MB + ${tier.addressSpaceMb} > $VA_CEILING_32BIT_MB")
+            val addressCost = if (lowRam) maxOf(tier.addressSpaceMb, if (tier == DecodeTier.SW_4K) 512 else 112) else tier.addressSpaceMb
+            if (vm != null && vm + addressCost > VA_CEILING_32BIT_MB) {
+                return GovernorVerdict(false, "32-bit address space ${vm} MB + $addressCost > $VA_CEILING_32BIT_MB")
             }
         }
-        val mem = readMeminfo() ?: return GovernorVerdict(true, "meminfo unavailable")
-        return decodeVerdict(mem, if (decoderWarm) 0L else tier.rssMb.toLong(), funded, lowRam)
+        val mem = readMeminfo() ?: return GovernorVerdict(false, "meminfo unavailable")
+        // High-reference/high-bitrate files can exceed the average decoder working set substantially.
+        val coldMb = if (lowRam) maxOf(tier.rssMb, if (tier == DecodeTier.SW_4K) 512 else 80) else tier.rssMb
+        return decodeVerdict(mem, if (decoderWarm) 0L else coldMb.toLong(),
+            funded && !(lowRam && tier == DecodeTier.SW_4K), lowRam)
     }
 
     /**

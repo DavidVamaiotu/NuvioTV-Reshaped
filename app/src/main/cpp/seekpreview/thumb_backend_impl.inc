@@ -49,8 +49,8 @@ bool resolve_all(Api &api, void *const *handles, int count) {
 bool ensure_loaded() {
     pthread_mutex_lock(&g_init_lock);
     if (!g_tried) {
-        g_tried = true;
         g_ready = load_symbols(g_api, g_version, sizeof g_version);
+        g_tried = g_ready; // A failed runtime lookup may succeed on the next backoff-controlled attempt.
         if (g_ready) g_api.av_log_set_level(AV_LOG_ERROR);
     }
     bool r = g_ready;
