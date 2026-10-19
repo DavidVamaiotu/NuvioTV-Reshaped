@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Trigger Arc seek preview tester release'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Fix preview load-control delegation and release tester'
     runs-on: ubuntu-latest
 
     steps:

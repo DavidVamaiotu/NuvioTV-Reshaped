@@ -1,5 +1,3 @@
-- Seek previews now use Arc's adaptive generation, warm decoder reuse, preparation coverage and next-episode pre-generation.
-- Preview scheduling stays isolated behind feature-owned playback and buffer interfaces, with stronger player/source handover and manual-pause handling.
-- Memory-bounded thumbnail caches, reusable native buffers and safer HTTP range requests and redirects improve resource handling and reliability.
-- Existing server thumbnails, Seekr and segmented-stream capture remain integrated. Alternate-copy previews use ready or already cached playable links.
-- Automated preview tests and four-ABI debug builds passed. Please report seek responsiveness, playback stability and memory behavior on low-memory TVs.
+- Fixed playback failing with “getBackBufferDurationUs not implemented” after the Arc seek-preview update.
+- The preview buffer wrapper now explicitly forwards Media3 lifecycle, back-buffer, playback-start and preloading callbacks to the original player buffering control. Preview memory reservations and loading coordination remain active.
+- Added regression tests against the bundled player library, including preservation of configured back buffers, runtime updates and preview loading yields.
