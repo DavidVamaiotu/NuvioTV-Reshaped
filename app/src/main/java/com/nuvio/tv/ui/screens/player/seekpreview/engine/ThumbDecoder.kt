@@ -83,7 +83,7 @@ internal object ThumbGeometry {
         }.takeIf { it.isFinite() && it > 0.1 && it < 10.0 } ?: (frameW.toDouble() / frameH)
         val displayW = (frameH * dar).roundToInt().coerceAtLeast(2)
         val w = minOf(MAX_WIDTH, displayW, (MAX_WIDTH * dar).toInt().coerceAtLeast(2)) and 1.inv()
-        val h = ((w / dar).roundToInt() and 1.inv()).coerceAtLeast(2)
+        val h = ((w / dar).roundToInt() and 1.inv()).coerceIn(2, MAX_WIDTH)
         return intArrayOf(w.coerceAtLeast(2), h)
     }
 }

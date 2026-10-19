@@ -140,6 +140,10 @@ class ThumbPolicyTest {
             assertEquals(0, size[0] % 2)
             assertEquals(0, size[1] % 2)
         }
+        for ((width, height) in listOf(1 to 2304, 4096 to 1)) {
+            val size = ThumbGeometry.outputSize(width, height, 1, 1, 0.0)
+            assertTrue(size.all { it in 2..480 && it % 2 == 0 })
+        }
     }
 
 }
