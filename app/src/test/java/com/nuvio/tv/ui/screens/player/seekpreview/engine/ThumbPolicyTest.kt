@@ -132,4 +132,14 @@ class ThumbPolicyTest {
         assertEquals(1836L, MemoryGovernor.parseVmSizeMb(status))
         assertEquals(null, MemoryGovernor.parseVmSizeMb("Name: x"))
     }
+    @Test fun portraitAndExtremeAspectPicturesStayWithinTheCacheDecodeBounds() {
+        for (aspect in listOf(0.11, 0.5, 1.0, 2.4, 9.9)) {
+            val size = ThumbGeometry.outputSize(1080, 1920, 1, 1, aspect)
+            assertTrue(size[0] in 2..480)
+            assertTrue(size[1] in 2..480)
+            assertEquals(0, size[0] % 2)
+            assertEquals(0, size[1] % 2)
+        }
+    }
+
 }

@@ -51,7 +51,7 @@ internal object PreviewPreferences {
             p.edit().remove("prepare").apply()
             values.value = PreviewOptions(false,
                 runCatching { ThumbsBeforePlay.valueOf(p.getString("coverage", "FASTER")!!) }.getOrDefault(ThumbsBeforePlay.FASTER),
-                p.getBoolean("copies", true), p.getBoolean("next_episode", true))
+                runCatching { p.getBoolean("copies", true) }.getOrDefault(true), runCatching { p.getBoolean("next_episode", true) }.getOrDefault(true))
             loaded = true
         }
         return values

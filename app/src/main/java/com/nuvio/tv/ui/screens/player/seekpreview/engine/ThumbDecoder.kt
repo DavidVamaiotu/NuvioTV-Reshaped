@@ -82,7 +82,7 @@ internal object ThumbGeometry {
             else -> frameW.toDouble() / frameH
         }.takeIf { it.isFinite() && it > 0.1 && it < 10.0 } ?: (frameW.toDouble() / frameH)
         val displayW = (frameH * dar).roundToInt().coerceAtLeast(2)
-        val w = minOf(MAX_WIDTH, displayW) and 1.inv()
+        val w = minOf(MAX_WIDTH, displayW, (MAX_WIDTH * dar).toInt().coerceAtLeast(2)) and 1.inv()
         val h = ((w / dar).roundToInt() and 1.inv()).coerceAtLeast(2)
         return intArrayOf(w.coerceAtLeast(2), h)
     }
@@ -127,6 +127,7 @@ internal class FfmpegThumbDecoder : Closeable {
     }
 
     private fun open(track: VideoTrack, threads: Int): Boolean {
+        if (!PreviewLimits.supportedSize(track.width, track.height)) return false
         if (!ThumbNative.available) return false
         if (handle == 0L || handleTrack !== track || handleThreads != threads) {
             close()
@@ -150,6 +151,7 @@ internal class FfmpegThumbDecoder : Closeable {
             Log.w("ThumbDecode", "decode failed: $r")
             return null
         }
+        if (!PreviewLimits.supportedSize(info[ThumbNative.INFO_WIDTH], info[ThumbNative.INFO_HEIGHT])) return null
         decodedSinceTrim = true
         return DecodedFrame(
             width = info[ThumbNative.INFO_WIDTH],

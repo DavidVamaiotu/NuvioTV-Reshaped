@@ -31,6 +31,25 @@ class HttpRangeReaderTest {
             assertThrows(UnsupportedMediaException::class.java) { reader.read(0, 3) }
         } finally { reader.close() }
     }
+    @Test fun truncatedDownloadFailsWithoutPoisoningTheNextRead(): Unit = MockWebServer().use { server ->
+        server.enqueue(bytes("ab").setHeader("Content-Range", "bytes 0-2/10"))
+        server.enqueue(bytes("abc"))
+        val reader = reader(server.url("/film.mkv").toString())
+        try {
+            assertThrows(IOException::class.java) { reader.read(0, 3) }
+            assertArrayEquals("abc".toByteArray(), reader.read(0, 3))
+        } finally { reader.close() }
+    }
+    @Test fun rateLimitedReadCanRecoverWithoutRestartingThePlayer(): Unit = MockWebServer().use { server ->
+        server.enqueue(MockResponse().setResponseCode(503).setHeader("Retry-After", "1"))
+        server.enqueue(bytes("abc"))
+        val reader = reader(server.url("/film.mkv").toString())
+        try {
+            val failure = assertThrows(RateLimitedException::class.java) { reader.read(0, 3) }
+            assertEquals(503, failure.status)
+            assertArrayEquals("abc".toByteArray(), reader.read(0, 3))
+        } finally { reader.close() }
+    }
     @Test fun redirectAndCachedCdnReadsNeverReceiveOriginHeaders(): Unit = MockWebServer().use { origin ->
         MockWebServer().use { cdn ->
             origin.enqueue(MockResponse().setResponseCode(302).setHeader("Location", cdn.url("/film.mkv")))

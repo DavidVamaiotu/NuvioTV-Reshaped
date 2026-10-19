@@ -396,7 +396,7 @@ internal class CopyPass(
     private suspend fun fill(
         offer: CopyOffer, r: HttpRangeReader, idx: MediaIndex, store: ThumbStore, ratio: Double, copyMs: Long, host: String?,
     ): Outcome {
-        val copyCount = ReleaseMatch.slotCount(copyMs, SPACING_MS)
+        val copyCount = PreviewLimits.slotCount(copyMs, SPACING_MS) ?: return Outcome.UNUSABLE
         val owners = CopyChoice.ownSlotsByCopySlot(own.slotPtsUs.size, ratio, copyCount)
         val pts = idx.keyframes.ptsUs
         // The copy's keyframe nearest to where a 4K seek lands, not to the slot centre.

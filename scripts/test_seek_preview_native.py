@@ -59,6 +59,19 @@ class NativePreviewTest(unittest.TestCase):
             finally:
                 self.lib.tc_free(handle)
 
+    def test_decoder_allocation_limits(self):
+        source = self.directory / "limits.cpp"
+        source.write_text('#include "thumb_limits.h"\nextern "C" long long pixels(int w,int h) { return thumb::preview_max_pixels(w,h); }\n')
+        output = self.directory / "limits.so"
+        subprocess.run(["c++", "-std=c++17", "-shared", "-fPIC", "-I" + str(NATIVE), str(source), "-o", str(output)], check=True)
+        limits = ctypes.CDLL(str(output))
+        limits.pixels.argtypes = [ctypes.c_int, ctypes.c_int]
+        limits.pixels.restype = ctypes.c_int64
+        self.assertEqual(1920 * 1088, limits.pixels(1920, 1080))
+        self.assertEqual(3840 * 2176, limits.pixels(3840, 2160))
+        for width, height in [(0, 1080), (-1, 1080), (7680, 4320), (2147483647, 2147483647)]:
+            self.assertEqual(0, limits.pixels(width, height))
+
     def test_native_backends_and_jni_syntax(self):
         includes = self.directory / "include"
         (includes / "android").mkdir(parents=True)
@@ -94,6 +107,7 @@ typedef void* jstring;
 typedef void* jbyteArray;
 typedef void* jintArray;
 struct JNIEnv {
+jboolean ExceptionCheck();
 const char* GetStringUTFChars(jstring,void*);
 void ReleaseStringUTFChars(jstring,const char*);
 jsize GetArrayLength(jbyteArray);

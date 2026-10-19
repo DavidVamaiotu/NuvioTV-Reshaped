@@ -28,6 +28,7 @@ internal class ArcPreviewTrack(
     private val started = AtomicBoolean(false)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val closed = AtomicBoolean(false)
+    @Volatile private var tapDisabled = false
     override var offsetMs = 0L
     override val isLocal = true
     override val revision = SeekThumbnails.tick
@@ -45,12 +46,14 @@ internal class ArcPreviewTrack(
         PreviewDiagnostics.note("background generation scheduled")
         scope.launch {
             try {
-                SeekThumbnails.startWhenEligible(appContext,
-                    ThumbSource(source.sourceKey, source.headers, identity, holdBeforePlay = false,
-                        identityExact = identityExact, playbackConnections = PreviewHostSignals.playbackConnections, copySources = adapter.copySources(),
-                        mediaServer = previewServerSource(source.sourceKey) != null, usenet = CopyChoice.isUsenet(source.sourceKey)),
-                    adapter::player, adapter::reserve,
-                    skipReason = { if (closed.get() || current !== this@ArcPreviewTrack) "session replaced" else null })
+                previewSafely("preview startup", onFailure = { if (ownsSession()) close() }) {
+                    SeekThumbnails.startWhenEligible(appContext,
+                        ThumbSource(source.sourceKey, source.headers, identity, holdBeforePlay = false,
+                            identityExact = identityExact, playbackConnections = PreviewHostSignals.playbackConnections, copySources = adapter.copySources(),
+                            mediaServer = previewServerSource(source.sourceKey) != null, usenet = CopyChoice.isUsenet(source.sourceKey)),
+                        adapter::player, adapter::reserve,
+                        skipReason = { if (closed.get() || current !== this@ArcPreviewTrack) "session replaced" else null })
+                }
             } finally {
                 if (closed.get() && current === this@ArcPreviewTrack) SeekThumbnails.stopSession(handBackPlayer = false)
             }
@@ -82,14 +85,17 @@ internal class ArcPreviewTrack(
             android.graphics.Rect(it.left, it.top, bitmap.width - it.right, bitmap.height - it.bottom)
         })
     private fun ownsSession() = !closed.get() && current === this
-    override fun wantsKeyframes() = ownsSession()
+    override fun wantsKeyframes() = ownsSession() && !tapDisabled
     override fun acceptsFormat(format: Format) = format.width in 1..4096 && format.height in 1..2304 &&
         format.sampleMimeType in setOf(MimeTypes.VIDEO_H264, MimeTypes.VIDEO_H265)
-    override fun wantsKeyframe(timeUs: Long) = ownsSession() && SeekThumbnails.tapAccepts(timeUs)
-    override fun mayWantKeyframesNear(timeUs: Long) = ownsSession() && (SeekThumbnails.tapWants(timeUs) || SeekThumbnails.tapAccepts(timeUs))
+    override fun wantsKeyframe(timeUs: Long) = wantsKeyframes() && SeekThumbnails.tapAccepts(timeUs)
+    override fun mayWantKeyframesNear(timeUs: Long) = wantsKeyframes() && (SeekThumbnails.tapWants(timeUs) || SeekThumbnails.tapAccepts(timeUs))
     override fun onKeyframe(format: Format, timeUs: Long, data: ByteArray, offset: Int, size: Int) {
+        if (size <= 0 || size > ThumbReads.MAX_READ || offset < 0 || offset > data.size - size) return
         if (MemoryGovernor.isLowRam && size > 2 * 1024 * 1024) return
-        if (wantsKeyframe(timeUs)) SeekThumbnails.tapOffer(timeUs, data.copyOfRange(offset, offset + size))
+        previewSafely("playback preview tap", onFailure = { tapDisabled = true }) {
+            if (wantsKeyframe(timeUs)) SeekThumbnails.tapOffer(timeUs, data.copyOfRange(offset, offset + size))
+        }
     }
     override fun close() = close(afterPlayback = false)
     fun close(afterPlayback: Boolean, resumeIfHeld: Boolean = false) {

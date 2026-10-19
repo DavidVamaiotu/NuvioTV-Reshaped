@@ -58,7 +58,7 @@ internal object KeyframeIndexCodec {
             val extraSize = s.readInt(); require(extraSize in 0..65536)
             val extradata = ByteArray(extraSize).also { s.readFully(it) }
             val n = s.readInt(); require(n in 1..200000 && s.available() >= n * 28)
-            require(w in 1..8192 && h in 1..8192 && fileLength > 0 && duration > 0)
+            require(w in 1..8192 && h in 1..8192 && fileLength > 0 && duration / 1000L in 1..PreviewLimits.MAX_DURATION_MS)
             val pts = LongArray(n); val off = LongArray(n); val rel = LongArray(n); val size = IntArray(n)
             for (i in 0 until n) {
                 pts[i] = s.readLong(); off[i] = s.readLong(); rel[i] = s.readLong(); size[i] = s.readInt()

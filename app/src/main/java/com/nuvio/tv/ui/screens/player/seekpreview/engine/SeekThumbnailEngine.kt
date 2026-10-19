@@ -206,6 +206,11 @@ internal object SeekThumbnails {
             }
             delay(if (waitingLogged) 1_000L else 500L)
         }
+        if (PreviewLimits.slotCount(playerProvider()?.duration ?: 0L, SPACING_MS) == null ||
+            !PreviewLimits.supportedSize(width, height)) {
+            PreviewDiagnostics.note("preview skipped: unsupported playback dimensions or duration")
+            return
+        }
         PreviewDiagnostics.note("playback ready: ${width}x$height")
         fun skipped(): Boolean = skipReason()?.also { Log.i(TAG, "skip: $it") } != null
         if (skipped()) return
@@ -601,6 +606,7 @@ internal object SeekThumbnails {
         private var lastSampledPlaying = false
 
         private val worker = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
+        private val imageScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(if (MemoryGovernor.isLowRam) 1 else 2))
         private val rgb565 = runCatching { PreviewPreferences.rgb565(context) }.getOrDefault(true)
         @Volatile private var store: ThumbStore? = null
         @Volatile private var index: MediaIndex? = null
@@ -689,15 +695,22 @@ internal object SeekThumbnails {
             if (fourK && !MemoryGovernor.isStrongBox) monitorJob = mainScope.launch { monitorPlayback() }
             job = worker.launch {
                 try {
-                    run()
-                } catch (ce: CancellationException) {
-                    throw ce
-                } catch (t: Throwable) {
-                    giveUp.ended(t)
-                    PreviewDiagnostics.note("generation ended: ${t.javaClass.simpleName}: ${t.message}")
-                    Log.w(TAG, "session ended: ${giveUp.endedBy}")
+                    previewSafely("preview generation", onFailure = { failure ->
+                        giveUp.ended(failure)
+                        Log.w(TAG, "session ended: ${giveUp.endedBy}")
+                    }) { run() }
                 } finally {
-                    withContext(NonCancellable) { finish() }
+                    withContext(NonCancellable) {
+                        try { previewSafely("preview cleanup") { finish() } }
+                        finally {
+                            // Even a failed cache flush/diagnostic must not leave background work alive.
+                            imageScope.cancel()
+                            fetchScope.cancel()
+                            decodeScope.cancel()
+                            spoolWriter.cancel()
+                            worker.cancel()
+                        }
+                    }
                 }
             }.also { j -> j.invokeOnCompletion { if (ending === this) ending = null } }
         }
@@ -715,6 +728,7 @@ internal object SeekThumbnails {
             reader?.close()
             copy?.stop("the player stopped this title")
             job?.cancel()
+            imageScope.cancel()
             monitorJob?.cancel()
         }
 
@@ -1183,8 +1197,9 @@ internal object SeekThumbnails {
         }
 
         private fun buildSlots(idx: MediaIndex, durationMs: Long) {
-            val lastSlot = ((durationMs - 1) / SPACING_MS).toInt().coerceAtLeast(0)
-            val map = IntArray(lastSlot + 1) { slot ->
+            val count = PreviewLimits.slotCount(durationMs, SPACING_MS)
+                ?: throw UnsupportedMediaException("preview duration exceeds supported bounds")
+            val map = IntArray(count) { slot ->
                 idx.keyframes.nearest(slot * SPACING_MS * 1000L + SPACING_MS * 500L)
             }
             val inverse = HashMap<Int, MutableList<Int>>()
@@ -1570,8 +1585,7 @@ internal object SeekThumbnails {
                 } catch (t: Throwable) {
                     Decoded(null, 0L, 0L, false, 0, 0, "", error = t)
                 } finally {
-                    lane.release()
-                    au.release()
+                    try { lane.release() } finally { au.release() }
                 }
             }
             val job = DecodeJob(idx, st, slot, kf, priority, lane, tapped != null, au.length, reqs, fetchedBytes, tFetch,
@@ -2333,17 +2347,19 @@ internal object SeekThumbnails {
         /** A title with saved pictures: their bytes go to memory, and the ones around the position are decoded. */
         private fun preloadSaved(st: ThumbStore) {
             if (st.isEmpty()) return
-            worker.launch {
-                val cap = MemoryGovernor.preloadBytes()
-                if (!st.preloadCompressed(cap)) return@launch
-                val here = slotOf(lastPositionMs.coerceAtLeast(0L))
-                for (d in 0..PRELOAD_WARM_SLOTS) {
-                    for (s in intArrayOf(here + d, here - d)) {
-                        if (s in slotKeyframe.indices) st.load(s.toLong() * SPACING_MS * 1000L)
+            imageScope.launch {
+                previewSafely("preview preload", onFailure = ::imageFailure) {
+                    val cap = MemoryGovernor.preloadBytes()
+                    if (!st.preloadCompressed(cap)) return@previewSafely
+                    val here = slotOf(lastPositionMs.coerceAtLeast(0L))
+                    for (d in 0..PRELOAD_WARM_SLOTS) {
+                        for (s in intArrayOf(here + d, here - d)) {
+                            if (s in slotKeyframe.indices) st.load(s.toLong() * SPACING_MS * 1000L)
+                        }
                     }
+                    bumpTick()
+                    Log.d(TAG, "saved thumbnails in memory (${st.slots().size})")
                 }
-                bumpTick()
-                Log.d(TAG, "saved thumbnails in memory (${st.slots().size})")
             }
         }
 
@@ -2886,30 +2902,46 @@ internal object SeekThumbnails {
         @Volatile private var fullColourLoadSlot = -1
 
         /** The centre picture in full colour when memory frames are RGB565: one disk decode at a time. */
+        private fun imageFailure(failure: Throwable) {
+            if (failure is OutOfMemoryError) {
+                runCatching { onTrim() }
+                stop(handBackPlayer = false)
+            }
+        }
+
         private fun requestFullColour(st: ThumbStore, slot: Int) {
-            if (fullColourLoadSlot >= 0) return
+            if (ended || stoppedExternally || fullColourLoadSlot >= 0) return
             fullColourLoadSlot = slot
-            CoroutineScope(Dispatchers.IO).launch {
+            imageScope.launch {
                 try {
-                    if (st.loadFullColour(slot.toLong() * SPACING_MS * 1000L) != null) bumpTick()
-                } finally {
-                    fullColourLoadSlot = -1
-                }
+                    previewSafely("full-colour preview load", onFailure = ::imageFailure) {
+                        if (!ended && !stoppedExternally) {
+                            st.loadFullColour(slot.toLong() * SPACING_MS * 1000L)
+                            bumpTick()
+                        }
+                    }
+                } finally { fullColourLoadSlot = -1 }
             }
         }
 
         private fun requestDiskLoad(st: ThumbStore, slot: Int) {
-            if (synchronized(diskLoadsInFlight) { diskLoadsInFlight.size >= MAX_DISK_LOADS_IN_FLIGHT }) return
+            if (ended || stoppedExternally) return
             val key = slot.toLong() * SPACING_MS * 1000L
             val token = st.key to slot
-            if (!st.has(key) || !synchronized(diskLoadsInFlight) { diskLoadsInFlight.add(token) }) return
-            CoroutineScope(Dispatchers.IO).launch {
-                val bmp = st.load(key)
-                synchronized(diskLoadsInFlight) { diskLoadsInFlight.remove(token) }
-                if (bmp != null) {
-                    if (st === store) measureBars(bmp)
-                    bumpTick()
-                }
+            if (!st.has(key) || !synchronized(diskLoadsInFlight) {
+                    diskLoadsInFlight.size < MAX_DISK_LOADS_IN_FLIGHT && diskLoadsInFlight.add(token)
+                }) return
+            imageScope.launch {
+                try {
+                    previewSafely("cached preview load", onFailure = ::imageFailure) {
+                        if (!ended && !stoppedExternally) {
+                            val bmp = st.load(key)
+                            if (bmp != null && st === store) measureBars(bmp)
+                            // Also retry after a corrupt entry is removed, rather than staying blank forever.
+                            bumpTick()
+                        }
+                    }
+                } finally { synchronized(diskLoadsInFlight) { diskLoadsInFlight.remove(token) } }
             }
         }
 
@@ -3271,6 +3303,7 @@ internal object SeekThumbnails {
                 logGiveUp("session ended with none made")
             }
             ended = true
+            imageScope.cancel()
             endYield()
             runCatching { reader?.close() }
             fetchScope.cancel()
@@ -3295,7 +3328,7 @@ internal object SeekThumbnails {
             decodeScope.cancel()
             store?.let { st ->
                 if (lastDurationMs > 0) st.watchedFraction = (lastPositionMs.toFloat() / lastDurationMs).coerceIn(0f, 1f)
-                st.flush()
+                previewSafely("preview cache flush") { st.flush() }
                 runCatching { ThumbStore.housekeeping(context, activeKey = st.key) }
             }
             for (d in fetches.values) d.invokeOnCompletion { if (it == null) d.getCompleted().au?.release() }

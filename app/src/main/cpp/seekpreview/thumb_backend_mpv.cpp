@@ -13,6 +13,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <new>
+#include "thumb_limits.h"
 
 extern "C" {
 #include "libavcodec/avcodec.h"

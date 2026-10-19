@@ -123,10 +123,14 @@ void b_release(void *handle) {
 }
 
 void *b_open(const char *decoder, const uint8_t *extradata, int extradata_len, int width, int height, int threads) {
+    const int64_t max_pixels = thumb::preview_max_pixels(width, height);
+    if (!decoder || !max_pixels || extradata_len < 0 || extradata_len > thumb::PREVIEW_MAX_EXTRA) return nullptr;
+    if (extradata_len > 0 && !extradata) return nullptr;
     if (!ensure_loaded()) return nullptr;
     const AVCodec *c = g_api.avcodec_find_decoder_by_name(decoder);
     if (!c) return nullptr;
-    auto *h = new Handle();
+    auto *h = new (std::nothrow) Handle();
+    if (!h) return nullptr;
     h->ctx = g_api.avcodec_alloc_context3(c);
     h->pkt = g_api.av_packet_alloc();
     h->frame = g_api.av_frame_alloc();
@@ -142,7 +146,8 @@ void *b_open(const char *decoder, const uint8_t *extradata, int extradata_len, i
         h->ctx->width = h->ctx->coded_width = width;
         h->ctx->height = h->ctx->coded_height = height;
     }
-    h->ctx->thread_count = threads < 1 ? 1 : threads;
+    h->ctx->max_pixels = max_pixels;
+    h->ctx->thread_count = threads < 1 ? 1 : (threads > 8 ? 8 : threads);
     h->ctx->thread_type = FF_THREAD_SLICE;
     if (g_api.avcodec_open2(h->ctx, c, nullptr) < 0) { b_release(h); return nullptr; }
     return h;
@@ -150,7 +155,7 @@ void *b_open(const char *decoder, const uint8_t *extradata, int extradata_len, i
 
 uint8_t *b_packet(void *handle, int len) {
     auto *h = static_cast<Handle *>(handle);
-    if (!h || len <= 0) return nullptr;
+    if (!h || len <= 0 || len > thumb::PREVIEW_MAX_PACKET) return nullptr;
     if (h->have_frame) { g_api.av_frame_unref(h->frame); h->have_frame = false; }
     g_api.avcodec_flush_buffers(h->ctx);            // reset after the previous drain
     g_api.av_packet_unref(h->pkt);

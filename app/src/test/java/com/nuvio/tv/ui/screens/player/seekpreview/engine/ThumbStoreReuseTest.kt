@@ -104,4 +104,24 @@ class ThumbStoreReuseTest {
         assertFalse(store.has(slotUs(1)))
         assertEquals(0, dir.listFiles()!!.size)
     }
+    @Test fun aDamagedPictureIsRemovedFromEverySlotSoItCanBeRegenerated() {
+        val dir = tmp.newFolder("damaged")
+        val store = ThumbStore.openIn(dir, "damaged", memoryOnly = false)
+        store.putCompressed(listOf(ThumbStore.Compressed(longArrayOf(slotUs(2), slotUs(3)), 20_000_000L, byteArrayOf(1, 2, 3))))
+        assertNull(store.load(slotUs(2)))
+        assertFalse(store.has(slotUs(2)))
+        assertFalse(store.has(slotUs(3)))
+        store.flush()
+        assertFalse(ThumbStore.openIn(dir, "damaged", memoryOnly = false).has(slotUs(3)))
+    }
+
+    @Test fun deletedImageDataCannotLeaveAFullColourSlotPermanentlyAvailable() {
+        val dir = tmp.newFolder("deleted")
+        val store = ThumbStore.openIn(dir, "deleted", memoryOnly = false)
+        store.putCompressed(listOf(ThumbStore.Compressed(longArrayOf(slotUs(2)), 20_000_000L, byteArrayOf(1))))
+        assertTrue(java.io.File(dir, "deleted.dat").delete())
+        assertNull(store.loadFullColour(slotUs(2)))
+        assertFalse(store.has(slotUs(2)))
+    }
+
 }

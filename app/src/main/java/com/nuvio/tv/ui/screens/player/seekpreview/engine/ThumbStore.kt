@@ -263,11 +263,11 @@ internal class ThumbStore private constructor(
                 s.readLong()                       // last access
                 watchedFraction = s.readFloat()
                 durationMs = s.readLong()
-                val n = s.readInt(); require(n in 0..200_000)
+                val n = s.readInt(); require(n in 0..17_280)
                 repeat(n) {
                     val slot = s.readLong()
                     val e = Entry(s.readLong(), s.readInt(), s.readLong())
-                    require(slot >= 0 && e.offset >= 0 && e.length in 1..512 * 1024 && e.keyframePtsUs >= 0)
+                    require(slot in 0 until PreviewLimits.MAX_DURATION_MS * 1000L && e.offset >= 0 && e.length in 1..512 * 1024 && e.keyframePtsUs >= 0)
                     if (e.offset <= datLen && e.length <= datLen - e.offset) entries[slot] = e   // drop entries beyond a torn append
                 }
                 val idxLen = s.readInt(); require(idxLen in 0..8 * 1024 * 1024)
@@ -279,6 +279,7 @@ internal class ThumbStore private constructor(
         }.onFailure {
             Log.w(TAG, "discarding unreadable store $key: ${it.javaClass.simpleName}")
             entries.clear()
+            cachedIndex = null
             verdicts.clear()
             if (keepIndex) {
                 idxFile.delete()
@@ -366,9 +367,9 @@ internal class ThumbStore private constructor(
     fun loadFullColour(slotUs: Long): Bitmap? {
         if (!rgb565) return load(slotUs)
         fullColour?.takeIf { it.first == slotUs }?.let { return it.second }
-        val bytes = readBytes(slotUs) ?: return null
-        if (!validPicture(bytes)) return null
-        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val bytes = readBytes(slotUs) ?: return discardPicture(slotUs)
+        if (!validPicture(bytes)) return discardPicture(slotUs)
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return discardPicture(slotUs)
         fullColour = slotUs to bmp
         return bmp
     }
@@ -380,9 +381,13 @@ internal class ThumbStore private constructor(
     fun preloadCompressed(maxBytes: Long): Boolean {
         if (datBytes != null) return true
         if (memoryOnly) return false
-        val len = datFile.length()
-        if (len <= 0L || len > maxBytes) return false
-        val bytes = synchronized(diskLock) { runCatching { datFile.readBytes() }.getOrNull() } ?: return false
+        val bytes = synchronized(diskLock) {
+            val length = datFile.length()
+            if (length <= 0 || length > maxBytes || length > Int.MAX_VALUE) return false
+            try {
+                RandomAccessFile(datFile, "r").use { file -> ByteArray(length.toInt()).also(file::readFully) }
+            } catch (_: java.io.IOException) { null }
+        } ?: return false
         datBytes = bytes
         return true
     }
@@ -397,15 +402,25 @@ internal class ThumbStore private constructor(
         }.getOrNull()
     }
 
+    /** A damaged or deleted image must become missing so generation can replace it. */
+    @Synchronized private fun discardPicture(slotUs: Long): Bitmap? {
+        val bad = entries[slotUs] ?: return null
+        val slots = entries.filterValues { it.offset == bad.offset && it.length == bad.length }.keys.toList()
+        for (slot in slots) { entries.remove(slot); mem.remove(slot) }
+        fullColour = null
+        dirty++
+        return null
+    }
+
     /** Disk to memory. IO thread. */
     fun load(slotUs: Long): Bitmap? {
         synchronized(this) { mem.get(slotUs)?.let { return it } }
-        val bytes = readBytes(slotUs) ?: return null
+        val bytes = readBytes(slotUs) ?: return discardPicture(slotUs)
         val opts = BitmapFactory.Options().apply {
             inPreferredConfig = if (rgb565) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
         }
-        if (!validPicture(bytes)) return null
-        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return null
+        if (!validPicture(bytes)) return discardPicture(slotUs)
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return discardPicture(slotUs)
         synchronized(this) {
             mem.put(slotUs, bmp)
             lastAccessMs = System.currentTimeMillis()

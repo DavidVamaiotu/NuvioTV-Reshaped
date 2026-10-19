@@ -180,7 +180,7 @@ internal object NextEpisodeThumbs {
             bps >= REMUX_MIN_BITS_PER_SECOND -> STRIDES_4K_REMUX
             else -> STRIDES_4K_WEB
         }
-        val slotCount = ((durationMs - 1) / SPACING_MS).toInt() + 1
+        val slotCount = PreviewLimits.slotCount(durationMs, SPACING_MS) ?: return
         val slotKf = IntArray(slotCount) { idx.keyframes.nearest(it * SPACING_MS * 1000L + SPACING_MS * 500L) }
         val kfSlots = HashMap<Int, MutableList<Int>>()
         slotKf.forEachIndexed { s, kf -> if (kf >= 0) kfSlots.getOrPut(kf) { ArrayList() }.add(s) }

@@ -9,12 +9,9 @@ internal fun PlayerRuntimeController.serverPreview(source: LocalPreviewSource, d
     ServerPreviewTrack.open(context, listOf(contentId, currentSeason, currentEpisode).joinToString("|"), durationMs,
         source.sourceKey, source.headers, previewServerSource(source.sourceKey)?.mediaSourceId, onUnavailable)
 
-internal fun previewSingleFileUrl(url: String): Boolean {
-    if (!url.startsWith("https://", true) && !url.startsWith("http://", true)) return false
-    val path = url.substringBefore('?').lowercase()
-    return listOf(".m3u8", ".m3u", ".mpd", ".ism", "/manifest").none(path::endsWith) &&
-        listOf("/resolve/", "/torrent/", "/transcode/").none { it in path }
-}
+internal fun previewSingleFileUrl(url: String): Boolean =
+    com.nuvio.tv.ui.screens.player.seekpreview.engine.isThumbnailSource(url) &&
+        !url.substringBefore('#').substringBefore('?').trimEnd('/').endsWith("/manifest", ignoreCase = true)
 
 internal fun PlayerRuntimeController.previewDroppedFrames(): Int =
     _exoPlayer?.videoDecoderCounters?.droppedBufferCount ?: -1

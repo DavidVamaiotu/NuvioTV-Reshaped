@@ -13,7 +13,7 @@ class PreviewBackgroundModeTest {
         val editor = mockk<SharedPreferences.Editor>()
         every { context.applicationContext } returns context
         every { context.getSharedPreferences("nuvio_seek_preview_engine", Context.MODE_PRIVATE) } returns prefs
-        every { prefs.getBoolean(any(), any()) } answers { if (firstArg<String>() == "prepare") true else secondArg<Boolean>() }
+        every { prefs.getBoolean(any(), any()) } answers { if (firstArg<String>() == "prepare") true else throw ClassCastException("wrong saved preference type") }
         every { prefs.getString("coverage", any()) } returns "FASTER"
         every { prefs.edit() } returns editor
         every { editor.remove(any()) } returns editor
@@ -21,7 +21,10 @@ class PreviewBackgroundModeTest {
         every { editor.putBoolean(any(), any()) } returns editor
         justRun { editor.apply() }
 
-        assertFalse(PreviewPreferences.options(context).value.prepare)
+        val saved = PreviewPreferences.options(context).value
+        assertFalse(saved.prepare)
+        assertTrue(saved.copies)
+        assertTrue(saved.nextEpisode)
         PreviewPreferences.set(context, PreviewOptions(prepare = true, copies = false, nextEpisode = false))
         val options = PreviewPreferences.options(context).value
         assertFalse(options.prepare)

@@ -16,6 +16,8 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <new>
+#include "thumb_limits.h"
 
 #include "thumb_backend.h"
 
@@ -78,20 +80,24 @@ JNIEXPORT jlong JNICALL
 Java_com_nuvio_tv_ui_screens_player_seekpreview_engine_ThumbNative_nativeOpen(JNIEnv *env, jclass, jstring decoder, jbyteArray extradata,
                                                                 jint width, jint height, jint threads) {
     const thumb::Backend *b = backend();
-    if (!b || !decoder) return 0;
+    if (!b || !decoder || !thumb::preview_max_pixels(width, height)) return 0;
     const char *name = env->GetStringUTFChars(decoder, nullptr);
     if (!name) return 0;
     jbyte *extra = nullptr;
     jsize extra_len = 0;
     if (extradata) {
         extra_len = env->GetArrayLength(extradata);
+        if (extra_len > thumb::PREVIEW_MAX_EXTRA) { env->ReleaseStringUTFChars(decoder, name); return 0; }
         extra = env->GetByteArrayElements(extradata, nullptr);
+        if (!extra && extra_len > 0) { env->ReleaseStringUTFChars(decoder, name); return 0; }
     }
     void *h = b->open(name, reinterpret_cast<const uint8_t *>(extra), extra_len, width, height, threads);
     if (extra) env->ReleaseByteArrayElements(extradata, extra, JNI_ABORT);
     env->ReleaseStringUTFChars(decoder, name);
     if (!h) return 0;
-    return reinterpret_cast<jlong>(new JHandle{b, h});
+    auto *j = new (std::nothrow) JHandle{b, h};
+    if (!j) { b->release(h); return 0; }
+    return reinterpret_cast<jlong>(j);
 }
 
 /** Decodes one keyframe, fills info[] and keeps the frame in the handle for nativeRender. 0 or a negative AVERROR. */
@@ -99,10 +105,12 @@ JNIEXPORT jint JNICALL
 Java_com_nuvio_tv_ui_screens_player_seekpreview_engine_ThumbNative_nativeDecode(JNIEnv *env, jclass, jlong handle,
                                                                   jbyteArray data, jint len, jintArray info) {
     auto *j = reinterpret_cast<JHandle *>(handle);
-    if (!j || len <= 0) return -EINVAL;
+    if (!j || !data || !info || len <= 0 || len > thumb::PREVIEW_MAX_PACKET ||
+        env->GetArrayLength(data) < len || env->GetArrayLength(info) < thumb::INFO_COUNT) return -EINVAL;
     uint8_t *buf = j->b->packet(j->h, len);
     if (!buf) return -ENOMEM;
     env->GetByteArrayRegion(data, 0, len, reinterpret_cast<jbyte *>(buf));
+    if (env->ExceptionCheck()) return -EINVAL;
     int32_t out[thumb::INFO_COUNT];
     int r = j->b->decode(j->h, out);
     if (r == 0) env->SetIntArrayRegion(info, 0, thumb::INFO_COUNT, reinterpret_cast<jint *>(out));
@@ -114,7 +122,8 @@ JNIEXPORT jint JNICALL
 Java_com_nuvio_tv_ui_screens_player_seekpreview_engine_ThumbNative_nativeDecodeDirect(JNIEnv *env, jclass, jlong handle,
                                                                         jobject data, jint len, jintArray info) {
     auto *j = reinterpret_cast<JHandle *>(handle);
-    if (!j || len <= 0) return -EINVAL;
+    if (!j || !data || !info || len <= 0 || len > thumb::PREVIEW_MAX_PACKET ||
+        env->GetArrayLength(info) < thumb::INFO_COUNT) return -EINVAL;
     const auto *src = static_cast<const uint8_t *>(env->GetDirectBufferAddress(data));
     if (!src || env->GetDirectBufferCapacity(data) < len) return -EINVAL;
     uint8_t *buf = j->b->packet(j->h, len);
