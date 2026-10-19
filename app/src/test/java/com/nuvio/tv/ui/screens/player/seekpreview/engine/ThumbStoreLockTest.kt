@@ -123,6 +123,18 @@ class ThumbStoreLockTest {
         assertEquals(11_000_000L, ThumbStore.openIn(dir, key, false).keyframePtsFor(slotUs(1)))
     }
 
+    @Test fun aCompletionMarkerRequiresDurableImagesAndTheirIndex() {
+        val dir = tmp.newFolder("completion")
+        val store = ThumbStore.openIn(dir, key, memoryOnly = false)
+        val frame = store.publish(longArrayOf(slotUs(1)), 10_000_000L, bmp)
+        store.markComplete(listOf(slotUs(1)))
+        assertFalse(java.io.File(dir, "$key.done").exists())
+        store.persist(frame)
+        store.markComplete(listOf(slotUs(1)))
+        assertTrue(java.io.File(dir, "$key.done").exists())
+        assertTrue(ThumbStore.openIn(dir, key, false).has(slotUs(1)))
+    }
+
     @Test fun anUnwrittenReplacementIsNotTreatedAsACorruptDiskImage() {
         val dir = tmp.newFolder("unwritten")
         val store = ThumbStore.openIn(dir, key, memoryOnly = false)

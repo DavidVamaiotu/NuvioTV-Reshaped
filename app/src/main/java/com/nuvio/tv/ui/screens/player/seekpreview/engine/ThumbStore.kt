@@ -506,9 +506,17 @@ internal class ThumbStore private constructor(
     }
 
     /** See [isMarkedComplete]. */
-    fun markComplete() {
+    fun markComplete(requiredSlotsUs: Collection<Long> = slots()) {
         if (memoryOnly) return
-        runCatching { File(dir, "$key.done").createNewFile() }
+        synchronized(diskLock) {
+            val snapshot = synchronized(this) {
+                if (requiredSlotsUs.isEmpty() ||
+                    requiredSlotsUs.count { it in entries }.toLong() * 100 < requiredSlotsUs.size.toLong() * 97) return
+                snapshotLocked()
+            } ?: return
+            // A visible frame is not necessarily a durable one, especially after failed/queued writes.
+            if (writeIndex(snapshot)) runCatching { File(dir, "$key.done").createNewFile() }
+        }
     }
 
     fun flush() {
@@ -540,9 +548,9 @@ internal class ThumbStore private constructor(
     }
 
     /** Under [diskLock] only: one writer per file, while [has] and [memGet] (main thread) never wait for the disk. */
-    private fun writeIndex(snap: IndexSnapshot) {
+    private fun writeIndex(snap: IndexSnapshot): Boolean {
         val tmp = File(dir, "$key.idx.tmp")
-        runCatching {
+        return runCatching {
             DataOutputStream(tmp.outputStream().buffered()).use { s ->
                 s.writeInt(MAGIC)
                 s.writeInt(FORMAT)
@@ -567,12 +575,12 @@ internal class ThumbStore private constructor(
             }
             if (!tmp.renameTo(idxFile)) {
                 idxFile.delete()
-                tmp.renameTo(idxFile)
+                if (!tmp.renameTo(idxFile)) throw java.io.IOException("cannot replace preview index")
             }
             synchronized(this) {
                 dirty = (dirty - snap.dirty).coerceAtLeast(0)
                 lastFlushMs = System.currentTimeMillis()
             }
-        }.onFailure { Log.w(TAG, "index flush failed: ${it.javaClass.simpleName}") }
+        }.onFailure { Log.w(TAG, "index flush failed: ${it.javaClass.simpleName}") }.isSuccess
     }
 }

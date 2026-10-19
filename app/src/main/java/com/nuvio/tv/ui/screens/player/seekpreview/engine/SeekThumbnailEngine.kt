@@ -1406,7 +1406,7 @@ internal object SeekThumbnails {
                     latticeFinished = true
                     latticeComplete = lattice.isNotEmpty() &&
                         lattice.count { st.has(it.toLong() * SPACING_MS * 1000L) } >= lattice.size * 97 / 100
-                    if (latticeComplete) st.markComplete()
+                    if (latticeComplete) st.markComplete(lattice.map { it.toLong() * SPACING_MS * 1000L })
                     bumpTick()                            // hides the paused progress hint
                     Log.i(TAG, "lattice done: slots=${lattice.size} requests=$latticeRequests/$latticeMaxRequests " +
                         "kb=${latticeBytes / 1024} stored=${st.slots().size}")
