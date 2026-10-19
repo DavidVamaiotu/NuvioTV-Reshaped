@@ -231,7 +231,9 @@ internal class ThumbStore private constructor(
             (ThumbGeometry.MAX_WIDTH * 3 / 4) * if (rgb565) 2 else 4
         return if (MemoryGovernor.isLowRam) minOf(requested, 4 * 1024 * 1024) else requested
     }
-    private val mem = PreviewFrameCache<Long, Long, Bitmap>(bytesForFrames(memFrames)) {
+    private data class ImageId(val ptsUs: Long, val offset: Long, val length: Int)
+    private fun imageId(entry: Entry) = ImageId(entry.keyframePtsUs, entry.offset, entry.length)
+    private val mem = PreviewFrameCache<Long, ImageId, Bitmap>(bytesForFrames(memFrames)) {
         it.allocationByteCount.coerceAtLeast(1)
     }
     private val imageDecodeLock = Any()
@@ -294,7 +296,7 @@ internal class ThumbStore private constructor(
     @Synchronized fun memGet(slotUs: Long): Bitmap? = mem.get(slotUs)
     @Synchronized fun slots(): Set<Long> = entries.keys + mem.slots()
     @Synchronized fun isEmpty(): Boolean = entries.isEmpty() && mem.size() == 0
-    @Synchronized fun keyframePtsFor(slotUs: Long): Long? = mem.keyFor(slotUs) ?: entries[slotUs]?.keyframePtsUs
+    @Synchronized fun keyframePtsFor(slotUs: Long): Long? = mem.keyFor(slotUs)?.ptsUs ?: entries[slotUs]?.keyframePtsUs
 
     /** Serialised with [KeyframeIndexCodec]. */
     @Synchronized fun cachedKeyframeIndex(): ByteArray? = cachedIndex
@@ -359,7 +361,7 @@ internal class ThumbStore private constructor(
     }
 
     /** The latest full-colour picture (one kept) when memory frames are RGB565: the centre of the strip uses it. */
-    @Volatile private var fullColour: Pair<Long, Bitmap>? = null
+    @Volatile private var fullColour: Pair<ImageId, Bitmap>? = null
 
     @Volatile private var fullColourWanted = -1L
 
@@ -367,15 +369,15 @@ internal class ThumbStore private constructor(
     fun fullColourGet(slotUs: Long): Bitmap? {
         if (!rgb565) return memGet(slotUs)
         fullColourWanted = slotUs
-        val pts = keyframePtsFor(slotUs) ?: return null
-        return fullColour?.takeIf { it.first == pts }?.second
+        val id = synchronized(this) { mem.keyFor(slotUs) ?: entries[slotUs]?.let(::imageId) } ?: return null
+        return fullColour?.takeIf { it.first == id }?.second
     }
 
     /** Disk to the full-colour slot. IO thread. */
     fun loadFullColour(slotUs: Long): Bitmap? = synchronized(imageDecodeLock) {
         if (!rgb565) return load(slotUs)
-        val pts = keyframePtsFor(slotUs) ?: return null
-        fullColour?.takeIf { it.first == pts }?.let { return it.second }
+        val id = synchronized(this) { mem.keyFor(slotUs) ?: entries[slotUs]?.let(::imageId) } ?: return null
+        fullColour?.takeIf { it.first == id }?.let { return it.second }
         // A just-published image may not have disk bytes yet. Never discard it as a corrupt cache entry.
         if (synchronized(this) { slotUs in pendingImages }) return memGet(slotUs)
         val entry = synchronized(this) { entries[slotUs] } ?: return null
@@ -384,7 +386,7 @@ internal class ThumbStore private constructor(
         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return discardPicture(slotUs, entry)
         synchronized(this) {
             if (entries[slotUs] !== entry || slotUs in pendingImages) return memGet(slotUs)
-            fullColour = pts to bmp
+            fullColour = imageId(entry) to bmp
         }
         bmp
     }
@@ -433,8 +435,8 @@ internal class ThumbStore private constructor(
     fun load(slotUs: Long): Bitmap? = synchronized(imageDecodeLock) {
         synchronized(this) { mem.get(slotUs)?.let { return it } }
         val entry = synchronized(this) { entries[slotUs] } ?: return null
-        mem.frame(entry.keyframePtsUs)?.let { bmp ->
-            mem.put(listOf(slotUs), entry.keyframePtsUs, bmp)
+        mem.frame(imageId(entry))?.let { bmp ->
+            mem.put(listOf(slotUs), imageId(entry), bmp)
             return bmp
         }
         val bytes = readBytes(slotUs) ?: return discardPicture(slotUs, entry)
@@ -447,7 +449,7 @@ internal class ThumbStore private constructor(
             if (entries[slotUs] !== entry || slotUs in pendingImages) return memGet(slotUs)
             // All aliases of this stored image share the one decoded bitmap and its byte charge.
             val aliases = entries.filterValues { it == entry }.keys
-            mem.put(aliases, entry.keyframePtsUs, bmp)
+            mem.put(aliases, imageId(entry), bmp)
             lastAccessMs = System.currentTimeMillis()
         }
         bmp
@@ -462,10 +464,11 @@ internal class ThumbStore private constructor(
     /** Immediately visible; compression/persistence can be scheduled independently by the owning generator. */
     fun publish(slotsUs: LongArray, keyframePtsUs: Long, bmp: Bitmap): PublishedFrame {
         val kept = if (rgb565 && bmp.config != Bitmap.Config.RGB_565) bmp.copy(Bitmap.Config.RGB_565, false) ?: bmp else bmp
-        if (rgb565 && (fullColourWanted < 0 || fullColourWanted in slotsUs)) fullColour = keyframePtsUs to bmp
         return synchronized(this) {
             val version = ++publication
-            mem.put(slotsUs.toList(), keyframePtsUs, kept)
+            val id = ImageId(keyframePtsUs, -version, 0)
+            if (rgb565 && (fullColourWanted < 0 || fullColourWanted in slotsUs)) fullColour = id to bmp
+            mem.put(slotsUs.toList(), id, kept)
             for (s in slotsUs) pendingImages[s] = version
             PublishedFrame(slotsUs, keyframePtsUs, bmp, version)
         }
@@ -495,7 +498,13 @@ internal class ThumbStore private constructor(
             runCatching { datFile.appendBytes(webp) }.onFailure { return }
             val entry = Entry(offset, webp.size, frame.keyframePtsUs)
             val snapshot = synchronized(this) {
-                for (s in frame.slotsUs) if (pendingImages[s] == frame.version) entries[s] = entry
+                val slots = frame.slotsUs.filter { pendingImages[it] == frame.version }
+                val oldId = ImageId(frame.keyframePtsUs, -frame.version, 0)
+                val newId = imageId(entry)
+                val kept = slots.firstNotNullOfOrNull { mem.get(it) }
+                for (s in slots) entries[s] = entry
+                if (kept != null) mem.put(slots, newId, kept)
+                fullColour?.takeIf { it.first == oldId }?.let { fullColour = newId to it.second }
                 val now = System.currentTimeMillis()
                 lastAccessMs = now
                 dirty++

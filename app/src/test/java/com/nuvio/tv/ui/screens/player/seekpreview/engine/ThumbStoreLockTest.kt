@@ -8,6 +8,7 @@ import org.junit.Before
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -156,5 +157,14 @@ class ThumbStoreLockTest {
         store.persist(pending)
         store.flush()
         assertArrayEquals(byteArrayOf(7), ThumbStore.openIn(dir, key, false).compressed(slotUs(1)))
+    }
+
+    @Test fun differentStoredImagesAtTheSameTimestampNeverShareACachedBitmap() {
+        val dir = tmp.newFolder("same-time")
+        val store = ThumbStore.openIn(dir, key, memoryOnly = false)
+        store.put(longArrayOf(slotUs(1), slotUs(2)), 10_000_000L, bmp)
+        store.putCompressed(listOf(ThumbStore.Compressed(longArrayOf(slotUs(1)), 10_000_000L, byteArrayOf(0))))
+        assertNull(store.load(slotUs(1))) // invalid replacement must not reuse the old alias's bitmap
+        assertEquals(bmp, store.memGet(slotUs(2)))
     }
 }
