@@ -2,6 +2,7 @@ package com.nuvio.tv.ui.screens.player
 
 import android.os.SystemClock
 import android.util.Log
+import android.widget.Toast
 import com.nuvio.tv.R
 import com.nuvio.tv.core.player.StreamAutoPlaySelector
 import com.nuvio.tv.core.player.recovery.AutoSourceRecoveryHandoff
@@ -13,7 +14,7 @@ import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.domain.model.Stream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -33,6 +34,9 @@ internal class PlayerAutoSourceRecovery(
     private var job: Job? = null
     private var active = true
     private var definitiveFailure = false
+    private var failureReason: String? = null
+    private val failureSignals = Channel<Unit>(Channel.CONFLATED)
+    private var switchNotice: Toast? = null
     private var refreshedCandidates = false
     private enum class NextResult { Started, Failed, Empty }
 
@@ -41,12 +45,20 @@ internal class PlayerAutoSourceRecovery(
     fun cancel() {
         active = false
         job?.cancel()
+        switchNotice?.cancel()
         if (player.autoSourceRecovery === this) player.autoSourceRecovery = null
     }
 
-    fun failDefinitively(): Boolean {
-        if (!active || !enabled.value || player.isInBackground || player.userPausedManually || player.hasRenderedFirstFrame) return false
+    /** Claim the failure before it reaches error UI, then wake the waiting attempt immediately. */
+    fun failDefinitively(reason: String): Boolean {
+        val state = player._uiState.value
+        if (!active || !enabled.value || player.isInBackground || player.userPausedManually ||
+            player.hasRenderedFirstFrame || state.showSourcesPanel || state.showEpisodesPanel
+        ) return false
         definitiveFailure = true
+        failureReason = reason
+        player.showRecoveryOverlay()
+        failureSignals.trySend(Unit)
         return true
     }
 
@@ -74,19 +86,31 @@ internal class PlayerAutoSourceRecovery(
                     if (interrupted) break
                     when (policy.evaluate(now, progressing, interrupted = false, failed = definitiveFailure || state.error != null)) {
                         StartupSourceRecovery.Decision.Complete -> break
-                        StartupSourceRecovery.Decision.Wait -> delay(minOf(500L, remainingMs()).coerceAtLeast(1L))
+                        StartupSourceRecovery.Decision.Wait -> {
+                            // Keep sampling progress/deadlines, but never make a known failure wait for a tick.
+                            withTimeoutOrNull(minOf(500L, remainingMs()).coerceAtLeast(1L)) {
+                                failureSignals.receive()
+                            }
+                        }
                         StartupSourceRecovery.Decision.Stop -> { showPicker(); break }
                         StartupSourceRecovery.Decision.NextSource -> {
                             val reason = if (definitiveFailure || state.error != null) "startup_error" else "startup_timeout"
                             Log.i(PlayerRuntimeController.TAG, "AUTO_SOURCE_RECOVERY: $reason")
+                            val noticeReason = failureReason ?: state.error
+                                ?: player.context.getString(R.string.player_auto_source_recovery_timeout)
+                            showSwitchNotice(noticeReason)
                             stopAttempt()
                             if (!policy.beginNextAttempt(now)) { showPicker(); break }
                             definitiveFailure = false
+                            failureReason = null
                             val result = withTimeoutOrNull(remainingMs()) { tryNext() } ?: NextResult.Failed
                             coroutineContext.ensureActive()
                             if (!active || player.autoSourceRecovery !== this@PlayerAutoSourceRecovery) break
                             if (result == NextResult.Empty) { showPicker(); break }
-                            if (result == NextResult.Failed) definitiveFailure = true
+                            if (result == NextResult.Failed) {
+                                definitiveFailure = true
+                                failureReason = player.context.getString(R.string.player_auto_source_recovery_resolve_failed)
+                            }
                             previousPosition = null
                         }
                     }
@@ -101,6 +125,18 @@ internal class PlayerAutoSourceRecovery(
                 if (player.autoSourceRecovery === this@PlayerAutoSourceRecovery) player.autoSourceRecovery = null
             }
         }
+    }
+
+    private fun showSwitchNotice(reason: String) {
+        // A short explanation stays readable without showing a dialog or taking remote focus.
+        val summary = reason.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(140)
+            ?: player.context.getString(R.string.error_unknown)
+        switchNotice?.cancel()
+        switchNotice = Toast.makeText(
+            player.context,
+            player.context.getString(R.string.player_auto_source_recovery_switching, summary),
+            Toast.LENGTH_LONG
+        ).also { it.show() }
     }
 
     private suspend fun tryNext(): NextResult {
@@ -159,6 +195,7 @@ internal class PlayerAutoSourceRecovery(
     }
 
     private fun showPicker() {
+        switchNotice?.cancel()
         stopAttempt()
         player.sourceRecoveryPickerError = player.context.getString(R.string.player_auto_source_recovery_exhausted)
         player._uiState.update {
@@ -184,3 +221,4 @@ internal fun PlayerRuntimeController.claimAutoSourceRecovery() {
     AutoSourceRecoveryHandoff.take(navigationArgs.autoSourceRecoveryToken, profileId, currentVideoId)
         ?.let { beginAutoSourceRecovery(it) }
 }
+

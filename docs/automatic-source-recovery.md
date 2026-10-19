@@ -8,7 +8,7 @@ The existing autoplay selector chooses every retry after attempted source identi
 
 Playback success ends recovery. Pausing, seeking, manually switching a source/engine, opening the source/episode picker, leaving the foreground, and disposal cancel it. There is no mid-playback source switching. Exhaustion opens the existing source picker. Dismissing it without choosing a source restores the normal retry/back error screen. External players, live TV and cloud-library playback do not use this recovery path. P2P must already be enabled before a fallback torrent can start.
 
-Only failed startup can trigger an additional source search, bounded to five seconds, when the original snapshot has no untried eligible source. There are no parallel playback probes or new background services. Matching stays on the worker dispatcher. A single foreground coroutine samples startup state every 500 ms and stops once its job is done. Automatic frame-rate preflight is capped at three seconds within the attempt; manual playback keeps its existing budget.
+Only failed startup can trigger an additional source search, bounded to five seconds, when the original snapshot has no untried eligible source. There are no parallel playback probes or new background services. Matching stays on the worker dispatcher. A single foreground coroutine samples startup progress every 500 ms and stops once its job is done. Terminal startup errors wake it immediately and are claimed before they can show the full error screen. Switching shows a brief, non-blocking toast with the previous source’s failure reason (or a startup-timeout explanation). Automatic frame-rate preflight is capped at three seconds within the attempt; manual playback keeps its existing budget.
 
 Implementation boundaries:
 

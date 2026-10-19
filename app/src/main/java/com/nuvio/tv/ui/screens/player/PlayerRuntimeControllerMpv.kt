@@ -75,6 +75,7 @@ internal fun PlayerRuntimeController.attachMpvView(view: NuvioMpvSurfaceView?) {
             return@onFailure
         }
         cancelNextEpisodeAutoPlayOnFatalError()
+        if (autoSourceRecovery?.failDefinitively(detailedError) == true) return@onFailure
         _uiState.update { state ->
             state.copy(
                 error = detailedError,
@@ -198,6 +199,7 @@ internal fun PlayerRuntimeController.initializeMpvPlayer(
             return@onFailure
         }
         cancelNextEpisodeAutoPlayOnFatalError()
+        if (autoSourceRecovery?.failDefinitively(detailedError) == true) return@onFailure
         _uiState.update {
             it.copy(
                 error = detailedError,

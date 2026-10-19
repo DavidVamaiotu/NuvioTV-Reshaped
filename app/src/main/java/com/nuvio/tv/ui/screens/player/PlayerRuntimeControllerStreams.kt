@@ -958,7 +958,10 @@ internal fun PlayerRuntimeController.switchToSourceStream(
                 player.playWhenReady = true
                 player.prepare()
             } catch (e: Exception) {
-                _uiState.update { it.copy(error = e.message ?: context.getString(com.nuvio.tv.R.string.player_error_play_stream_failed)) }
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                val message = e.message ?: context.getString(com.nuvio.tv.R.string.player_error_play_stream_failed)
+                if (autoSourceRecovery?.failDefinitively(message) == true) return@launch
+                _uiState.update { it.copy(error = message) }
             }
         }
     } ?: run {

@@ -515,6 +515,7 @@ internal fun PlayerRuntimeController.tryParsingErrorProbeFallback(
                 return@launch
             }
             val userFacingError = error.toDisplayMessage(context)
+            if (autoSourceRecovery?.failDefinitively(userFacingError) == true) return@launch
             _uiState.update {
                 it.copy(
                     error = userFacingError,

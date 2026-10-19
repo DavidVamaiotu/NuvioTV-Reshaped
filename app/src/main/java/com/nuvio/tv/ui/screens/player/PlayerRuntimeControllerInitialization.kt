@@ -158,7 +158,9 @@ internal fun PlayerRuntimeController.initializePlayer(
     startPaused: Boolean = false
 ) {
     if (url.isEmpty()) {
-        _uiState.update { it.copy(error = context.getString(R.string.player_error_no_stream_url), showLoadingOverlay = false) }
+        val message = context.getString(R.string.player_error_no_stream_url)
+        if (autoSourceRecovery?.failDefinitively(message) == true) return
+        _uiState.update { it.copy(error = message, showLoadingOverlay = false) }
         return
     }
     sourceRecoveryPickerError = null
@@ -1430,8 +1432,8 @@ internal fun PlayerRuntimeController.initializePlayer(
                         if (!isInBackground && com.nuvio.tv.reshaped.livetv.LiveEdgeRecovery.tryRejoin(error, _exoPlayer)) return // Nuvio RS hook: rejoin the live edge
                         cancelFirstFrameWatchdog()
                         val status = error.findInvalidResponseCodeException()?.responseCode
-                        if (status in listOf(401, 403, 404, 410) && autoSourceRecovery?.failDefinitively() == true) return
                         val detailedError = error.toDisplayMessage(context)
+                        if (status in listOf(401, 403, 404, 410) && autoSourceRecovery?.failDefinitively(detailedError) == true) return
                         cancelStableProgressReset()
 
                         if (Vc1VideoFormatHeuristics.isVc1PlaybackFailure(
@@ -1679,6 +1681,7 @@ internal fun PlayerRuntimeController.initializePlayer(
                              error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
                              error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
                              error.errorCode == PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED)
+                        if (autoSourceRecovery?.failDefinitively(detailedError) == true) return
                         _uiState.update {
                             it.copy(
                                 error = detailedError,
@@ -1927,6 +1930,7 @@ internal fun PlayerRuntimeController.initializePlayer(
             scope.launch {
                 runCatching { playerSettingsDataStore.setLastPlaybackDiagnostics(diagnostics) }
             }
+            if (autoSourceRecovery?.failDefinitively(displayError) == true) return@launch
             _uiState.update {
                 it.copy(
                     error = displayError,
