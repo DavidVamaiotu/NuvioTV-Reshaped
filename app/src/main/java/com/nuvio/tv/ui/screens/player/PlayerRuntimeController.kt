@@ -169,6 +169,9 @@ class PlayerRuntimeController(
     )
 
     internal val navigationArgs = PlayerNavigationArgs.from(savedStateHandle)
+    internal var autoSourceRecovery: PlayerAutoSourceRecovery? = null
+    internal var sourceRecoveryPickerError: String? = null
+    internal var playerInitializationJob: Job? = null
     internal val initialStreamUrl: String = navigationArgs.streamUrl
     internal val title: String = navigationArgs.title
     internal val streamName: String? = navigationArgs.streamName
@@ -755,6 +758,8 @@ class PlayerRuntimeController(
     }
 
     fun onCleared() {
+        autoSourceRecovery?.cancel()
+        playerInitializationJob?.cancel()
         releasePlayer()
         stopTorrentStream()
         torrentService.shutdown()

@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Fix preview navigation and single-tap seeking; release tester'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Include automatic source switching and preview fixes; release tester'
     runs-on: ubuntu-latest
 
     steps:
@@ -315,6 +315,8 @@ jobs:
             --tests 'com.nuvio.tv.updater.*' \
             --tests '*seekpreview*' \
             --tests 'com.nuvio.tv.core.streams.ranking.*' \
+            --tests 'com.nuvio.tv.core.player.recovery.*' \
+            --tests 'com.nuvio.tv.core.player.StreamAutoPlaySelectorTest' \
             --tests 'com.nuvio.tv.ui.screens.player.autosync.bubble.*' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSyncDiagnosticsTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' \

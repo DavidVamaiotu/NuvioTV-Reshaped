@@ -1,0 +1,3 @@
+<resources>
+    <string name="player_auto_source_recovery_exhausted">Automatic sources could not start. Choose another source.</string>
+</resources>
