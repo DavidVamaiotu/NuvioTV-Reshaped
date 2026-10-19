@@ -21,6 +21,45 @@ Sessions stop on source replacement or disabling. Session ownership and player/l
 
 ## Reshaped improvements and retained providers
 
+### Preview latency and resource ownership
+
+`PreviewScrubPlan`, `PreviewWorkBudget`, `PreviewFrameCache` and `PreviewFrameWriter` are
+feature-owned helpers. They have no controller, repository, global settings, playback allocator,
+or network implementation dependencies. The existing adapter forwards scrub direction and
+immutable source size/duration hints; preview work never starts another source search.
+
+The latest target is made before neighbors, with neighbors biased toward the scrub direction.
+Missing frames during continuous movement have a 120 ms settling window; cached frames remain
+immediate and repeated image refreshes cannot extend that window. A conflated wakeup interrupts
+idle/pacing waits. On low-RAM devices, changing the target cancels an obsolete original-file range
+read using the preview reader's existing cancellation epoch. Playback and smaller-copy readers
+are separate. Superseded results do not consume failed-request attempts or start stale decodes.
+
+Decoded images are published before WebP compression or disk writes. Each session's single writer
+admits one outstanding image, including the in-progress write. Producer backpressure suspends the
+preview worker, never playback or the UI. Cleanup drains that writer before flushing the store or
+allowing a replacement session to take ownership. Publication versions prevent delayed writes
+from overwriting newer images or adopted copies; completion markers wait for persistence.
+
+The byte-bounded memory LRU stores each unique keyframe once and maps timeline aliases onto it.
+Aliased disk images share their decoded bitmap too. Publication, durable metadata and image
+decoding have separate synchronization, so slow flash never holds the UI lookup lock. Existing
+disk formats and cache keys are retained. The writer can retain one additional output bitmap;
+it does not retain another raw frame or native decoder.
+
+The original/copy generators share a measured-work budget during playback. Decode/render and
+original-image persistence time contribute to pacing; draining buffers and observed frame drops
+reduce background work. Paused seeking bypasses background pacing, but memory, rate-limit and
+buffering protections still apply. This is a duty-ratio heuristic, not a CPU percentage guarantee.
+Existing 4K restrictions and the one-decoder/one-fetch/two-buffer low-RAM limits remain in force.
+Low-RAM copies prefer 720p within the existing safe-source/SDR/codec ranking; newly rendered
+images are bounded to 384 pixels per dimension on those devices, versus 480 elsewhere. This
+reduces output conversion/encoding/cache cost, not the full-resolution video's decode charge.
+
+Validation should compare target-to-visible-image latency (cold and cached), cancelled/wasted
+work, dropped frames/rebuffers, and peak process memory including native allocations on a 2 GB
+TV and a stronger box. Faster coverage alone is not evidence of an improved playback experience.
+
 Decoded frame caches are charged by bitmap allocation bytes, including unusual aspect ratios. Cache parsing bounds dimensions, image/index lengths and entry counts. File-cache identity includes a hash of the initial bytes as well as content identity and length, distinguishing equal-length releases with different initial bytes while surviving URL rotation. Known file-size-only caches are not provided by the adapter, so generation verifies the initial bytes before opening a persisted image store.
 
 The shared preview HTTP pool uses explicit bounded redirects, strips origin credentials on foreign origins (including cached CDN destinations), rejects HTTPS downgrades and validates Content-Range and stable lengths. Expired CDN links retry through the original address. Cancellation stops in-flight reads without poisoning subsequent requests.

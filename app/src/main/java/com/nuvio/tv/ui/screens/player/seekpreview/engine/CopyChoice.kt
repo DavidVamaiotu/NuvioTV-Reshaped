@@ -149,10 +149,12 @@ internal object CopyChoice {
      * 720p, WEB first, smaller files first, and by source cost last (TorBox list before server versions and links). For a title playing from Usenet ([usenet]) the source comes first: server versions, the TorBox list,
      * Premiumize, ready links, then a TorBox copy added and removed again.
      */
-    fun order(offers: List<CopyOffer>, usenet: Boolean = false): List<CopyOffer> = offers.sortedWith(
+    fun order(offers: List<CopyOffer>, usenet: Boolean = false, memoryConstrained: Boolean = false): List<CopyOffer> = offers.sortedWith(
         compareBy<CopyOffer> { if (usenet) usenetRank(it.kind) else sideEffects(it.kind) }
             .thenBy { if (it.hdr) 1 else 0 }
             .thenBy { codecRank(it.codec) }
+            // On small TVs both are already far above thumbnail size; avoid the larger decode working set.
+            .thenBy { if (memoryConstrained) it.height else 0 }
             .thenBy { HEIGHTS.indexOf(it.height).let { i -> if (i < 0) HEIGHTS.size else i } }
             .thenBy { if (it.web) 0 else 1 }
             .thenBy { it.sizeBytes ?: Long.MAX_VALUE }

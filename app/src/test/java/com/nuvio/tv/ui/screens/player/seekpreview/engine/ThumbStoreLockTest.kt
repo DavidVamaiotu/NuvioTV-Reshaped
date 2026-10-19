@@ -97,4 +97,52 @@ class ThumbStoreLockTest {
         store.flush()
         assertEquals(0, dir.listFiles()!!.size)
     }
+
+    @Test fun aPublishedFrameIsUsableBeforeItsDiskWrite() {
+        val dir = tmp.newFolder("published")
+        val store = ThumbStore.openIn(dir, key, memoryOnly = false)
+        val frame = store.publish(longArrayOf(slotUs(1), slotUs(2)), 15_000_000L, bmp)
+        assertTrue(store.has(slotUs(2)))
+        assertEquals(15_000_000L, store.keyframePtsFor(slotUs(2)))
+        assertEquals(bmp, store.memGet(slotUs(1)))
+        assertEquals(bmp, store.loadFullColour(slotUs(2)))
+        assertFalse(java.io.File(dir, "$key.dat").exists())
+        store.persist(frame)
+        store.flush()
+        assertEquals(15_000_000L, ThumbStore.openIn(dir, key, false).keyframePtsFor(slotUs(2)))
+    }
+
+    @Test fun aDelayedWriteCannotReplaceANewerImage() {
+        val dir = tmp.newFolder("replacement")
+        val store = ThumbStore.openIn(dir, key, memoryOnly = false)
+        val old = store.publish(longArrayOf(slotUs(1)), 10_000_000L, bmp)
+        val newer = store.publish(longArrayOf(slotUs(1)), 11_000_000L, bmp)
+        store.persist(newer)
+        store.persist(old)
+        store.flush()
+        assertEquals(11_000_000L, ThumbStore.openIn(dir, key, false).keyframePtsFor(slotUs(1)))
+    }
+
+    @Test fun anUnwrittenReplacementIsNotTreatedAsACorruptDiskImage() {
+        val dir = tmp.newFolder("unwritten")
+        val store = ThumbStore.openIn(dir, key, memoryOnly = false)
+        store.putCompressed(listOf(ThumbStore.Compressed(longArrayOf(slotUs(1)), 5_000_000L, byteArrayOf(0))))
+        store.fullColourGet(slotUs(0)) // the retained full-colour slot belongs elsewhere
+        val frame = store.publish(longArrayOf(slotUs(1)), 10_000_000L, bmp)
+        assertEquals(bmp, store.loadFullColour(slotUs(1)))
+        assertTrue(store.has(slotUs(1)))
+        store.persist(frame)
+        store.flush()
+        assertEquals(10_000_000L, ThumbStore.openIn(dir, key, false).keyframePtsFor(slotUs(1)))
+    }
+
+    @Test fun anAdoptedImageSupersedesAnOlderPendingPublication() {
+        val dir = tmp.newFolder("adopted")
+        val store = ThumbStore.openIn(dir, key, memoryOnly = false)
+        val pending = store.publish(longArrayOf(slotUs(1)), 10_000_000L, bmp)
+        store.putCompressed(listOf(ThumbStore.Compressed(longArrayOf(slotUs(1)), 11_000_000L, byteArrayOf(7))))
+        store.persist(pending)
+        store.flush()
+        assertArrayEquals(byteArrayOf(7), ThumbStore.openIn(dir, key, false).compressed(slotUs(1)))
+    }
 }

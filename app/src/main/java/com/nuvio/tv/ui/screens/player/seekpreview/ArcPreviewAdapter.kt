@@ -126,7 +126,9 @@ internal fun copyOffer(stream: Stream, playingUrl: String?, trustedResolved: Boo
         CopyHevc.containsMatchIn(text) -> CopyCodec.HEVC; else -> CopyCodec.UNKNOWN }
     val offer = CopyOffer(PreviewStore.digest(url.toByteArray()), "${height}p $codec", CopyKind.LINK, height, codec,
         CopyHdr.containsMatchIn(text),
-        CopyWeb.containsMatchIn(text), null, container, null, text)
+        CopyWeb.containsMatchIn(text),
+        (stream.behaviorHints?.videoSize ?: stream.clientResolve?.stream?.raw?.size)?.takeIf { it > 0L }, container,
+        CopyChoice.parsedDurationMs(stream.clientResolve?.stream?.raw?.parsed?.duration), text)
     return offer to (url to stream.behaviorHints?.proxyHeaders?.request.orEmpty())
 }
 

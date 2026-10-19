@@ -8,6 +8,12 @@ import org.junit.Test
 
 /** Colour classification, output geometry, meminfo parsing, retention. */
 class ThumbPolicyTest {
+    @Test fun aSmallerOutputBoundsBothDimensionsWithoutUpscaling() {
+        assertEquals(listOf(384, 216), ThumbGeometry.outputSize(3840, 2160, 1, 1, 0.0, 384).toList())
+        val portrait = ThumbGeometry.outputSize(1080, 1920, 1, 1, 0.0, 384)
+        assertTrue(portrait.all { it in 2..384 })
+        assertEquals(listOf(240, 136), ThumbGeometry.outputSize(240, 136, 1, 1, 0.0, 384).toList())
+    }
     private val none = ContainerColour()
     private fun frame(bits: Int, trc: Int, pri: Int, spc: Int = 0, range: Int = 1, cll: Int = 0, mast: Int = 0) =
         FrameColour(bits, trc, pri, spc, range, cll, mast)

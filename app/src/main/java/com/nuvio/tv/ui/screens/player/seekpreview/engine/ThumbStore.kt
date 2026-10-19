@@ -9,7 +9,6 @@ import android.os.Build
 import android.os.StatFs
 import android.os.storage.StorageManager
 import android.util.Log
-import android.util.LruCache
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -232,9 +231,12 @@ internal class ThumbStore private constructor(
             (ThumbGeometry.MAX_WIDTH * 3 / 4) * if (rgb565) 2 else 4
         return if (MemoryGovernor.isLowRam) minOf(requested, 4 * 1024 * 1024) else requested
     }
-    private val mem = object : LruCache<Long, Bitmap>(bytesForFrames(memFrames)) {
-        override fun sizeOf(key: Long, value: Bitmap): Int = value.allocationByteCount.coerceAtLeast(1)
+    private val mem = PreviewFrameCache<Long, Long, Bitmap>(bytesForFrames(memFrames)) {
+        it.allocationByteCount.coerceAtLeast(1)
     }
+    private val imageDecodeLock = Any()
+    private var publication = 0L
+    private val pendingImages = HashMap<Long, Long>()
     private var lastAccessMs = System.currentTimeMillis()
     @Volatile var watchedFraction = 0f
     private var cachedIndex: ByteArray? = null
@@ -290,9 +292,9 @@ internal class ThumbStore private constructor(
 
     @Synchronized fun has(slotUs: Long): Boolean = entries.containsKey(slotUs) || mem.get(slotUs) != null
     @Synchronized fun memGet(slotUs: Long): Bitmap? = mem.get(slotUs)
-    @Synchronized fun slots(): Set<Long> = entries.keys.toSet()
+    @Synchronized fun slots(): Set<Long> = entries.keys + mem.slots()
     @Synchronized fun isEmpty(): Boolean = entries.isEmpty() && mem.size() == 0
-    @Synchronized fun keyframePtsFor(slotUs: Long): Long? = entries[slotUs]?.keyframePtsUs
+    @Synchronized fun keyframePtsFor(slotUs: Long): Long? = mem.keyFor(slotUs) ?: entries[slotUs]?.keyframePtsUs
 
     /** Serialised with [KeyframeIndexCodec]. */
     @Synchronized fun cachedKeyframeIndex(): ByteArray? = cachedIndex
@@ -335,7 +337,12 @@ internal class ThumbStore private constructor(
             }.isSuccess
             if (!ok) return false
             val snapshot = synchronized(this) {
-                for ((slots, e) in added) for (s in slots) entries[s] = e
+                for ((slots, e) in added) for (s in slots) {
+                    pendingImages.remove(s)
+                    mem.remove(s)
+                    entries[s] = e
+                }
+                fullColour = null
                 lastAccessMs = System.currentTimeMillis()
                 dirty++
                 if (indexNow) snapshotLocked() else null
@@ -360,18 +367,26 @@ internal class ThumbStore private constructor(
     fun fullColourGet(slotUs: Long): Bitmap? {
         if (!rgb565) return memGet(slotUs)
         fullColourWanted = slotUs
-        return fullColour?.takeIf { it.first == slotUs }?.second
+        val pts = keyframePtsFor(slotUs) ?: return null
+        return fullColour?.takeIf { it.first == pts }?.second
     }
 
     /** Disk to the full-colour slot. IO thread. */
-    fun loadFullColour(slotUs: Long): Bitmap? {
+    fun loadFullColour(slotUs: Long): Bitmap? = synchronized(imageDecodeLock) {
         if (!rgb565) return load(slotUs)
-        fullColour?.takeIf { it.first == slotUs }?.let { return it.second }
-        val bytes = readBytes(slotUs) ?: return discardPicture(slotUs)
-        if (!validPicture(bytes)) return discardPicture(slotUs)
-        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return discardPicture(slotUs)
-        fullColour = slotUs to bmp
-        return bmp
+        val pts = keyframePtsFor(slotUs) ?: return null
+        fullColour?.takeIf { it.first == pts }?.let { return it.second }
+        // A just-published image may not have disk bytes yet. Never discard it as a corrupt cache entry.
+        if (synchronized(this) { slotUs in pendingImages }) return memGet(slotUs)
+        val entry = synchronized(this) { entries[slotUs] } ?: return null
+        val bytes = readBytes(slotUs) ?: return discardPicture(slotUs, entry)
+        if (!validPicture(bytes)) return discardPicture(slotUs, entry)
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return discardPicture(slotUs, entry)
+        synchronized(this) {
+            if (entries[slotUs] !== entry || slotUs in pendingImages) return memGet(slotUs)
+            fullColour = pts to bmp
+        }
+        bmp
     }
 
     /** The saved pictures' compressed bytes, read once so a scrub decodes without waiting for the disk. */
@@ -403,51 +418,84 @@ internal class ThumbStore private constructor(
     }
 
     /** A damaged or deleted image must become missing so generation can replace it. */
-    @Synchronized private fun discardPicture(slotUs: Long): Bitmap? {
+    @Synchronized private fun discardPicture(slotUs: Long, expected: Entry? = null): Bitmap? {
         val bad = entries[slotUs] ?: return null
+        if (expected != null && bad !== expected) return memGet(slotUs)
+        if (slotUs in pendingImages) return memGet(slotUs)
         val slots = entries.filterValues { it.offset == bad.offset && it.length == bad.length }.keys.toList()
-        for (slot in slots) { entries.remove(slot); mem.remove(slot) }
+        for (slot in slots) { entries.remove(slot); pendingImages.remove(slot); mem.remove(slot) }
         fullColour = null
         dirty++
         return null
     }
 
     /** Disk to memory. IO thread. */
-    fun load(slotUs: Long): Bitmap? {
+    fun load(slotUs: Long): Bitmap? = synchronized(imageDecodeLock) {
         synchronized(this) { mem.get(slotUs)?.let { return it } }
-        val bytes = readBytes(slotUs) ?: return discardPicture(slotUs)
+        val entry = synchronized(this) { entries[slotUs] } ?: return null
+        mem.frame(entry.keyframePtsUs)?.let { bmp ->
+            mem.put(listOf(slotUs), entry.keyframePtsUs, bmp)
+            return bmp
+        }
+        val bytes = readBytes(slotUs) ?: return discardPicture(slotUs, entry)
         val opts = BitmapFactory.Options().apply {
             inPreferredConfig = if (rgb565) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
         }
-        if (!validPicture(bytes)) return discardPicture(slotUs)
-        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return discardPicture(slotUs)
+        if (!validPicture(bytes)) return discardPicture(slotUs, entry)
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return discardPicture(slotUs, entry)
         synchronized(this) {
-            mem.put(slotUs, bmp)
+            if (entries[slotUs] !== entry || slotUs in pendingImages) return memGet(slotUs)
+            // All aliases of this stored image share the one decoded bitmap and its byte charge.
+            val aliases = entries.filterValues { it == entry }.keys
+            mem.put(aliases, entry.keyframePtsUs, bmp)
             lastAccessMs = System.currentTimeMillis()
         }
-        return bmp
+        bmp
     }
 
     /**
      * Stores one thumbnail for every slot it serves: one WebP append shared by all [slotsUs], written from the full-colour
      * [bmp]. Memory keeps an RGB565 copy when the app's image setting asks for it. IO thread.
      */
-    fun put(slotsUs: LongArray, keyframePtsUs: Long, bmp: Bitmap) {
+    internal class PublishedFrame(val slotsUs: LongArray, val keyframePtsUs: Long, val bitmap: Bitmap, val version: Long)
+
+    /** Immediately visible; compression/persistence can be scheduled independently by the owning generator. */
+    fun publish(slotsUs: LongArray, keyframePtsUs: Long, bmp: Bitmap): PublishedFrame {
         val kept = if (rgb565 && bmp.config != Bitmap.Config.RGB_565) bmp.copy(Bitmap.Config.RGB_565, false) ?: bmp else bmp
-        if (rgb565) fullColourWanted.takeIf { it in slotsUs }?.let { fullColour = it to bmp }
-        synchronized(this) { for (s in slotsUs) mem.put(s, kept) }
+        if (rgb565 && (fullColourWanted < 0 || fullColourWanted in slotsUs)) fullColour = keyframePtsUs to bmp
+        return synchronized(this) {
+            val version = ++publication
+            mem.put(slotsUs.toList(), keyframePtsUs, kept)
+            for (s in slotsUs) pendingImages[s] = version
+            PublishedFrame(slotsUs, keyframePtsUs, bmp, version)
+        }
+    }
+
+    fun put(slotsUs: LongArray, keyframePtsUs: Long, bmp: Bitmap) = persist(publish(slotsUs, keyframePtsUs, bmp))
+
+    /** One writer per generator. A late write cannot replace a newer publication or adopted copy. */
+    fun persist(frame: PublishedFrame) {
+        try { persistImage(frame) } finally {
+            synchronized(this) {
+                for (s in frame.slotsUs) if (pendingImages[s] == frame.version) pendingImages.remove(s)
+            }
+        }
+    }
+
+    private fun persistImage(frame: PublishedFrame) {
         if (memoryOnly) return
+        val bmp = frame.bitmap
         val webp = ByteArrayOutputStream(8 * 1024).also {
             @Suppress("DEPRECATION")
             val fmt = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
-            bmp.compress(fmt, WEBP_QUALITY, it)
+            if (!bmp.compress(fmt, WEBP_QUALITY, it)) return
         }.toByteArray()
         synchronized(diskLock) {
             val offset = datFile.length()
             runCatching { datFile.appendBytes(webp) }.onFailure { return }
-            val entry = Entry(offset, webp.size, keyframePtsUs)
+            val entry = Entry(offset, webp.size, frame.keyframePtsUs)
             val snapshot = synchronized(this) {
-                for (s in slotsUs) entries[s] = entry
+                for (s in frame.slotsUs) if (pendingImages[s] == frame.version) entries[s] = entry
                 val now = System.currentTimeMillis()
                 lastAccessMs = now
                 dirty++

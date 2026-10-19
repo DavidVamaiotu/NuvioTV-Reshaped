@@ -75,17 +75,23 @@ internal object ThumbGeometry {
     const val MAX_WIDTH = 480
 
     /** Output size from the display aspect (container first, then the bitstream's SAR). Never upscaled, even height. */
-    fun outputSize(frameW: Int, frameH: Int, sarNum: Int, sarDen: Int, containerAspect: Double): IntArray {
+    fun outputSize(frameW: Int, frameH: Int, sarNum: Int, sarDen: Int, containerAspect: Double,
+                   maxWidth: Int = MAX_WIDTH): IntArray {
+        val limit = maxWidth.coerceIn(2, MAX_WIDTH) and 1.inv()
         val dar = when {
             containerAspect > 0.0 -> containerAspect
             sarNum > 0 && sarDen > 0 -> frameW.toDouble() * sarNum / (frameH.toDouble() * sarDen)
             else -> frameW.toDouble() / frameH
         }.takeIf { it.isFinite() && it > 0.1 && it < 10.0 } ?: (frameW.toDouble() / frameH)
         val displayW = (frameH * dar).roundToInt().coerceAtLeast(2)
-        val w = minOf(MAX_WIDTH, displayW, (MAX_WIDTH * dar).toInt().coerceAtLeast(2)) and 1.inv()
-        val h = ((w / dar).roundToInt() and 1.inv()).coerceIn(2, MAX_WIDTH)
+        val w = minOf(limit, displayW, (limit * dar).toInt().coerceAtLeast(2)) and 1.inv()
+        val h = ((w / dar).roundToInt() and 1.inv()).coerceIn(2, limit)
         return intArrayOf(w.coerceAtLeast(2), h)
     }
+
+    /** Smaller render/encode working set on low-RAM TVs; this does not reduce the video decoder's memory charge. */
+    fun outputSizeForDevice(frameW: Int, frameH: Int, sarNum: Int, sarDen: Int, containerAspect: Double): IntArray =
+        outputSize(frameW, frameH, sarNum, sarDen, containerAspect, if (MemoryGovernor.isLowRam) 384 else MAX_WIDTH)
 }
 
 /**

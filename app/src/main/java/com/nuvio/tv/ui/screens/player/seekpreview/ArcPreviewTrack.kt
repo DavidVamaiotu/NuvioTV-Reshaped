@@ -67,6 +67,9 @@ internal class ArcPreviewTrack(
     }
     override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
         if (ownsSession()) SeekThumbnails.tileFor(positionMs)?.picture() else null
+    override fun noteScrubDirection(direction: Int) {
+        if (ownsSession()) SeekThumbnails.noteScrubDirection(direction)
+    }
     override suspend fun neighborThumbnailFor(frame: SeekPreviewThumbnail, forward: Boolean): SeekPreviewThumbnail? =
         if (ownsSession()) SeekThumbnails.neighborFor(frame.actualFrameMs ?: frame.cueStartMs, forward)?.picture() else null
     override fun keyframeNear(positionMs: Long, toleranceMs: Long): Long? =

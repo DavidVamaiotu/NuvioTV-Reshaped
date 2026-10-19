@@ -14,6 +14,14 @@ class CopyChoiceTest {
     private val ownMs = 7_200_000L
     private val playing = "Film.2019.2160p.UHD.BluRay.REMUX.HDR.HEVC.TrueHD-GRP"
 
+    @Test fun smallDevicesPreferTheCheaperDecodeWithoutRelaxingSourceSafety() {
+        val choices = listOf(offer("1080", height = 1080), offer("720", height = 720),
+            offer("hevc", height = 720, codec = CopyCodec.HEVC), offer("added", height = 720, kind = CopyKind.TORBOX_ADD))
+        assertEquals(listOf("720", "1080", "hevc", "added"),
+            CopyChoice.order(choices, memoryConstrained = true).map { it.id })
+        assertEquals("1080", CopyChoice.order(choices).first().id)
+    }
+
     private fun offer(
         id: String,
         kind: CopyKind = CopyKind.LINK,

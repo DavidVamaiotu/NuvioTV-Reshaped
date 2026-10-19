@@ -87,6 +87,7 @@ internal class CopyPass(
     private val ownDecoderBusy: () -> Boolean,
     private val pacer: PlaybackDecodePacer?,
     private val screenUp: () -> Boolean = { false },
+    private val workBudget: PreviewWorkBudget? = null,
 ) {
     private companion object {
         const val TAG = "ThumbCopy"
@@ -215,7 +216,7 @@ internal class CopyPass(
             val why = CopyChoice.rejection(o, offers.playingText, own.durationMs, own.maxHeight, own.usenet)
             if (why == null) usable += o else if (logged++ < MAX_REJECT_LOGS) Log.i(TAG, "not used: ${o.label} - $why")
         }
-        val ranked = CopyChoice.order(usable, own.usenet)
+        val ranked = CopyChoice.order(usable, own.usenet, memoryConstrained = MemoryGovernor.isLowRam)
         if (ranked.isEmpty()) return end(State.DONE, "no copy of this title among ${offers.offers.size} sources fits")
         Log.i(TAG, "${ranked.size} possible copies, in order: " + ranked.take(5).joinToString("; ") { describe(it) })
         var checks = 0
@@ -345,7 +346,7 @@ internal class CopyPass(
             if (CopyChoice.heightClass(video.width, video.height) > own.maxHeight) {
                 throw Unusable("${video.width}x${video.height} is above the playing ${own.maxHeight}p")
             }
-            val natural = ThumbGeometry.outputSize(video.width, video.height, 1, 1, video.displayAspect)
+            val natural = ThumbGeometry.outputSizeForDevice(video.width, video.height, 1, 1, video.displayAspect)
             CopyFit.plan(natural[0], natural[1], own.pictureW, own.pictureH)
                 ?: throw Unusable("picture shape ${natural[0]}x${natural[1]} against ${own.pictureW}x${own.pictureH}")
             val index = idx ?: request(host) { MkvIndexReader.read(r, head) }
@@ -507,11 +508,12 @@ internal class CopyPass(
                         if (swapLow && !MemoryGovernor.swapAllows(funded = false).allowed) continue@work
                         val kf = f.kf
                         val playing = lastPlaying
+                        val decodeStarted = SystemClock.elapsedRealtime()
                         val frame = paced(playing) { atBackground { decoder.decode(au, idx.video, threads = 1) } }
                             ?: continue@work
                         if (dv5 && !frame.colour.doviIpt) throw Unusable("Dolby Vision 5 without decoder metadata")
                         val decision = ColourClassifier.classify(idx.video.colour, frame.colour, idx.video.dolbyVision)
-                        val size = ThumbGeometry.outputSize(frame.width, frame.height, frame.sarNum, frame.sarDen,
+                        val size = ThumbGeometry.outputSizeForDevice(frame.width, frame.height, frame.sarNum, frame.sarDen,
                             idx.video.displayAspect)
                         val plan = CopyFit.plan(size[0], size[1], own.pictureW, own.pictureH) ?: continue@work
                         val rendered = paced(playing) {
@@ -523,6 +525,7 @@ internal class CopyPass(
                             atBackground { store.put(LongArray(slots.size) { slotUs(slots[it]) }, pts[kf], compose(rendered, plan)) }
                         }
                         made += slots.size
+                        workBudget?.completed(SystemClock.elapsedRealtime(), SystemClock.elapsedRealtime() - decodeStarted, playing)
                         pictures++
                         if (!MemoryGovernor.isStrongBox) store.trimMemory(SMALL_MEM_FRAMES)
                         if (ready == null && (pictures >= READY_PICTURES || coarse.all { store.has(slotUs(it)) })) {
@@ -675,6 +678,7 @@ internal class CopyPass(
                 s == null -> null
                 s.buffering -> { bufferGate.reset(); "playback buffering" }
                 !bufferGate.ready(now, s.playing, s.buffering, s.loading, s.aheadMs, s.toEnd) -> "a healthy playback buffer"
+                s.playing && (workBudget?.remaining(now) ?: 0L) > 0 -> "the shared preview work budget"
                 pacer != null && s.playing && !synchronized(pacer) { pacer.allows(settleTarget = false) } ->
                     "a pause (dropped frames or a stall stopped copy decodes while playing)"
                 decoder != null && !MemoryGovernor.isStrongBox && ownDecoderBusy() -> {
@@ -699,7 +703,8 @@ internal class CopyPass(
                 PreviewDiagnostics.note("smaller-copy previews waiting for $why")
                 waitingFor = why
             }
-            delay(if (memory) 5_000L else 2_000L)
+            delay(if (memory) 5_000L else if (why == "the shared preview work budget")
+                (workBudget?.remaining(now) ?: 250L).coerceIn(50L, 500L) else 2_000L)
         }
     }
 

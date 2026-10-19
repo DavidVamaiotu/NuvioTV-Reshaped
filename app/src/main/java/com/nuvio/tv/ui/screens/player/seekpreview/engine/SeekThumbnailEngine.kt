@@ -27,6 +27,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -99,18 +100,20 @@ internal object SeekThumbnails {
 
     @Volatile private var ending: Session? = null
 
-    /** Waits (bounded) for an ended session's worker. Reads are cancelled repeatedly: an index read is several in a row. */
+    /** Cancellable preview-only wait. Never overlap stores/decoders just because old flash I/O took over ten seconds. */
     private suspend fun awaitStoppedSession() {
         val s = ending ?: return
         val j = s.workerJob
         val c = s.copyJob
-        if (j != null || c != null) {
-            withTimeoutOrNull(10_000L) {
-                while (j?.isCompleted == false || c?.isCompleted == false) {
-                    s.cancelReads()
-                    delay(200L)
-                }
+        var noted = false
+        val startedAt = SystemClock.elapsedRealtime()
+        while (j?.isCompleted == false || c?.isCompleted == false) {
+            s.cancelReads()
+            if (!noted && SystemClock.elapsedRealtime() - startedAt >= 10_000L) {
+                PreviewDiagnostics.note("waiting for previous preview session cleanup; playback is independent")
+                noted = true
             }
+            delay(200L)
         }
         if (ending === s && (j == null || j.isCompleted)) ending = null
     }
@@ -374,6 +377,8 @@ internal object SeekThumbnails {
         session?.notePriority(positionMs)
     }
 
+    fun noteScrubDirection(direction: Int) { session?.noteScrubDirection(direction) }
+
     /** Store-key pairs whose pictures did not match in this app run. */
     private val differentReleases = ConcurrentHashMap.newKeySet<String>()
 
@@ -393,6 +398,7 @@ internal object SeekThumbnails {
         val failed: Boolean = false,
         val playWhenReady: Boolean = isPlaying,
         val loading: Boolean = false,
+        val droppedFrames: Int = -1,
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -603,10 +609,17 @@ internal object SeekThumbnails {
         @Volatile private var latticeFinished = onDemand
         @Volatile private var afterPlayback = false
         private var afterPlaybackSince = 0L
-        private var lastSampledPlaying = false
+        @Volatile private var lastSampledPlaying = false
 
         private val worker = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
         private val imageScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(if (MemoryGovernor.isLowRam) 1 else 2))
+        private val frameWriter = PreviewFrameWriter(Dispatchers.IO.limitedParallelism(1)) { failure ->
+            PreviewDiagnostics.note("preview persistence failed: ${failure.javaClass.simpleName}")
+            if (failure is OutOfMemoryError) imageFailure(failure)
+        }
+        private val scrubPlan = PreviewScrubPlan()
+        private val wakeups = Channel<Unit>(Channel.CONFLATED)
+        private val workBudget = PreviewWorkBudget(MemoryGovernor.isLowRam)
         private val rgb565 = runCatching { PreviewPreferences.rgb565(context) }.getOrDefault(true)
         @Volatile private var store: ThumbStore? = null
         @Volatile private var index: MediaIndex? = null
@@ -614,6 +627,8 @@ internal object SeekThumbnails {
         @Volatile private var slotKeyframe: IntArray = IntArray(0)
         private var keyframeSlots: HashMap<Int, IntArray> = HashMap()
         @Volatile private var prioritySlot: Int = -1
+        @Volatile private var activeFetchSlot = -1
+        @Volatile private var fetchSuperseded = false
         /** Last scrub position (ms), kept even before the index exists; -1 = none. */
         @Volatile private var pendingPriorityMs: Long = -1L
         @Volatile private var lastDurationMs = 0L
@@ -1215,7 +1230,18 @@ internal object SeekThumbnails {
             pendingPriorityMs = positionMs
             lastScrubAt = SystemClock.elapsedRealtime()
             if (slotKeyframe.isEmpty()) return
-            prioritySlot = slotOf(positionMs)
+            val target = slotOf(positionMs)
+            scrubPlan.target(target, lastScrubAt)
+            if (prioritySlot != target) {
+                prioritySlot = target
+                // One transport lane on small TVs: an obsolete range must not block the new landing frame.
+                if (MemoryGovernor.isLowRam && activeFetchSlot >= 0 && activeFetchSlot != target &&
+                    slotKeyframe.getOrElse(activeFetchSlot) { -1 } != slotKeyframe[target]) {
+                    fetchSuperseded = true
+                    reader?.cancel() // cancels this reader's ranges, never playback or the copy reader
+                }
+                wakeups.trySend(Unit)
+            }
             // Held scrub: load the frame the next step will land on from disk ahead of time.
             val now = SystemClock.elapsedRealtime()
             val st = store
@@ -1225,6 +1251,15 @@ internal object SeekThumbnails {
             }
             lastNotedMs = positionMs
             lastNotedAt = now
+        }
+
+        fun noteScrubDirection(direction: Int) {
+            scrubPlan.direction(direction)
+            wakeups.trySend(Unit)
+        }
+
+        private suspend fun awaitWakeup(timeoutMs: Long) {
+            withTimeoutOrNull(timeoutMs.coerceAtLeast(1L)) { wakeups.receive() }
         }
 
         private suspend fun loop(idx: MediaIndex) {
@@ -1244,6 +1279,7 @@ internal object SeekThumbnails {
             var latticeLogged = false
             var latticePos = 0
             var neighbourCenter = -1
+            var neighbourDirection = 0
             var neighbours: List<Int> = emptyList()
             var lastWorkAt = SystemClock.elapsedRealtime()
             val st = store ?: return
@@ -1330,16 +1366,11 @@ internal object SeekThumbnails {
                         prioritySlot = -1
                     }
                 } else if (p0 >= 0) {
-                    // P0: the settle target, then P1: its neighbours, forward first.
-                    if (p0 != neighbourCenter) {
+                    // P0: the settle target, then P1: its neighbors in the current scrub direction first.
+                    if (p0 != neighbourCenter || neighbourDirection != scrubPlan.direction) {
                         neighbourCenter = p0
-                        neighbours = buildList {
-                            add(p0)
-                            for (d in 1..priorityRadius) {
-                                if (p0 + d < slotKeyframe.size) add(p0 + d)
-                                if (p0 - d >= 0) add(p0 - d)
-                            }
-                        }
+                        neighbourDirection = scrubPlan.direction
+                        neighbours = scrubPlan.neighbors(p0, slotKeyframe.size, priorityRadius)
                     }
                     val next = neighbours.firstOrNull { wanted(st, it) }
                     if (next != null) {
@@ -1370,6 +1401,7 @@ internal object SeekThumbnails {
                     continue
                 }
                 if (slot < 0 && !latticeLogged && latticePos >= lattice.size) {
+                    frameWriter.drain() // Never mark transient in-memory coverage as durably complete.
                     latticeLogged = true
                     latticeFinished = true
                     latticeComplete = lattice.isNotEmpty() &&
@@ -1396,10 +1428,15 @@ internal object SeekThumbnails {
                             buffers.releaseIdle()
                         }
                     }
-                    delay(500L)
+                    awaitWakeup(500L)
                     continue
                 }
                 if (!awaitGates(priority)) continue      // new priority while waiting: re-plan
+                if (priority == 0 && prioritySlot >= 0 && prioritySlot != slot) continue
+                if (priority == 0 && scrubPlan.remaining(SystemClock.elapsedRealtime()) > 0) {
+                    awaitWakeup(scrubPlan.remaining(SystemClock.elapsedRealtime()))
+                    continue // re-plan after settlement; never decode an obsolete intermediate target
+                }
                 if (priority == 2 && latticeBudgetSpent()) {
                     latticePos = lattice.size             // coverage ends for this session; P0/P1 continue
                     latticeFinished = true
@@ -1511,16 +1548,19 @@ internal object SeekThumbnails {
                 }
                 decodeOpen = true
                 if (priority == 0 || !ps.isPlaying) return true
-                if (priority > 0 && prioritySlot >= 0 && prioritySlot != entryPriority) return false
+                if (prioritySlot >= 0 && prioritySlot != entryPriority) return false
+                val workWait = workBudget.remaining(now)
+                if (workWait > 0) { awaitWakeup(minOf(workWait, 500L)); continue }
                 val ahead = ps.bufferedMs - ps.positionMs
                 val toEnd = ps.durationMs > 0 && ps.bufferedMs >= ps.durationMs - 1_000L
                 if (bufferGate.ready(now, ps.isPlaying, ps.buffering, ps.loading, ahead, toEnd)) return true
-                delay(1_000L)
+                awaitWakeup(1_000L)
             }
         }
 
         private suspend fun produce(idx: MediaIndex, st: ThumbStore, slot: Int, priority: Int): Outcome {
             val kf = slotKeyframe[slot]
+            val targetAtStart = prioritySlot
             val lane = freeLane() ?: run {
                 awaitAnyDecode()
                 return Outcome.POSTPONED
@@ -1541,8 +1581,18 @@ internal object SeekThumbnails {
             val make = makeExtractor ?: return Outcome.FAILED
             val t0 = SystemClock.elapsedRealtime()
             val tapped = spooledAccessUnit(kf, idx)
-            val fetched = if (tapped != null) null else awaitFetch(kf, make)
+            val fetched = if (tapped != null) null else {
+                fetchSuperseded = false
+                activeFetchSlot = slot
+                try { awaitFetch(kf, make) } finally { activeFetchSlot = -1 }
+            }
             val tWaited = SystemClock.elapsedRealtime() - t0
+            if ((prioritySlot >= 0 && prioritySlot != targetAtStart && slotKeyframe.getOrElse(prioritySlot) { -1 } != kf) ||
+                (tapped == null && fetchSuperseded && fetched?.error != null)) {
+                attempts[kf] = (attempts[kf] ?: 1) - 1
+                (tapped ?: fetched?.au)?.release()
+                return Outcome.POSTPONED // cancellation for a newer target is not a failed network request
+            }
             if (fetched != null && fetched.error != null) {
                 attempts[kf] = (attempts[kf] ?: 1) - 1
                 fetchFailed(fetched, st, slot)
@@ -1653,7 +1703,7 @@ internal object SeekThumbnails {
                 throw UnsupportedMediaException("Dolby Vision profile 5 without decoder DV metadata (fallback FFmpeg)")
             }
             val decision = ColourClassifier.classify(idx.video.colour, frame.colour, idx.video.dolbyVision)
-            val size = ThumbGeometry.outputSize(frame.width, frame.height, frame.sarNum, frame.sarDen, idx.video.displayAspect)
+            val size = ThumbGeometry.outputSizeForDevice(frame.width, frame.height, frame.sarNum, frame.sarDen, idx.video.displayAspect)
             val bmp = pacedDecode {
                 atBackgroundPriority { lane.decoder.render(frame, decision, size[0], size[1]) }
             }
@@ -1661,7 +1711,7 @@ internal object SeekThumbnails {
         }
 
         /** Stores every finished decode; returns [of]'s outcome if it was one of them. Worker only. */
-        private fun settleDecodes(of: DecodeJob? = null): Outcome? {
+        private suspend fun settleDecodes(of: DecodeJob? = null): Outcome? {
             if (decodeJobs.isEmpty()) return null
             var outcome: Outcome? = null
             for (job in decodeJobs.values.filter { it.result.isCompleted }) {
@@ -1679,7 +1729,7 @@ internal object SeekThumbnails {
             return settleDecodes(of)
         }
 
-        private fun finishDecode(job: DecodeJob): Outcome {
+        private suspend fun finishDecode(job: DecodeJob): Outcome {
             val d = job.result.getCompleted()
             d.error?.let {
                 if (it !is OutOfMemoryError) throw it
@@ -1696,7 +1746,16 @@ internal object SeekThumbnails {
             val kfPts = job.idx.keyframes.ptsUs[kf]
             val slots = keyframeSlots[kf] ?: intArrayOf(job.slot)
             val checkSlot = if (borrow != null) slots.firstOrNull { it in checkQueue } else null
-            job.st.put(LongArray(slots.size) { slots[it].toLong() * SPACING_MS * 1000L }, kfPts, bmp)
+            frameWriter.submit(publish = {
+                job.st.publish(LongArray(slots.size) { slots[it].toLong() * SPACING_MS * 1000L }, kfPts, bmp)
+                    .also { bumpTick() }
+            }, persist = { frame ->
+                val started = SystemClock.elapsedRealtime()
+                atBackgroundPriority { job.st.persist(frame) }
+                workBudget.completed(SystemClock.elapsedRealtime(), SystemClock.elapsedRealtime() - started, lastSampledPlaying)
+                bumpTick()
+            })
+            workBudget.completed(SystemClock.elapsedRealtime(), d.decodeMs + d.renderMs, lastSampledPlaying)
             if (checkSlot != null) checkBorrow(job.st, checkSlot, bmp)
             synchronized(recentMade) {
                 recentMade.addLast(job.slot.toLong() * SPACING_MS)
@@ -2118,7 +2177,7 @@ internal object SeekThumbnails {
                 tendReserve()
                 settleDecodes()
                 tendPrepareWhileWaiting()
-                delay(250L)
+                awaitWakeup(minOf(250L, (until - SystemClock.elapsedRealtime()).coerceAtLeast(1L)))
             }
         }
 
@@ -2316,7 +2375,7 @@ internal object SeekThumbnails {
             // 4K that cannot decode right now and has nothing stored: no empty frame to fill, so no pane.
             if (!decodeOpen && store?.isEmpty() != false && borrow == null) return null
             val v = index?.video ?: return null
-            val size = ThumbGeometry.outputSize(v.width, v.height, 1, 1, v.displayAspect)
+            val size = ThumbGeometry.outputSizeForDevice(v.width, v.height, 1, 1, v.displayAspect)
             // The crop was measured on stored pictures, whose size can differ from this estimate: apply it as fractions.
             val c = crop.current?.takeIf { it.width > 0 && it.height > 0 }
             val fw = if (c == null) 1f else (c.width - c.left - c.right).toFloat() / c.width
@@ -2412,7 +2471,7 @@ internal object SeekThumbnails {
             if (!source.identityExact || borrow != null || slotKeyframe.isEmpty() || coverageStored(st)) return
             val ownMs = lastDurationMs.takeIf { it > 0 } ?: (idx.durationUs / 1000L)
             val v = idx.video
-            val own = ThumbGeometry.outputSize(v.width, v.height, 1, 1, v.displayAspect)
+            val own = ThumbGeometry.outputSizeForDevice(v.width, v.height, 1, 1, v.displayAspect)
             val candidates = runCatching { ThumbStore.siblings(context, source.identity, st.key) }.getOrDefault(emptyList())
                 .filter {
                     it.pictures >= MIN_BORROW_PICTURES && st.verdictOn(it.key) != false &&
@@ -2474,6 +2533,11 @@ internal object SeekThumbnails {
         private fun copyHoldsLattice(): Boolean {
             val c = copy ?: return false
             if (usenet) return usenetCopyHolds(c)
+            if (MemoryGovernor.isLowRam && c.filling && decoderLanes.none { it.inUse }) closeDecoders()
+            // Give ready HD links a brief head start before warming an expensive original decoder.
+            // Foreground targets and visual-verification frames retain their existing priority.
+            if (MemoryGovernor.isLowRam && !c.ended && !c.filling &&
+                SystemClock.elapsedRealtime() - copyStartedAt < 2_000L) return true
             if (!c.filling || prepareStage in 1..4 || borrow?.failed == true) return false
             val now = SystemClock.elapsedRealtime()
             if (c.made != copyHoldMade || copyHoldSince == 0L) {
@@ -2570,7 +2634,7 @@ internal object SeekThumbnails {
             copyTried = true
             if (st.isMemoryOnly || coverageStored(st)) return
             val v = idx.video
-            val picture = ThumbGeometry.outputSize(v.width, v.height, 1, 1, v.displayAspect)
+            val picture = ThumbGeometry.outputSizeForDevice(v.width, v.height, 1, 1, v.displayAspect)
             val pts = idx.keyframes.ptsUs
             val landing = LongArray(slotKeyframe.size) { s -> slotKeyframe[s].let { if (it in pts.indices) pts[it] else -1L } }
             val durationMs = lastDurationMs.takeIf { it > 0 } ?: (idx.durationUs / 1000L)
@@ -2587,6 +2651,7 @@ internal object SeekThumbnails {
                 ownDecoderBusy = { decoderLanes.any { it.inUse || it.decoder.warm } },
                 pacer = if (MemoryGovernor.isStrongBox) null else copyPacer,
                 screenUp = { usenet && prepareStage in 1..4 },
+                workBudget = workBudget,
             ).also { it.start() }
         }
 
@@ -2599,7 +2664,7 @@ internal object SeekThumbnails {
                 return
             }
             val v = idx.video
-            val own = ThumbGeometry.outputSize(v.width, v.height, 1, 1, v.displayAspect)
+            val own = ThumbGeometry.outputSizeForDevice(v.width, v.height, 1, 1, v.displayAspect)
             val size = set.store.slots().minOrNull()?.let(set.store::compressed)?.let(::pictureSize)
             if (size == null || size[0] != own[0] || size[1] != own[1]) {
                 c.rejected(set.store.key, if (size == null) "no picture to measure"
@@ -2965,7 +3030,11 @@ internal object SeekThumbnails {
                 ConnectionLedger.app.notePlaybackState(healthy = true, quiet = true)
                 return PlayerState(false, false, lastPositionMs, lastPositionMs, lastDurationMs)
             }
-            return samplePlayer()?.also(::trackJump)?.also(::noteForLedger)
+            return samplePlayer()?.also(::trackJump)?.also(::noteForLedger)?.also { ps ->
+                workBudget.observe(SystemClock.elapsedRealtime(), ps.isPlaying, ps.buffering,
+                    ps.bufferedMs - ps.positionMs, ps.droppedFrames,
+                    excluded = SystemClock.elapsedRealtime() - lastScrubAt < SEEK_QUIET_MS)
+            }
         }
 
         /** Worker thread: lets the connection ledger step up only while playback can spare it, and down on trouble. */
@@ -3274,6 +3343,7 @@ internal object SeekThumbnails {
                 failed = ConnectionLedger.sourceTrouble(p.playerError?.errorCode),
                 playWhenReady = p.playWhenReady,
                 loading = p.isLoading,
+                droppedFrames = p.droppedFrames,
             )
         }
 
@@ -3296,7 +3366,8 @@ internal object SeekThumbnails {
 
         private fun beforePlayName() = beforePlay.name.lowercase().replaceFirstChar { it.uppercase() }
 
-        private fun finish() {
+        private suspend fun finish() {
+            frameWriter.finish()
             val noneMade = synchronized(recentMade) { madeSeq } == 0
             val complete = store?.let { runCatching { coverageStored(it) }.getOrDefault(false) } == true
             if (noneMade && giveUp.anything && !giveUp.logged && !complete) {
@@ -3315,6 +3386,7 @@ internal object SeekThumbnails {
             monitorJob?.cancel()
             dropReserve("session end")
             copy?.stop("the thumbnail session ended")
+            copy?.workerJob?.join()
             dropBorrow()
             if (fourK && !MemoryGovernor.isStrongBox) synchronized(pacer) {
                 Log.i(TAG, "4K pace at session end: pace ${pacer.paceMs / 1000} s, drops counted ${pacer.countedDrops} " +
@@ -3326,6 +3398,9 @@ internal object SeekThumbnails {
             MemoryGovernor.removeTrimListener(trimListener)
             runCatching { closeDecoders() }
             decodeScope.cancel()
+            decodeScope.coroutineContext[Job]?.join()
+            imageScope.coroutineContext[Job]?.join()
+            fetchScope.coroutineContext[Job]?.join()
             store?.let { st ->
                 if (lastDurationMs > 0) st.watchedFraction = (lastPositionMs.toFloat() / lastDurationMs).coerceIn(0f, 1f)
                 previewSafely("preview cache flush") { st.flush() }
@@ -3335,6 +3410,7 @@ internal object SeekThumbnails {
             buffers.close()
             worker.cancel()
             spoolWriter.cancel()
+            spoolWriter.coroutineContext[Job]?.join()
             spool.clear()
             runCatching { spoolDir.deleteRecursively() }
         }
