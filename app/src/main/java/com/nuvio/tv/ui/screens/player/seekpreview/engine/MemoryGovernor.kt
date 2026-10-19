@@ -16,7 +16,9 @@ internal enum class DecodeTier(val rssMb: Int, val addressSpaceMb: Int) {
 }
 
 /** [swapFreeMb] >= 0 when the refusal was for swap. */
-internal data class GovernorVerdict(val allowed: Boolean, val reason: String, val swapFreeMb: Long = -1L) {
+internal data class GovernorVerdict(
+    val allowed: Boolean, val reason: String, val swapFreeMb: Long = -1L, val compactHd: Boolean = false,
+) {
     val swapLow: Boolean get() = !allowed && swapFreeMb >= 0
 }
 
@@ -273,6 +275,7 @@ internal object MemoryGovernor {
      */
     fun allow(
         tier: DecodeTier, decoderWarm: Boolean = false, funded: Boolean = false, addressSpace: Boolean = tier == DecodeTier.SW_4K,
+        compactHd: Boolean = false,
     ): GovernorVerdict {
         // When 4K may decode is the scheduler's rule, this only checks that it is affordable.
         if ((addressSpace || lowRam) && !is64Bit && !decoderWarm) {
@@ -285,9 +288,32 @@ internal object MemoryGovernor {
         val mem = readMeminfo() ?: return GovernorVerdict(false, "meminfo unavailable")
         // High-reference/high-bitrate files can exceed the average decoder working set substantially.
         val coldMb = if (lowRam) maxOf(tier.rssMb, if (tier == DecodeTier.SW_4K) 512 else 80) else tier.rssMb
-        return decodeVerdict(mem, if (decoderWarm) 0L else coldMb.toLong(),
-            funded && !(lowRam && tier == DecodeTier.SW_4K), lowRam)
+        val charge = if (decoderWarm) 0L else coldMb.toLong()
+        val strict = decodeVerdict(mem, charge, funded && !(lowRam && tier == DecodeTier.SW_4K), lowRam)
+        if (!compactHd || !lowRam || tier != DecodeTier.SW_UP_TO_1080P) return strict
+        val info = ActivityManager.MemoryInfo()
+        val am = activityManager
+        am?.getMemoryInfo(info)
+        if (am != null && info.lowMemory) return GovernorVerdict(false, "system low on memory")
+        // Opt-in only: the caller must serialize work and close its native decoder after rendering.
+        if (strict.allowed) return strict.copy(compactHd = mem.swapTotalMb > 0 && mem.swapFreeMb < 96L)
+        if (!strict.swapLow) return strict
+        if (am == null) return strict
+        return compactHdVerdict(mem, coldMb.toLong(), info.lowMemory, readMemoryStalls()) ?: strict
     }
+
+    /** Keep the normal RAM floor plus 64 MB spare, charge a cold HD decoder, and fail closed without quiet PSI. */
+    internal fun compactHdVerdict(
+        mem: Meminfo, chargeMb: Long, lowMemory: Boolean, stalls: PreviewMemoryStalls?,
+    ): GovernorVerdict? {
+        if (lowMemory || stalls?.quiet != true || mem.availableMb - chargeMb < FLOOR_LOW_RAM_MB + 64L) return null
+        return GovernorVerdict(true, "transient HD: available=${mem.availableMb} MB charge=$chargeMb MB " +
+            "swapFree=${mem.swapFreeMb} MB PSI=${stalls.somePercent}/${stalls.fullPercent}", compactHd = true)
+    }
+
+    internal fun readMemoryStalls(): PreviewMemoryStalls? = runCatching {
+        PreviewMemoryStalls.parse(File("/proc/pressure/memory").readText())
+    }.getOrNull()
 
     /**
      * Whether a decode counts as funded: only the first lane, and only while playback's read-ahead is held back for it
@@ -345,7 +371,9 @@ internal object MemoryGovernor {
     /** For the log: MemAvailable and SwapFree against the decode floors. */
     fun memoryNote(): String {
         val mem = readMeminfo()
-        return memoryNote(mem?.availableMb ?: -1L, mem?.swapTotalMb ?: 0L, mem?.swapFreeMb ?: 0L, lowRam)
+        val stalls = readMemoryStalls()
+        return memoryNote(mem?.availableMb ?: -1L, mem?.swapTotalMb ?: 0L, mem?.swapFreeMb ?: 0L, lowRam) +
+            ", PSI " + (stalls?.let { "some=${it.somePercent}% full=${it.fullPercent}%" } ?: "unavailable")
     }
 
     internal fun memoryNote(availMb: Long, swapTotalMb: Long, swapFreeMb: Long, lowRam: Boolean): String {

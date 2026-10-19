@@ -88,6 +88,7 @@ internal class CopyPass(
     private val pacer: PlaybackDecodePacer?,
     private val screenUp: () -> Boolean = { false },
     private val workBudget: PreviewWorkBudget? = null,
+    private val compactGate: PreviewCompactGate = PreviewCompactGate(),
 ) {
     private companion object {
         const val TAG = "ThumbCopy"
@@ -145,6 +146,7 @@ internal class CopyPass(
     @Volatile private var currentKey: String? = null
     @Volatile private var reader: HttpRangeReader? = null
     @Volatile private var priorityMs = -1L
+    private var compactDecode = false
     fun notePriority(positionMs: Long) { priorityMs = positionMs }
     @Volatile private var stopping = false
     @Volatile private var rejectedKey: String? = null
@@ -485,7 +487,7 @@ internal class CopyPass(
                             if (urgent == null) { if (retry) again.removeFirst() else next++ }
                             if (!needed(m, foreground = urgent != null)) continue
                             state = State.FILLING
-                            if (!awaitReady(decoder, host)) {
+                            if (!awaitWorkTurn(decoder, host)) {
                                 out = if (isRejected()) Outcome.REJECTED else Outcome.STOP
                                 break@work
                             }
@@ -527,7 +529,19 @@ internal class CopyPass(
                         val au = got.getOrNull() ?: continue@work
                         // Fetched next to others, or swap ran low meanwhile: playback, memory and the other decoder
                         // are asked again before decoding.
-                        val swapLow = !MemoryGovernor.swapAllows(funded = false).allowed
+                        val afterFetch = if (MemoryGovernor.isLowRam) {
+                            MemoryGovernor.allow(DecodeTier.SW_UP_TO_1080P, decoderWarm = decoder.warm,
+                                addressSpace = true, compactHd = true)
+                        } else MemoryGovernor.swapAllows(funded = false)
+                        // A changed pressure profile is admitted afresh before another range is fetched.
+                        if (MemoryGovernor.isLowRam && (!afterFetch.allowed || afterFetch.compactHd && !compactDecode)) {
+                            decoder.close()
+                            attempts.postponed(f.kf)
+                            again.addFirst(f.m)
+                            delay(500L)
+                            continue@work
+                        }
+                        val swapLow = !afterFetch.allowed
                         if ((f.shared || swapLow) && !awaitReady(decoder, host)) {
                             out = if (isRejected()) Outcome.REJECTED else Outcome.STOP
                             break@work
@@ -540,16 +554,10 @@ internal class CopyPass(
                         val kf = f.kf
                         val playing = lastPlaying
                         val decodeStarted = SystemClock.elapsedRealtime()
-                        val frame = paced(playing) { atBackground { decoder.decode(au, idx.video, threads = 1) } }
-                            ?: continue@work
-                        if (dv5 && !frame.colour.doviIpt) throw Unusable("Dolby Vision 5 without decoder metadata")
-                        val decision = ColourClassifier.classify(idx.video.colour, frame.colour, idx.video.dolbyVision)
-                        val size = ThumbGeometry.outputSizeForDevice(frame.width, frame.height, frame.sarNum, frame.sarDen,
-                            idx.video.displayAspect)
-                        val plan = CopyFit.plan(size[0], size[1], own.pictureW, own.pictureH) ?: continue@work
-                        val rendered = paced(playing) {
-                            atBackground { decoder.render(frame, decision, plan.renderW, plan.renderH) }
+                        val picture = try { renderPicture(decoder, au, idx, playing, dv5) } finally {
+                            if (compactDecode) decoder.close()
                         } ?: continue@work
+                        val (rendered, plan) = picture
                         val slots = kfSlots[kf].orEmpty().filter { !store.has(slotUs(it)) }
                         if (slots.isEmpty()) continue@work
                         paced(playing) {
@@ -591,6 +599,28 @@ internal class CopyPass(
     }
 
     private fun slotUs(slot: Int): Long = slot.toLong() * SPACING_MS * 1000L
+
+    private fun renderPicture(decoder: FfmpegThumbDecoder, au: ByteArray, idx: MediaIndex,
+                              playing: Boolean, dv5: Boolean): Pair<Bitmap, CopyFit.Plan>? {
+        val frame = paced(playing) { atBackground { decoder.decode(au, idx.video, threads = 1) } } ?: return null
+        if (dv5 && !frame.colour.doviIpt) throw Unusable("Dolby Vision 5 without decoder metadata")
+        val decision = ColourClassifier.classify(idx.video.colour, frame.colour, idx.video.dolbyVision)
+        val size = ThumbGeometry.outputSizeForDevice(frame.width, frame.height, frame.sarNum, frame.sarDen, idx.video.displayAspect)
+        val plan = CopyFit.plan(size[0], size[1], own.pictureW, own.pictureH) ?: return null
+        val bitmap = paced(playing) { atBackground { decoder.render(frame, decision, plan.renderW, plan.renderH) } } ?: return null
+        return bitmap to plan
+    }
+
+    private suspend fun awaitWorkTurn(decoder: FfmpegThumbDecoder, host: String?): Boolean {
+        while (awaitReady(decoder, host)) {
+            if (!compactDecode) { compactGate.reset(); return true }
+            val wait = compactGate.acquire(SystemClock.elapsedRealtime())
+            if (wait == 0L) return true
+            decoder.close()
+            delay(minOf(wait, 500L))
+        }
+        return false
+    }
 
     private fun pace(playing: Boolean): Long = when {
         !playing -> if (screenUp()) 0L else PACE_PAUSED_MS
@@ -662,6 +692,7 @@ internal class CopyPass(
     private suspend fun sample(): Sample? = withContext(Dispatchers.Main) {
         val p = playerProvider() ?: return@withContext null
         val duration = if (p.duration == C.TIME_UNSET) 0L else p.duration
+        compactGate.observe(SystemClock.elapsedRealtime(), p.playbackState == Player.STATE_BUFFERING, p.droppedFrames)
         Sample(
             playing = p.isPlaying,
             buffering = p.playbackState == Player.STATE_BUFFERING,
@@ -716,12 +747,17 @@ internal class CopyPass(
                     decoder.trim()
                     "the 4K thumbnail decoder to be let go"
                 }
-                decoder != null -> MemoryGovernor.allow(DecodeTier.SW_UP_TO_1080P, decoderWarm = decoder.warm, addressSpace = true)
-                    .takeIf { !it.allowed }?.let {
+                decoder != null -> {
+                    val verdict = MemoryGovernor.allow(DecodeTier.SW_UP_TO_1080P, decoderWarm = decoder.warm,
+                        addressSpace = true, compactHd = MemoryGovernor.isLowRam)
+                    compactDecode = verdict.compactHd
+                    if (verdict.allowed) null else {
                         memory = true
-                        decoder.trim()
-                        "memory (${it.reason})"
+                        compactGate.reset()
+                        if (MemoryGovernor.isLowRam) decoder.close() else decoder.trim()
+                        "memory (${verdict.reason}; ${MemoryGovernor.memoryNote()})"
                     }
+                }
                 else -> null
             }
             if (why == null) {

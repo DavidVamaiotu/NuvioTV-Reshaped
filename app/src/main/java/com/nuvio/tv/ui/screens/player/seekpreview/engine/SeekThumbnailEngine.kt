@@ -621,6 +621,7 @@ internal object SeekThumbnails {
         private val scrubPlan = PreviewScrubPlan()
         private val wakeups = Channel<Unit>(Channel.CONFLATED)
         private val workBudget = PreviewWorkBudget(MemoryGovernor.isLowRam)
+        private val compactGate = PreviewCompactGate()
         private val rgb565 = runCatching { PreviewPreferences.rgb565(context) }.getOrDefault(true)
         @Volatile private var store: ThumbStore? = null
         @Volatile private var index: MediaIndex? = null
@@ -696,6 +697,7 @@ internal object SeekThumbnails {
         @Volatile private var hardMaxRequests = Int.MAX_VALUE
         private val foregroundRequests = PreviewRequestWindow()
         private var lastDeferLogAt = 0L
+        private var lastMemoryNoteAt = 0L
         private var deferredSinceLog = 0
         private val trimListener: (Int) -> Unit = { onTrim() }
         @Volatile private var job: Job? = null
@@ -1473,7 +1475,9 @@ internal object SeekThumbnails {
                     awaitWakeup(scrubPlan.remaining(SystemClock.elapsedRealtime()))
                     continue // re-plan after settlement; never decode an obsolete intermediate target
                 }
-                topUpFetches(st, slot, priority, if (priority <= 1) neighbours else emptyList(), lattice, latticePos)
+                // Small TVs admit memory before fetching; a prefetched raw frame must not occupy RAM during a hold.
+                if (!MemoryGovernor.isLowRam)
+                    topUpFetches(st, slot, priority, if (priority <= 1) neighbours else emptyList(), lattice, latticePos)
                 if (priority == 2 && lattice.getOrNull(latticePos) == slot && fetchLimit() > 1) {
                     val ahead = (latticePos until minOf(lattice.size, latticePos + ThumbFetchLanes.MAX * 4))
                         .map { lattice[it] }.filter { it == slot || wanted(st, it) }
@@ -1611,9 +1615,26 @@ internal object SeekThumbnails {
                 reserveProvider()?.yieldHolding == true
             // Playback's held-back read-ahead covers one decode: an extra lane has to fit on its own.
             val funded = MemoryGovernor.funded(busy, tier, reserveFunded, naturalFunded, screenHolds)
-            val verdict = MemoryGovernor.allow(tier, decoderWarm = lane.decoder.warm, funded = funded)
+            val verdict = MemoryGovernor.allow(tier, decoderWarm = lane.decoder.warm, funded = funded,
+                compactHd = MemoryGovernor.isLowRam && !fourK)
             refusedForSwap = verdict.swapLow
             if (!verdict.allowed) return deferForMemory(verdict, tier, slot, priority, busy, funded, afterFetch = false)
+            if (verdict.compactHd) {
+                val now = SystemClock.elapsedRealtime()
+                val budgetWait = if (lastSampledPlaying) workBudget.remaining(now) else 0L
+                if (budgetWait > 0) {
+                    waitUnlessNewPriority(minOf(budgetWait, 500L))
+                    return Outcome.POSTPONED
+                }
+                val wait = compactGate.acquire(now)
+                if (wait > 0) {
+                    closeDecoders()
+                    buffers.releaseIdle()
+                    waitUnlessNewPriority(minOf(wait, 500L))
+                    return Outcome.POSTPONED
+                }
+                PreviewDiagnostics.note(verdict.reason)
+            } else if (tier == DecodeTier.SW_UP_TO_1080P) compactGate.reset()
             attempts.started(kf, SystemClock.elapsedRealtime())
             val make = makeExtractor ?: return Outcome.FAILED
             val t0 = SystemClock.elapsedRealtime()
@@ -1653,7 +1674,9 @@ internal object SeekThumbnails {
                 return Outcome.FAILED
             }
             // The fetch can take a while: swap is read again before the decode starts. The keyframe is kept for later.
-            val late = if (MemoryGovernor.isStrongHardware) null else MemoryGovernor.swapAllows(funded)
+            val late = if (MemoryGovernor.isLowRam && !fourK) {
+                MemoryGovernor.allow(tier, decoderWarm = lane.decoder.warm, funded = funded, compactHd = true)
+            } else if (MemoryGovernor.isStrongHardware) null else MemoryGovernor.swapAllows(funded)
             if (late != null && !late.allowed) {
                 attempts.postponed(kf)
                 if (fetched != null) {
@@ -1669,7 +1692,7 @@ internal object SeekThumbnails {
             // ATOMIC: the lane is always released, even when the session ends before the decode starts.
             val result = decodeScope.async(start = CoroutineStart.ATOMIC) {
                 try {
-                    decodeOn(lane, au, idx)
+                    decodeOn(lane, au, idx, compactHd = verdict.compactHd || late?.compactHd == true)
                 } catch (t: Throwable) {
                     Decoded(null, 0L, 0L, false, 0, 0, "", error = t)
                 } finally {
@@ -1689,8 +1712,9 @@ internal object SeekThumbnails {
             verdict: GovernorVerdict, tier: DecodeTier, slot: Int, priority: Int, busy: Int, funded: Boolean,
             afterFetch: Boolean,
         ): Outcome {
+            if (tier == DecodeTier.SW_UP_TO_1080P) compactGate.reset()
             laneChange(laneCtl.onMemoryRefused())
-            val close = MemoryGovernor.closesDecodersFor(verdict)
+            val close = MemoryGovernor.isLowRam || MemoryGovernor.closesDecodersFor(verdict)
             if (verdict.swapLow) {
                 val paused = !sampledPlaying
                 if (swapHolds.refused(verdict, paused, funded, afterFetch, close, SystemClock.elapsedRealtime())) {
@@ -1703,6 +1727,15 @@ internal object SeekThumbnails {
                 awaitAnyDecode()
                 return Outcome.POSTPONED
             }
+            if (close) closeDecoders()
+            if (MemoryGovernor.isLowRam) {
+                // Release completed ranges retained by a late memory check; recovery must not pin their buffers.
+                for ((kf, fetched) in fetches.entries.toList()) {
+                    if (!fetched.isCompleted || fetched.getCompleted().error != null) continue
+                    fetches.remove(kf)
+                    fetched.getCompleted().au?.release()
+                }
+            }
             if (fourK) takeReserve(tier, verdict.reason)
             if (priority == 0) {
                 // A settle target that keeps being refused must not starve the coverage pass.
@@ -1713,12 +1746,15 @@ internal object SeekThumbnails {
                 if (++p0Deferrals >= P0_MAX_DEFERRALS && prioritySlot == slot) prioritySlot = -1
             }
             giveUp.memoryRefused(verdict.reason)
-            PreviewDiagnostics.note("decode waiting for memory: ${verdict.reason}")
             // Playback first: give our working set back, so the next decode must clear floor + charge again.
             if (!close) trimDecoders()
             buffers.releaseIdle()
             deferredSinceLog++
             val now = SystemClock.elapsedRealtime()
+            if (now - lastMemoryNoteAt >= 5_000L) {
+                lastMemoryNoteAt = now
+                PreviewDiagnostics.note("decode waiting for memory: ${verdict.reason}; ${MemoryGovernor.memoryNote()}")
+            }
             if (now - lastDeferLogAt >= DEFER_LOG_INTERVAL_MS) {
                 Log.d(TAG, "slot=$slot P$priority deferred (x$deferredSinceLog): ${verdict.reason}")
                 lastDeferLogAt = now
@@ -1729,7 +1765,14 @@ internal object SeekThumbnails {
         }
 
         /** Lane thread. Background priority, so playback's threads win the CPU. A 4K decode takes up to 5 s on a Fire TV Stick. */
-        private fun decodeOn(lane: DecoderLane, au: ThumbAu, idx: MediaIndex): Decoded {
+        private fun decodeOn(lane: DecoderLane, au: ThumbAu, idx: MediaIndex, compactHd: Boolean): Decoded {
+            return try { decodeFrameOn(lane, au, idx) } finally {
+                // The rendered bitmap is independent; no DPB or conversion context stays resident between probes.
+                if (compactHd) lane.decoder.close()
+            }
+        }
+
+        private fun decodeFrameOn(lane: DecoderLane, au: ThumbAu, idx: MediaIndex): Decoded {
             val cold = !lane.decoder.warm
             val t1 = SystemClock.elapsedRealtime()
             val frame = pacedDecode {
@@ -2698,6 +2741,7 @@ internal object SeekThumbnails {
                 pacer = if (MemoryGovernor.isStrongBox) null else copyPacer,
                 screenUp = { usenet && prepareStage in 1..4 },
                 workBudget = workBudget,
+                compactGate = compactGate,
             ).also { pass ->
                 pendingPriorityMs.takeIf { it >= 0 }?.let(pass::notePriority)
                 pass.start()
@@ -3080,6 +3124,7 @@ internal object SeekThumbnails {
                 return PlayerState(false, false, lastPositionMs, lastPositionMs, lastDurationMs)
             }
             return samplePlayer()?.also(::trackJump)?.also(::noteForLedger)?.also { ps ->
+                compactGate.observe(SystemClock.elapsedRealtime(), ps.buffering, ps.droppedFrames)
                 workBudget.observe(SystemClock.elapsedRealtime(), ps.isPlaying, ps.buffering,
                     ps.bufferedMs - ps.positionMs, ps.droppedFrames,
                     excluded = SystemClock.elapsedRealtime() - lastScrubAt < SEEK_QUIET_MS)

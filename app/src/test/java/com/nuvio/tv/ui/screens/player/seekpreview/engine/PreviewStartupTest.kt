@@ -27,7 +27,7 @@ class PreviewStartupTest {
             assertEquals(1, lanes.lanes)
             assertEquals(1, lanes.ceiling())
             assertEquals(1, ThumbFetchLanes.limit(phase, false, fourK, memoryConstrained = true))
-            assertEquals(2, ThumbBufferPool.limitFor(6, fourK, false, memoryConstrained = true))
+            assertEquals(1, ThumbBufferPool.limitFor(6, fourK, false, memoryConstrained = true))
         }
     }
     @Test fun diagnosticsAreBoundedAndDoNotExportStreamUrls() {

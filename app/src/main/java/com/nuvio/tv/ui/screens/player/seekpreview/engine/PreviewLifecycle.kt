@@ -25,6 +25,18 @@ internal object PreviewLifecycle : Application.ActivityLifecycleCallbacks {
 
 /** Available after a restart too: Android retains why the previous app process exited. */
 internal fun previewDiagnosticReport(context: Context): String {
+    val version = runCatching {
+        @Suppress("DEPRECATION")
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+    }.getOrNull() ?: "unknown"
+    val runtime = Runtime.getRuntime()
+    val mb = 1024L * 1024L
+    val snapshot = "App version: $version\n" +
+        "Device: ${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}\n" +
+        "Android: ${android.os.Build.VERSION.RELEASE} (SDK ${android.os.Build.VERSION.SDK_INT})\n" +
+        "Process: ${if (android.os.Process.is64Bit()) "64" else "32"}-bit\n" +
+        "Java heap: ${(runtime.totalMemory() - runtime.freeMemory()) / mb}/${runtime.maxMemory() / mb} MB\n" +
+        MemoryGovernor.memoryNote()
     val exits = if (android.os.Build.VERSION.SDK_INT >= 30) runCatching {
         val manager = context.applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
         manager?.getHistoricalProcessExitReasons(context.packageName, 0, 4).orEmpty().joinToString("\n") { exit ->
@@ -37,5 +49,6 @@ internal fun previewDiagnosticReport(context: Context): String {
             "${java.util.Date(exit.timestamp)}: $reason, status=${exit.status}, pssKiB=${exit.pss}, rssKiB=${exit.rss}"
         }
     }.getOrDefault("Exit history unavailable") else "Exit history requires Android 11 or later"
-    return PreviewDiagnostics.text() + "\n\nPrevious app process exits\n" + exits
+    return PreviewDiagnostics.text() + "\n\nDevice and current memory\n" + snapshot +
+        "\n\nPrevious app process exits\n" + exits
 }

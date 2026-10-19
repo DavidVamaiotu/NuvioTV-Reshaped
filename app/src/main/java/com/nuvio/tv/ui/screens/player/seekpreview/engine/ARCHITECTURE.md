@@ -69,6 +69,24 @@ Low-RAM copies prefer 720p within the existing safe-source/SDR/codec ranking; ne
 images are bounded to 384 pixels per dimension on those devices, versus 480 elsewhere. This
 reduces output conversion/encoding/cache cost, not the full-resolution video's decode charge.
 
+### Low-swap HD recovery on small devices
+
+The ordinary swap floors remain the default, including all 4K and next-episode work. The active
+original/copy workers may opt into transient HD decoding on low-RAM devices when a cold decoder
+still leaves the normal 200 MB RAM floor plus 64 MB spare, Android reports no low-memory state,
+and kernel memory PSI is readable and quiet (some avg10 below 2%, full avg10 below 0.5%). Missing
+or malformed PSI retains the strict swap gate. A full zram device alone need not mean active
+reclaim stalls; the decision uses current pressure instead of assuming every device behaves like
+the Fire TV on which the original absolute swap rule was tuned.
+
+This path waits for stable admission, shares a three-second turn limit between original/copy
+workers, and backs off for ten seconds on buffering or dropped playback frames. It checks memory
+again after fetching. Each admitted native decoder closes as soon as its bitmap is rendered.
+Small-device fetching starts only after memory admission, uses one raw buffer without fetch/decode
+overlap, and releases completed raw ranges and decoder contexts during memory deferrals. Playback
+is never paused or delayed for this recovery path. Diagnostics record RAM and PSI at memory waits;
+exports include device, app version, architecture and current heap/memory information.
+
 Validation should compare target-to-visible-image latency (cold and cached), cancelled/wasted
 work, dropped frames/rebuffers, and peak process memory including native allocations on a 2 GB
 TV and a stronger box. Faster coverage alone is not evidence of an improved playback experience.

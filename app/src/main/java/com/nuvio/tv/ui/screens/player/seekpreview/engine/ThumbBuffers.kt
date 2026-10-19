@@ -243,7 +243,7 @@ internal class ThumbBufferPool(limit: Int, private val memory: ThumbMemory = Nat
          * keep a buffer for each fetch lane: their keyframes are small and the buffers grow only to what they hold.
          */
         fun limitFor(lanes: Int, fourK: Boolean, strong: Boolean, memoryConstrained: Boolean = false): Int {
-            if (memoryConstrained) return 2 // One decode and one fetch; never retain eight HD fetch buffers.
+            if (memoryConstrained) return 1 // Memory admission precedes the fetch; decoding and fetching never overlap.
             val l = lanes.coerceAtLeast(1)
             return when {
                 !fourK -> l + ThumbFetchLanes.MAX
