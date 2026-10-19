@@ -1,6 +1,5 @@
-- Added bounded HD preview recovery for low-swap TV boxes when available RAM and measured memory pressure show that a frame can be decoded safely. When Android restricts pressure readings, recovery requires a larger RAM reserve beyond the platform low-memory threshold. Measured reclaim stalls still block it.
-- Recovery admits one frame at a time, releases its native decoder immediately after rendering, and backs off when playback buffers or drops frames.
-- Small devices now check memory before downloading a keyframe, use one raw buffer, and release completed raw data and decoder contexts during memory waits.
-- The active smaller-copy generator uses the same guarded HD recovery path. Copy source selection and timing/edition checks are preserved.
-- Seek preview diagnostic exports now include the app version, device, Android version, process architecture, Java heap and current memory-pressure readings. Memory waits also record available RAM.
-- Preview generation remains in the background with the existing 4K protections.
+- Low-memory 1080p playback can use an available matching 720p SDR H.264 copy when the smaller-copy setting is enabled. Source metadata and actual file headers are checked, followed by the existing timing, edition and picture verification.
+- Original and copy previews share one native decoding slot on small devices, recheck memory before decoding, and release decoder memory between turns. Foreground seeking also respects playback pacing while the movie plays.
+- Completed thumbnails remain on disk across the movie after RAM is cleared. Low-memory devices keep smaller decoded-image caches and encode new thumbnails once at WebP quality 70; slots sharing a keyframe share one encoded image.
+- Coverage is only marked complete when every planned slot is saved. A 97% count can no longer hide a missing section. Superseded pending images skip unnecessary encoding and disk appends.
+- Existing playback, memory, rate-limit and 4K protections remain active. No complete movie download or forced swap use is added.

@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with bounded HD memory recovery'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with low-memory copies and durable preview coverage'
     runs-on: ubuntu-latest
 
     steps:
