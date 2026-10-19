@@ -45,12 +45,17 @@ internal object AviIndexReader {
         var hdrl: ByteArray? = null
         var moviPos = -1L
         var moviEnd = -1L
+        var chunks = 0
         while (moviPos < 0) {
+            if (++chunks > 128) throw UnsupportedMediaException("too many AVI header chunks")
             val hdr = chunkHeader(reader, head, pos) ?: break
             val (fcc, size) = hdr
             if (fcc == "LIST") {
                 val listType = LegacyCodecs.fourccAt(bytesAt(reader, head, pos + 8, 4), 0)
-                if (listType == "hdrl") hdrl = bytesAt(reader, head, pos + 12, (size - 4).toInt())
+                if (listType == "hdrl") {
+                    if (size !in 4..(4L * 1024 * 1024)) throw UnsupportedMediaException("invalid AVI header size")
+                    hdrl = bytesAt(reader, head, pos + 12, (size - 4).toInt())
+                }
                 if (listType == "movi") {
                     moviPos = pos
                     moviEnd = pos + 8 + size
@@ -118,7 +123,8 @@ internal object AviIndexReader {
         while (p + 8 <= hdrl.size) {
             val fcc = LegacyCodecs.fourccAt(hdrl, p)
             val size = u32(hdrl, p + 4).toInt()
-            val end = minOf(hdrl.size, p + 8 + size)
+            if (size < 0 || size > hdrl.size - p - 8) throw UnsupportedMediaException("invalid AVI stream list")
+            val end = p + 8 + size
             if (fcc == "LIST" && LegacyCodecs.fourccAt(hdrl, p + 8) == "strl") {
                 val s = parseStrl(hdrl, p + 12, end, streamIndex)
                 if (s != null) return s
@@ -145,7 +151,8 @@ internal object AviIndexReader {
             val fcc = LegacyCodecs.fourccAt(b, p)
             val size = u32(b, p + 4).toInt()
             val d = p + 8
-            val dEnd = minOf(end, d + size)
+            if (size < 0 || size > end - d) throw UnsupportedMediaException("invalid AVI stream header")
+            val dEnd = d + size
             when (fcc) {
                 "strh" -> if (dEnd - d >= 36) {
                     isVideo = LegacyCodecs.fourccAt(b, d) == "vids"
@@ -165,9 +172,10 @@ internal object AviIndexReader {
                     val indexType = b[d + 3].toInt() and 0xFF
                     val entries = u32(b, d + 4).toInt()
                     if (indexType == 0 && longsPerEntry == 4) {          // AVI_INDEX_OF_INDEXES
+                        if (entries < 0 || entries > (dEnd - d - 24) / 16 || entries > PreviewLimits.MAX_INDEX_ENTRIES)
+                            throw UnsupportedMediaException("invalid AVI super-index count")
                         var e = d + 24
                         repeat(entries) {
-                            if (e + 16 > dEnd) return@repeat
                             superIndex += u64(b, e) to u32(b, e + 8).toInt()
                             e += 16
                         }
@@ -194,13 +202,17 @@ internal object AviIndexReader {
             val count = u32(ix, 12).toInt()
             val base = u64(ix, 20)
             if (indexType != 1 || longsPerEntry != 2) continue            // AVI_INDEX_OF_CHUNKS, 2 dwords
+            if (count < 0 || count > (ix.size - 32) / 8 || count > PreviewLimits.MAX_SAMPLES - frame)
+                throw UnsupportedMediaException("invalid AVI index count")
             var e = 32
             repeat(count) {
-                if (e + 8 > ix.size) return@repeat
                 val off = u32(ix, e)
                 val raw = u32(ix, e + 4)
                 val sz = (raw and 0x7FFFFFFFL).toInt()
-                if (raw and 0x80000000L == 0L && sz > 0) out += Entry(frame, base + off, sz)
+                if (raw and 0x80000000L == 0L && sz > 0) {
+                    if (out.size >= PreviewLimits.MAX_INDEX_ENTRIES) throw UnsupportedMediaException("too many AVI keyframes")
+                    out += Entry(frame, base + off, sz)
+                }
                 frame++
                 e += 8
             }
@@ -228,7 +240,11 @@ internal object AviIndexReader {
                 if (ckid.startsWith(id) && (ckid.endsWith("dc") || ckid.endsWith("db"))) {
                     val flags = u32(buf, e + 4).toInt()
                     val size = u32(buf, e + 12).toInt()
-                    if (flags and AVIIF_KEYFRAME != 0 && size > 0) raw += Triple(frame, u32(buf, e + 8), size)
+                    if (flags and AVIIF_KEYFRAME != 0 && size > 0) {
+                        if (raw.size >= PreviewLimits.MAX_INDEX_ENTRIES) throw UnsupportedMediaException("too many AVI keyframes")
+                        raw += Triple(frame, u32(buf, e + 8), size)
+                    }
+                    if (frame >= PreviewLimits.MAX_SAMPLES) throw UnsupportedMediaException("too many AVI samples")
                     frame++
                 }
                 e += 16

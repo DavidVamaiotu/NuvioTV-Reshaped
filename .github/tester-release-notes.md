@@ -2,3 +2,8 @@
 - Fixed indefinite buffer waits for index, original preview and smaller-copy work when a limited buffer stays steady but the loader continues reporting active. Buffering, low-memory, rate-limit and decode protections still apply.
 - A small TV box can read the bounded stream index before a 4K decoder is allowed, enabling the existing verified smaller-copy preview path. Original 4K decoding retains its safety limits.
 - Added regression checks for saved preparation settings and small, steady, draining and buffering playback buffers. Seek preview diagnostics now identify index, copy and 4K decode waits.
+- Hardened optional preview startup and image jobs against allocation, native-link and I/O failures; image jobs are owned by their session and cancelled when it stops.
+- Native preview decoding now checks sample lengths, coded dimensions and allocation limits before copying or opening a decoder. Preview slot tables and output bitmaps are bounded, including extreme aspect ratios.
+- Damaged or deleted cached images are removed so they can be regenerated. Direct-file redirect routes are accepted without relying on folder names; adaptive manifests remain excluded.
+- Added failure and recovery checks for cancelled work, malformed cache entries, truncated downloads, rate limits, stored preference types and oversized media.
+- Bounded container table counts before MP4/AVI allocations and loops, and capped Matroska child/keyframe lists so malformed indexes cannot request unbounded startup work.

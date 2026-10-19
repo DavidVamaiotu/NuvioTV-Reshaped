@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 
@@ -238,4 +239,9 @@ class MkvKeyframeTest {
 
     @Suppress("unused")
     private fun concat(vararg parts: ByteArray) = ByteArrayOutputStream().also { o -> parts.forEach { o.write(it) } }.toByteArray()
+    @Test(timeout = 2000) fun excessiveEbmlChildCountStopsBeforeBuildingAnUnboundedList() {
+        val emptyElements = ByteArray((PreviewLimits.MAX_INDEX_ENTRIES + 1) * 2) { 0x80.toByte() }
+        assertThrows(UnsupportedMediaException::class.java) { Ebml.children(emptyElements,0,emptyElements.size) }
+    }
+
 }

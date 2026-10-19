@@ -3,6 +3,7 @@
 package com.nuvio.tv.ui.screens.player.seekpreview.engine
 
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.io.ByteArrayOutputStream
@@ -29,13 +30,13 @@ class AviIndexTest {
     private class Built(val bytes: ByteArray, val frames: List<ByteArray>)
 
     /** 6 frames at 25 fps, keyframes 0 and 3 (frame 0 carries the VOL), one audio chunk after frame 1. */
-    private fun build(): Built {
+    private fun build(extraIndex: ByteArray = ByteArray(0)): Built {
         val frames = listOf(vol + vop(0), vop(1), vop(2), vop(3), vop(4), vop(5))
         val strh = "vids".toByteArray(Charsets.ISO_8859_1) + "XVID".toByteArray(Charsets.ISO_8859_1) +
             ByteArray(12) + le32(1) + le32(25) + le32(0) + le32(frames.size) + ByteArray(20)
         val strf = le32(40) + le32(320) + le32(240) + byteArrayOf(1, 0, 24, 0) +
             "XVID".toByteArray(Charsets.ISO_8859_1) + ByteArray(20)
-        val hdrl = list("hdrl", chunk("avih", ByteArray(56)), list("strl", chunk("strh", strh), chunk("strf", strf)))
+        val hdrl = list("hdrl", chunk("avih", ByteArray(56)), list("strl", chunk("strh", strh), chunk("strf", strf), extraIndex))
         val movi = ByteArrayOutputStream()
         val index = ByteArrayOutputStream()
         val moviBodyStart = 4                                  // offsets are relative to the 'movi' fourcc
@@ -73,4 +74,11 @@ class AviIndexTest {
         assertArrayEquals(m.frames[0], ex.extract(0))
         assertArrayEquals(m.frames[3], ex.extract(1))
     }
+    @Test(timeout = 2000) fun truncatedSuperIndexCannotLoopOverItsClaimedCount() {
+        val malformed = chunk("indx", byteArrayOf(4,0,0,0) + le32(Int.MAX_VALUE) + ByteArray(16))
+        val file = build(malformed).bytes
+        val reader = BytesReader(file)
+        assertThrows(UnsupportedMediaException::class.java) { AviIndexReader.read(reader,file) }
+    }
+
 }

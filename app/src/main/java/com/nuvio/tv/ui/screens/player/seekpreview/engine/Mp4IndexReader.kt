@@ -39,6 +39,7 @@ internal object Mp4IndexReader {
                 size = (end - p).toLong()
             }
             if (size < hdr || p + size > end) break
+            if (out.size >= PreviewLimits.MAX_INDEX_ENTRIES) throw UnsupportedMediaException("too many MP4 boxes")
             out.add(Box(type(b, p + 4), p, p + hdr, (p + size).toInt()))
             p += size.toInt()
         }
@@ -90,6 +91,7 @@ internal object Mp4IndexReader {
             } else if (size == 0L) {
                 size = if (total > 0) total - pos else throw UnsupportedMediaException("box to EOF with unknown length")
             }
+            if (size < hdrLen || (total > 0 && size > total - pos)) throw UnsupportedMediaException("bad box size")
             val t = type(hdr, 4)
             if (t == "moov") {
                 val maxMoov = if (false) MAX_MOOV else MAX_MOOV_SMALL
@@ -187,30 +189,55 @@ internal object Mp4IndexReader {
         return if (mediaTime > 0) mediaTime else 0L
     }
 
+    /** Validate untrusted table counts against both the payload and the preview memory budget. */
+    private fun tableCount(b: ByteArray, box: Box, stride: Int, limit: Int): Int {
+        val bytes = box.end - box.dataStart
+        if (bytes < 8) throw UnsupportedMediaException("truncated MP4 ${box.type}")
+        val count = u32(b, box.dataStart + 4)
+        val minimum = if (box.type == "ctts") 0L else 1L
+        if (count !in minimum..limit.toLong() || count > (bytes - 8) / stride)
+            throw UnsupportedMediaException("invalid MP4 ${box.type} count")
+        return count.toInt()
+    }
+
     private fun buildKeyframes(b: ByteArray, stbl: Box, timescale: Long, editShift: Long): KeyframeIndex {
         val stsz = child(b, stbl, "stsz") ?: throw UnsupportedMediaException("no stsz")
+        if (timescale <= 0 || stsz.end - stsz.dataStart < 12) throw UnsupportedMediaException("invalid MP4 sample header")
         val fixedSize = u32(b, stsz.dataStart + 4)
-        val sampleCount = u32(b, stsz.dataStart + 8).toInt()
+        val samples = u32(b, stsz.dataStart + 8)
+        if (samples !in 1..PreviewLimits.MAX_SAMPLES.toLong() ||
+            (fixedSize == 0L && samples > (stsz.end - stsz.dataStart - 12) / 4))
+            throw UnsupportedMediaException("invalid MP4 sample count")
+        val sampleCount = samples.toInt()
         fun sampleSize(i: Int): Long = if (fixedSize != 0L) fixedSize else u32(b, stsz.dataStart + 12 + 4 * i)
 
         // sync samples (1-based); absent stss = every sample is sync
         val stss = child(b, stbl, "stss")
         val sync: IntArray = if (stss != null) {
-            val n = u32(b, stss.dataStart + 4).toInt()
+            val n = tableCount(b, stss, 4, minOf(sampleCount, PreviewLimits.MAX_INDEX_ENTRIES))
             IntArray(n) { u32(b, stss.dataStart + 8 + 4 * it).toInt() - 1 }
-        } else IntArray(sampleCount) { it }
+        } else {
+            if (sampleCount > PreviewLimits.MAX_INDEX_ENTRIES) throw UnsupportedMediaException("too many MP4 sync samples")
+            IntArray(sampleCount) { it }
+        }
 
         val stco = child(b, stbl, "stco")
         val co64 = child(b, stbl, "co64")
         val chunkOffsets: LongArray = when {
-            stco != null -> LongArray(u32(b, stco.dataStart + 4).toInt()) { u32(b, stco.dataStart + 8 + 4 * it) }
-            co64 != null -> LongArray(u32(b, co64.dataStart + 4).toInt()) { u64(b, co64.dataStart + 8 + 8 * it) }
+            stco != null -> LongArray(tableCount(b, stco, 4, sampleCount)) { u32(b, stco.dataStart + 8 + 4 * it) }
+            co64 != null -> LongArray(tableCount(b, co64, 8, sampleCount)) { u64(b, co64.dataStart + 8 + 8 * it) }
             else -> throw UnsupportedMediaException("no stco/co64")
         }
         val stsc = child(b, stbl, "stsc") ?: throw UnsupportedMediaException("no stsc")
-        val stscCount = u32(b, stsc.dataStart + 4).toInt()
+        val stscCount = tableCount(b, stsc, 12, chunkOffsets.size)
         val stscFirst = IntArray(stscCount) { u32(b, stsc.dataStart + 8 + 12 * it).toInt() - 1 }
         val stscPer = IntArray(stscCount) { u32(b, stsc.dataStart + 12 + 12 * it).toInt() }
+
+        for (e in 0 until stscCount) {
+            if (stscFirst[e] !in chunkOffsets.indices || (e == 0 && stscFirst[e] != 0) ||
+                (e > 0 && stscFirst[e] <= stscFirst[e - 1]) || stscPer[e] !in 1..sampleCount)
+                throw UnsupportedMediaException("invalid MP4 chunk mapping")
+        }
 
         // sample -> offset for every sample (sequential walk), then pick the sync ones
         val sampleOffset = LongArray(sampleCount)
@@ -219,22 +246,23 @@ internal object Mp4IndexReader {
         for (chunk in chunkOffsets.indices) {
             while (entry + 1 < stscCount && stscFirst[entry + 1] <= chunk) entry++
             var off = chunkOffsets[chunk]
+            if (stscPer[entry] > sampleCount - s) throw UnsupportedMediaException("MP4 chunk sample count exceeds table")
             repeat(stscPer[entry]) {
-                if (s < sampleCount) {
-                    sampleOffset[s] = off
-                    off += sampleSize(s)
-                    s++
-                }
+                sampleOffset[s] = off
+                off += sampleSize(s)
+                s++
             }
         }
+        if (s != sampleCount) throw UnsupportedMediaException("incomplete MP4 chunk mapping")
 
         // decode times (stts) and composition offsets (ctts)
         val dts = LongArray(sampleCount)
         val stts = child(b, stbl, "stts") ?: throw UnsupportedMediaException("no stts")
         var t = 0L
         var i = 0
-        for (e in 0 until u32(b, stts.dataStart + 4).toInt()) {
+        for (e in 0 until tableCount(b, stts, 8, sampleCount)) {
             val count = u32(b, stts.dataStart + 8 + 8 * e).toInt()
+            if (count !in 1..(sampleCount - i)) throw UnsupportedMediaException("invalid MP4 decode-time run")
             val delta = u32(b, stts.dataStart + 12 + 8 * e)
             repeat(count) {
                 if (i < sampleCount) dts[i++] = t
@@ -246,8 +274,9 @@ internal object Mp4IndexReader {
         if (ctts != null) {
             val v1 = b[ctts.dataStart].toInt() == 1
             i = 0
-            for (e in 0 until u32(b, ctts.dataStart + 4).toInt()) {
+            for (e in 0 until tableCount(b, ctts, 8, sampleCount)) {
                 val count = u32(b, ctts.dataStart + 8 + 8 * e).toInt()
+                if (count !in 1..(sampleCount - i)) throw UnsupportedMediaException("invalid MP4 composition-time run")
                 val raw = u32(b, ctts.dataStart + 12 + 8 * e)
                 val off = if (v1) raw.toInt().toLong() else raw
                 repeat(count) { if (i < sampleCount) cto[i++] = off }

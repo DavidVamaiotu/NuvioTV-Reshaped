@@ -55,6 +55,7 @@ internal object Ebml {
             val data = p + id[1].toInt() + size[1].toInt()
             val dataEnd: Long = if (size[0] == UNKNOWN_SIZE) end.toLong() else data + size[0]
             if (dataEnd > end || dataEnd < data) break
+            if (out.size >= PreviewLimits.MAX_INDEX_ENTRIES) throw UnsupportedMediaException("too many EBML children")
             out.add(Element(id[0], p, data, dataEnd.toInt()))
             p = dataEnd.toInt()
         }
@@ -382,6 +383,7 @@ internal object MkvIndexReader {
                 }
             }
             if (time >= 0 && cluster >= 0) {
+                if (pts.size >= PreviewLimits.MAX_INDEX_ENTRIES) throw UnsupportedMediaException("too many Matroska keyframes")
                 pts.add(time * tcScale / 1000L)
                 off.add(segData + cluster)
                 rel.add(relPos)
