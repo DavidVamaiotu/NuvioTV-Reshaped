@@ -122,6 +122,7 @@ class ThumbStoreLockTest {
         store.persist(old)
         store.flush()
         assertEquals(11_000_000L, ThumbStore.openIn(dir, key, false).keyframePtsFor(slotUs(1)))
+        assertEquals(3L, java.io.File(dir, "$key.dat").length())
     }
 
     @Test fun aCompletionMarkerRequiresDurableImagesAndTheirIndex() {

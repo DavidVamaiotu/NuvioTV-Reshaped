@@ -89,6 +89,7 @@ internal class CopyPass(
     private val screenUp: () -> Boolean = { false },
     private val workBudget: PreviewWorkBudget? = null,
     private val compactGate: PreviewCompactGate = PreviewCompactGate(),
+    private val decodeGate: PreviewSessionDecodeGate = PreviewSessionDecodeGate(),
 ) {
     private companion object {
         const val TAG = "ThumbCopy"
@@ -211,7 +212,7 @@ internal class CopyPass(
 
     private suspend fun run() {
         MemoryGovernor.init(context)
-        Log.i(TAG, "looking for ${if (own.usenet) "a copy of this Usenet title" else "a smaller copy of this 4K title"} " +
+        Log.i(TAG, "looking for ${if (own.usenet) "a copy of this Usenet title" else "a smaller copy of this ${own.maxHeight}p title"} " +
             "(${own.store.slots().size} own thumbnails stored, ${own.durationMs / 1000} s)")
         val offers = awaitOffers() ?: return end(State.STOPPED, "the player's source list did not load")
         val usable = ArrayList<CopyOffer>()
@@ -261,7 +262,7 @@ internal class CopyPass(
             currentKey = null
             state = State.LOOKING
         }
-        val ownFile = if (own.usenet) "the Usenet stream" else "the 4K file"
+        val ownFile = if (own.usenet) "the Usenet stream" else "the playing file"
         end(State.DONE, if (checks > 0) "no copy matched the pictures of $ownFile - $ownFile makes the rest" else "no copy could be used")
     }
 
@@ -349,6 +350,9 @@ internal class CopyPass(
             }
             if (CopyChoice.heightClass(video.width, video.height) > own.maxHeight) {
                 throw Unusable("${video.width}x${video.height} is above the playing ${own.maxHeight}p")
+            }
+            if (CopyChoice.cheaperHd(own.maxHeight, own.usenet) && !CopyChoice.cheaperHdVideo(video)) {
+                throw Unusable("the file is not a 720p SDR 8-bit H.264 copy")
             }
             val natural = ThumbGeometry.outputSizeForDevice(video.width, video.height, 1, 1, video.displayAspect)
             CopyFit.plan(natural[0], natural[1], own.pictureW, own.pictureH)
@@ -553,10 +557,30 @@ internal class CopyPass(
                         }
                         val kf = f.kf
                         val playing = lastPlaying
-                        val decodeStarted = SystemClock.elapsedRealtime()
-                        val picture = try { renderPicture(decoder, au, idx, playing, dv5) } finally {
-                            if (compactDecode) decoder.close()
-                        } ?: continue@work
+                        var decodeStarted = 0L
+                        var memoryDeferred = false
+                        val picture = decodeGate.run(serial = MemoryGovernor.isLowRam) {
+                            val admission = if (MemoryGovernor.isLowRam) MemoryGovernor.allow(DecodeTier.SW_UP_TO_1080P,
+                                decoderWarm = decoder.warm, addressSpace = true, compactHd = true) else null
+                            if (admission != null && (!admission.allowed || admission.compactHd && !compactDecode)) {
+                                memoryDeferred = true
+                                decoder.close()
+                                null
+                            } else try {
+                                decodeStarted = SystemClock.elapsedRealtime()
+                                renderPicture(decoder, au, idx, playing, dv5)
+                            } finally {
+                                // Never retain a second decoder while the original makes verification pictures.
+                                if (compactDecode || MemoryGovernor.isLowRam) decoder.close()
+                            }
+                        }
+                        if (memoryDeferred) {
+                            attempts.postponed(f.kf)
+                            again.addFirst(f.m)
+                            delay(500L)
+                            continue@work
+                        }
+                        if (picture == null) continue@work
                         val (rendered, plan) = picture
                         val slots = kfSlots[kf].orEmpty().filter { !store.has(slotUs(it)) }
                         if (slots.isEmpty()) continue@work
@@ -745,7 +769,7 @@ internal class CopyPass(
                     "a pause (dropped frames or a stall stopped copy decodes while playing)"
                 decoder != null && !MemoryGovernor.isStrongBox && ownDecoderBusy() -> {
                     decoder.trim()
-                    "the 4K thumbnail decoder to be let go"
+                    "the original thumbnail decoder to be let go"
                 }
                 decoder != null -> {
                     val verdict = MemoryGovernor.allow(DecodeTier.SW_UP_TO_1080P, decoderWarm = decoder.warm,

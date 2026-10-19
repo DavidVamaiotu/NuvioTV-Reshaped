@@ -69,6 +69,40 @@ class ThumbStoreReuseTest {
         assertEquals(1_000L, java.io.File(dir, "copy.dat").length())
     }
 
+    @Test fun wholeMovieRemainsOnDiskAfterRamIsEmptiedAndTheStoreReopens() {
+        val dir = tmp.newFolder("whole-movie")
+        val store = ThumbStore.openIn(dir, "movie", memoryOnly = false)
+        // Two hours at ten-second slots; aliases share one encoded keyframe rather than duplicate bytes.
+        val encoded = ByteArray(512) { (it * 7).toByte() }
+        val slots = (0 until 720).map(::slotUs)
+        assertTrue(store.putCompressed((0 until 720 step 3).map { first ->
+            ThumbStore.Compressed(LongArray(3) { slotUs(first + it) }, slotUs(first), encoded)
+        }))
+        store.markComplete(slots)
+        assertTrue(java.io.File(dir, "movie.done").exists())
+        store.trimMemory(0)
+        val reopened = ThumbStore.openIn(dir, "movie", memoryOnly = false)
+        for (slot in slots) assertArrayEquals(encoded, reopened.compressed(slot))
+        assertEquals(240L * encoded.size, java.io.File(dir, "movie.dat").length())
+        assertEquals(720, reopened.slots().size)
+    }
+
+    @Test fun aNearlyCompleteMovieWithABlankSectionIsNotMarkedComplete() {
+        val dir = tmp.newFolder("missing-section")
+        val store = ThumbStore.openIn(dir, "gaps", memoryOnly = false)
+        val required = (0 until 100).map(::slotUs)
+        assertTrue(store.putCompressed((0 until 100).filter { it !in 50..52 }.map {
+            ThumbStore.Compressed(longArrayOf(slotUs(it)), slotUs(it), byteArrayOf(1))
+        }))
+        store.markComplete(required)
+        assertFalse(java.io.File(dir, "gaps.done").exists())
+        assertTrue(store.putCompressed((50..52).map {
+            ThumbStore.Compressed(longArrayOf(slotUs(it)), slotUs(it), byteArrayOf(1))
+        }))
+        store.markComplete(required)
+        assertTrue(java.io.File(dir, "gaps.done").exists())
+    }
+
     @Test fun chunkedCopiesWriteTheIndexOnceAtTheEnd() {
         val dir = tmp.newFolder("store")
         val store = ThumbStore.openIn(dir, "chunks", memoryOnly = false)

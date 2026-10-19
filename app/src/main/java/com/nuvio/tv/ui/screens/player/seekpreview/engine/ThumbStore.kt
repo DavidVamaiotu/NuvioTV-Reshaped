@@ -36,12 +36,18 @@ internal class ThumbStore private constructor(
         private const val MAGIC = 0x4E545333            // "NTS3"
         private const val FORMAT = 2
         private const val WEBP_QUALITY = 80
+        private const val WEBP_QUALITY_LOW_RAM = 70
         private const val PREFIX_CHARS = 12
         /** Memory LRU size in frames. */
         const val MEM_FRAMES_STRONG = 36
         const val MEM_FRAMES_SMALL = 24
+        const val MEM_FRAMES_LOW_RAM = 12
 
-        fun memFrames(): Int = if (MemoryGovernor.isStrongBox) MEM_FRAMES_STRONG else MEM_FRAMES_SMALL
+        fun memFrames(): Int = when {
+            MemoryGovernor.isLowRam -> MEM_FRAMES_LOW_RAM
+            MemoryGovernor.isStrongBox -> MEM_FRAMES_STRONG
+            else -> MEM_FRAMES_SMALL
+        }
         /** Another release's store only stands in until it is confirmed. */
         private const val OTHER_MEM_FRAMES = 12
         private const val MAX_BUDGET_STRONG_BYTES = 256L * 1024 * 1024
@@ -77,7 +83,8 @@ internal class ThumbStore private constructor(
 
         /** Another release's store, read only: its cached keyframe index is not loaded. */
         fun openOther(context: Context, key: String, rgb565: Boolean): ThumbStore =
-            ThumbStore(File(context.applicationContext.cacheDir, DIR), key, rgb565, OTHER_MEM_FRAMES)
+            ThumbStore(File(context.applicationContext.cacheDir, DIR), key, rgb565,
+                if (MemoryGovernor.isLowRam) OTHER_MEM_FRAMES / 2 else OTHER_MEM_FRAMES)
                 .also { it.load(keepIndex = false) }
 
         /** [memoryOnly] null = decided by the free space, as [open] does. */
@@ -237,6 +244,7 @@ internal class ThumbStore private constructor(
         it.allocationByteCount.coerceAtLeast(1)
     }
     private val imageDecodeLock = Any()
+    private val webpQuality = if (MemoryGovernor.isLowRam) WEBP_QUALITY_LOW_RAM else WEBP_QUALITY
     private var publication = 0L
     private val pendingImages = HashMap<Long, Long>()
     private var lastAccessMs = System.currentTimeMillis()
@@ -487,11 +495,13 @@ internal class ThumbStore private constructor(
 
     private fun persistImage(frame: PublishedFrame) {
         if (memoryOnly) return
+        // Superseded publications need neither compression nor another append to the file.
+        if (synchronized(this) { frame.slotsUs.none { pendingImages[it] == frame.version } }) return
         val bmp = frame.bitmap
         val webp = ByteArrayOutputStream(8 * 1024).also {
             @Suppress("DEPRECATION")
             val fmt = if (Build.VERSION.SDK_INT >= 30) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
-            if (!bmp.compress(fmt, WEBP_QUALITY, it)) return
+            if (!bmp.compress(fmt, webpQuality, it)) return
         }.toByteArray()
         synchronized(diskLock) {
             val offset = datFile.length()
@@ -519,8 +529,7 @@ internal class ThumbStore private constructor(
         if (memoryOnly) return
         synchronized(diskLock) {
             val snapshot = synchronized(this) {
-                if (requiredSlotsUs.isEmpty() ||
-                    requiredSlotsUs.count { it in entries }.toLong() * 100 < requiredSlotsUs.size.toLong() * 97) return
+                if (requiredSlotsUs.isEmpty() || requiredSlotsUs.any { it !in entries || it in pendingImages }) return
                 snapshotLocked()
             } ?: return
             // A visible frame is not necessarily a durable one, especially after failed/queued writes.

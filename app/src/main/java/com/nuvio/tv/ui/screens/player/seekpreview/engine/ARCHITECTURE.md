@@ -64,10 +64,38 @@ The original/copy generators share a measured-work budget during playback. Decod
 original-image persistence time contribute to pacing; draining buffers and observed frame drops
 reduce background work. Paused seeking bypasses background pacing, but memory, rate-limit and
 buffering protections still apply. This is a duty-ratio heuristic, not a CPU percentage guarantee.
-Existing 4K restrictions and the one-decoder/one-fetch/two-buffer low-RAM limits remain in force.
+Existing 4K restrictions and the one-decoder/one-fetch/one-buffer low-RAM limits remain in force
+for the original worker. Original/copy native decode and render share a cancellable coroutine mutex
+on low-RAM devices. Both recheck memory after admission to that mutex, and release their native
+contexts before handing the mutex to the other worker when a copy is active. At most one bounded
+keyframe range per worker may be retained while waiting; a complete movie is never downloaded.
 Low-RAM copies prefer 720p within the existing safe-source/SDR/codec ranking; newly rendered
 images are bounded to 384 pixels per dimension on those devices, versus 480 elsewhere. This
 reduces output conversion/encoding/cache cost, not the full-resolution video's decode charge.
+
+With the smaller-copy setting enabled, ordinary 1080p playback on low-RAM devices can also discover
+a matching 720p SDR H.264 copy from an already available server version, direct link or resolved
+debrid entry. Both offer metadata and the parsed video header must satisfy the cheaper profile;
+the header also excludes high-bit-depth and Dolby Vision copies. Duration, edition and picture
+verification remain required. No extra source search, account job or playback-start delay is added.
+Original target/verification frames retain priority and continue if no usable copy is found.
+The existing 4K and Usenet copy policies are retained.
+On low-RAM devices, foreground requests also respect the measured work budget and healthy-buffer
+gate while playback runs; priority does not bypass the playback protections. A steady small buffer
+can still admit work through the existing bounded observation window.
+
+Completed WebP images continue to use the existing bounded disk cache and single outstanding
+original-image writer. Low-RAM decoded-image caches hold a 12-frame byte budget for the active
+store and six for a borrowed store; compressed whole-store preloading remains disabled there.
+This spends disk IO on completed reusable images rather than retaining large decoded movies or
+trying to force Android to swap preview memory.
+Low-RAM stores encode new images once at WebP quality 70 (80 elsewhere); already compressed
+copies are adopted byte-for-byte, with timeline aliases sharing one image. There is no second
+whole-title compression pass or full-file RAM load. Superseded pending publications skip encoding
+and appending. RAM eviction leaves disk entries intact, including previews far from playback.
+Completion requires every planned coverage slot to be durable, rather than accepting a 97% count
+that could hide a contiguous missing section. Background request limits still apply; exhausting
+them is not reported as complete coverage, and foreground requests remain available.
 
 ### Low-swap HD recovery on small devices
 
