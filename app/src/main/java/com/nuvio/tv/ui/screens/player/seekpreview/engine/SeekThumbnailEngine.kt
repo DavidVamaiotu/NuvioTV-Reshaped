@@ -813,7 +813,8 @@ internal object SeekThumbnails {
             PreviewDiagnostics.note("header downloaded: ${head.size} bytes")
             ConnectionLedger.app.notePlayingUrl(r.resolvedUrl)
             if (!usenet && PreviewSourcePolicy.isUsenet(r.resolvedUrl)) usenet = true
-            if ((fourK || usenet) && source.copySources != null && !onDemand) {
+            // Read the preference independently of source resolution; the parsed index decides copy eligibility.
+            if (source.copySources != null && !onDemand) {
                 copyAllowed = runCatching { SeekThumbnailPreferences.copyEnabled(context) }.getOrDefault(false)
                 if (usenet) Log.i(COPY_TAG, "Usenet stream: thumbnails from a copy of this title where one fits" +
                     if (copyAllowed) "" else " - off in settings")
