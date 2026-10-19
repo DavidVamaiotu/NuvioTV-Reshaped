@@ -22,7 +22,6 @@ internal class ArcPreviewTrack(
     private val identityExact: Boolean,
     private val durationMs: Long,
     private val adapter: ArcPreviewAdapter,
-    private val holdBeforePlay: Boolean,
     startImmediately: Boolean = true,
 ) : SeekPreviewTrack, KeyframeSink {
     private val appContext = context.applicationContext
@@ -47,10 +46,10 @@ internal class ArcPreviewTrack(
         scope.launch {
             try {
                 SeekThumbnails.startWhenEligible(appContext,
-                    ThumbSource(source.sourceKey, source.headers, identity, holdBeforePlay = holdBeforePlay,
+                    ThumbSource(source.sourceKey, source.headers, identity, holdBeforePlay = false,
                         identityExact = identityExact, playbackConnections = PreviewHostSignals.playbackConnections, copySources = adapter.copySources(),
                         mediaServer = previewServerSource(source.sourceKey) != null, usenet = CopyChoice.isUsenet(source.sourceKey)),
-                    adapter::player, adapter::reserve, adapter::pauseForPrepare,
+                    adapter::player, adapter::reserve,
                     skipReason = { if (closed.get() || current !== this@ArcPreviewTrack) "session replaced" else null })
             } finally {
                 if (closed.get() && current === this@ArcPreviewTrack) SeekThumbnails.stopSession(handBackPlayer = false)

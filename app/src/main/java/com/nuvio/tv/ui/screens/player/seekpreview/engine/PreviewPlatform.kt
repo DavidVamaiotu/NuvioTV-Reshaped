@@ -47,7 +47,9 @@ internal object PreviewPreferences {
     @Synchronized fun options(context: Context): StateFlow<PreviewOptions> {
         if (!loaded) {
             val p = context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)
-            values.value = PreviewOptions(p.getBoolean("prepare", false),
+            // Older builds persisted a startup hold. Preview work is now background-only.
+            p.edit().remove("prepare").apply()
+            values.value = PreviewOptions(false,
                 runCatching { ThumbsBeforePlay.valueOf(p.getString("coverage", "FASTER")!!) }.getOrDefault(ThumbsBeforePlay.FASTER),
                 p.getBoolean("copies", true), p.getBoolean("next_episode", true))
             loaded = true
@@ -56,9 +58,10 @@ internal object PreviewPreferences {
     }
     fun set(context: Context, options: PreviewOptions) {
         this.options(context)
-        values.value = options
+        val background = options.copy(prepare = false)
+        values.value = background
         context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE).edit()
-            .putBoolean("prepare", options.prepare).putString("coverage", options.coverage.name)
+            .remove("prepare").putString("coverage", background.coverage.name)
             .putBoolean("copies", options.copies).putBoolean("next_episode", options.nextEpisode).apply()
     }
     fun rgb565(context: Context): Boolean = context.applicationContext
@@ -69,7 +72,7 @@ internal object PreviewPreferences {
 internal object SeekThumbnailPreferences {
     fun mode(context: Context) = SeekThumbMode.ALL // The existing Generate previews switch owns activation.
     fun beforePlay(context: Context) = PreviewPreferences.options(context).value.coverage
-    fun prepareMode(context: Context) = if (PreviewPreferences.options(context).value.prepare) ThumbPrepareMode.ALWAYS else ThumbPrepareMode.OFF
+    fun prepareMode(context: Context) = ThumbPrepareMode.OFF
     fun copyEnabled(context: Context) = PreviewPreferences.options(context).value.copies
 }
 

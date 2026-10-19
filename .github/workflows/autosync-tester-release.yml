@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Include automatic source switching and preview fixes; release tester'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Make seek previews background-only and unblock startup; release tester'
     runs-on: ubuntu-latest
 
     steps:

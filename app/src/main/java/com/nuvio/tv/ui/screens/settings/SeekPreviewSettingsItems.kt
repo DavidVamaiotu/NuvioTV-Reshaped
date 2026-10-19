@@ -10,7 +10,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewPreferences
-import com.nuvio.tv.ui.screens.player.seekpreview.engine.ThumbsBeforePlay
 import com.nuvio.tv.R
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalSeekPreviewSettings
 
@@ -30,29 +29,6 @@ internal fun LazyListScope.seekPreviewSettingsItems(
             onCheckedChange = { LocalSeekPreviewSettings.setEnabled(context, it) },
             onFocused = onItemFocused,
         )
-    }
-    item(key = "seek_preview_preparation") {
-        val context = LocalContext.current
-        val options by PreviewPreferences.options(context).collectAsStateWithLifecycle()
-        ToggleSettingsItem(icon = Icons.Default.Image,
-            title = stringResource(R.string.settings_seek_preview_prepare),
-            subtitle = stringResource(R.string.settings_seek_preview_prepare_description),
-            isChecked = options.prepare,
-            onCheckedChange = { PreviewPreferences.set(context, options.copy(prepare = it)) }, onFocused = onItemFocused)
-    }
-    item(key = "seek_preview_coverage") {
-        val context = LocalContext.current
-        val options by PreviewPreferences.options(context).collectAsStateWithLifecycle()
-        val label = when (options.coverage) {
-            ThumbsBeforePlay.FULL -> R.string.settings_seek_preview_full
-            ThumbsBeforePlay.FASTER -> R.string.settings_seek_preview_faster
-            ThumbsBeforePlay.FASTEST -> R.string.settings_seek_preview_fastest
-        }
-        NavigationSettingsItem(icon = Icons.Default.Image,
-            title = stringResource(R.string.settings_seek_preview_coverage), subtitle = stringResource(label),
-            onClick = { val choices = ThumbsBeforePlay.entries
-                PreviewPreferences.set(context, options.copy(coverage = choices[(options.coverage.ordinal + 1) % choices.size])) },
-            onFocused = onItemFocused)
     }
     item(key = "seek_preview_copies") {
         val context = LocalContext.current

@@ -48,7 +48,6 @@ class SeekPreviewState internal constructor(
     private val controller: PlayerRuntimeController,
 ) {
     @Volatile private var activeGenerated: ArcPreviewTrack? = null
-    private var firstGeneratedSession = true
     @Volatile private var ownedSeekr: BoundedSeekrTrack? = null
     init {
         // A newly opened player (including MPV) supersedes any detached after-playback pass.
@@ -161,9 +160,8 @@ class SeekPreviewState internal constructor(
                 val serverSource = previewServerSource(source.sourceKey)
                 val generated = if (previewSingleFileUrl(source.sourceKey)) ArcPreviewTrack(controller.context,
                     source, listOf(controller.contentId ?: "source:" + com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewStore.digest(source.sourceKey.toByteArray()), controller.currentSeason, controller.currentEpisode).joinToString("|"),
-                    identityExact = !controller.contentId.isNullOrBlank(), durationMs = durationMs, adapter = adapter, holdBeforePlay = firstGeneratedSession,
+                    identityExact = !controller.contentId.isNullOrBlank(), durationMs = durationMs, adapter = adapter,
                     startImmediately = serverSource == null) else null
-                firstGeneratedSession = false
                 val captured = if (generated == null) LocalPreviewSources.open(source, cacheKey, durationMs) else null
                 val local = generated ?: captured ?: run { emit(null); return@transformLatest }
                 val server = if (serverSource != null) controller.serverPreview(source, durationMs,

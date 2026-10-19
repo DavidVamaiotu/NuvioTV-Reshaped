@@ -40,7 +40,6 @@ class ArcPreviewAdapterTest {
         controller.seekPreviewLoadControl(secondControl, settings)
         assertNull(first.player())
         assertNull(first.reserve())
-        assertNull(first.pauseForPrepare())
 
         val second = ArcPreviewAdapter(controller, LocalPreviewSource(controller, controller.currentStreamUrl, context))
         assertNotNull(second.player())

@@ -9,7 +9,6 @@ import androidx.media3.exoplayer.LoadControl
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
 import com.nuvio.tv.ui.screens.player.ParallelRangeDataSource
 import com.nuvio.tv.ui.screens.player.NuvioExoPlayerPerformanceHelper
-import com.nuvio.tv.ui.screens.player.setPlaybackPaused
 import com.nuvio.tv.ui.screens.player.seekpreview.engine.*
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSource
 import com.nuvio.tv.domain.model.Stream
@@ -49,16 +48,6 @@ internal class ArcPreviewAdapter(controller: PlayerRuntimeController, source: Lo
         val known = binding ?: return null
         if (known.player.get() !== c._exoPlayer || known.control.get() !== c._loadControl) return null
         return synchronized(controls) { controls[c]?.takeIf { it.original === known.control.get() } }
-    }
-    fun pauseForPrepare(): Boolean? {
-        val c = owner.get() ?: return null
-        if (c.currentStreamUrl != sourceKey || c.userPausedManually) return false
-        val p = c._exoPlayer ?: return null
-        if (binding?.player?.get() !== p) return null
-        if (!c.hasRenderedFirstFrame) return null
-        if (!p.playWhenReady) return false
-        c.setPlaybackPaused(true)
-        return true
     }
     fun sampleSignals() {
         PreviewHostSignals.hudClampLatched = ParallelRangeDataSource.hudClampLatched

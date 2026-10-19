@@ -644,6 +644,7 @@ internal class CopyPass(
      */
     private suspend fun awaitReady(decoder: FfmpegThumbDecoder?, host: String?): Boolean {
         var waitingFor: String? = null
+        val bufferGate = PreviewBufferGate(ConnectionLedger.HEALTHY_AHEAD_MS, FULL_AHEAD_MS)
         while (true) {
             if (stopping || isRejected()) return false
             val now = SystemClock.elapsedRealtime()
@@ -665,15 +666,15 @@ internal class CopyPass(
             val playback429 = ThumbRateLimit.playbackClampedNow() ||
                 (PreviewHostSignals.hudClampLastHitAtMs > 0 &&
                     SystemClock.uptimeMillis() - PreviewHostSignals.hudClampLastHitAtMs < PLAYBACK_429_QUIET_MS)
+            if (now < quietUntil || s?.failed == true || playback429) bufferGate.reset()
             var memory = false
             val why = when {
                 now < quietUntil -> "a quiet minute after a playback stall"
                 s?.failed == true -> "a playback error"
                 playback429 -> "playback was rate limited"
                 s == null -> null
-                s.buffering -> "playback buffering"
-                s.playing && !(s.aheadMs >= ConnectionLedger.HEALTHY_AHEAD_MS || s.toEnd ||
-                    (s.aheadMs >= FULL_AHEAD_MS && !s.loading)) -> "a healthy playback buffer"
+                s.buffering -> { bufferGate.reset(); "playback buffering" }
+                !bufferGate.ready(now, s.playing, s.buffering, s.loading, s.aheadMs, s.toEnd) -> "a healthy playback buffer"
                 pacer != null && s.playing && !synchronized(pacer) { pacer.allows(settleTarget = false) } ->
                     "a pause (dropped frames or a stall stopped copy decodes while playing)"
                 decoder != null && !MemoryGovernor.isStrongBox && ownDecoderBusy() -> {
@@ -695,6 +696,7 @@ internal class CopyPass(
             }
             if (why != waitingFor) {
                 Log.d(TAG, "waiting for $why")
+                PreviewDiagnostics.note("smaller-copy previews waiting for $why")
                 waitingFor = why
             }
             delay(if (memory) 5_000L else 2_000L)

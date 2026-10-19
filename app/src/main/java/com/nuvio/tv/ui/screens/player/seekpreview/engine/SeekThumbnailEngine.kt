@@ -54,8 +54,8 @@ internal class ThumbSource(
     val identity: String,
     /** File size if the stream states it; lets a saved store be opened before any network access. */
     val fileSizeHint: Long? = null,
-    /** False for an autoplayed next episode: it is never held before play. */
-    val holdBeforePlay: Boolean = true,
+    /** Background-only by default; the Nuvio adapter never opts into holding playback. */
+    val holdBeforePlay: Boolean = false,
     /** Connections playback opens to the stream (the Parallel connections setting, 1 without it). */
     val playbackConnections: Int = 2,
     /** [identity] is the videoId, so it names this exact title or episode; other releases are reused only then. */
@@ -407,9 +407,6 @@ internal object SeekThumbnails {
             /** Above this average bitrate a 4K file is treated as a remux (WEB-DL 4K is ~15-25 Mb/s). */
             const val REMUX_MIN_BITS_PER_SECOND = 35_000_000L
             const val GATE_BUFFER_AHEAD_MS = 14_000L
-            const val PLATEAU_WINDOW_MS = 10_000L
-            const val PLATEAU_JITTER_MS = 2_000L
-            const val PLATEAU_MIN_AHEAD_MS = 8_000L
             /** Coverage-pass byte budget per session. Scrubbing does not count against it. */
             const val LATTICE_MAX_BYTES = 300L * 1024 * 1024
             /** A 2.5 h 4K WEB-DL needs about 500 MB at 10 s, a remux about 320 MB at 30 s. */
@@ -815,8 +812,8 @@ internal object SeekThumbnails {
             ThumbStore.housekeeping(context, activeKey = s.key)
             val cached = known?.index
                 ?: s.cachedKeyframeIndex()?.let(KeyframeIndexCodec::decode)?.takeIf { it.fileLength == fileLength }
-            // 4K: only read the index (several MB of Cues on a remux) once 4K may decode.
-            if (cached == null && fourK) awaitFourKWindow()
+            // Metadata does not decode video. Reading it lets small 4K boxes use a verified HD copy;
+            // the original decoder still has to pass all playback and memory gates below.
             val idx = cached ?: startRead {
                 when {
                     MkvIndexReader.looksLikeMatroska(head) -> MkvIndexReader.read(r, head)
@@ -960,6 +957,8 @@ internal object SeekThumbnails {
          * nothing is read before the first scrub.
          */
         private suspend fun awaitIndexGate() {
+            val bufferGate = PreviewBufferGate(INDEX_GATE_AHEAD_MS)
+            var nextNoteAt = SystemClock.elapsedRealtime() + 10_000L
             while (true) {
                 awaitForeground()
                 if (pendingPriorityMs >= 0) return
@@ -968,8 +967,14 @@ internal object SeekThumbnails {
                     continue
                 }
                 val ps = sample() ?: return
-                if (previewBufferReady(ps.isPlaying, ps.buffering, ps.loading, ps.bufferedMs - ps.positionMs,
-                        ps.durationMs > 0 && ps.bufferedMs >= ps.durationMs - 1_000L, INDEX_GATE_AHEAD_MS)) return
+                val now = SystemClock.elapsedRealtime()
+                val ahead = ps.bufferedMs - ps.positionMs
+                if (bufferGate.ready(now, ps.isPlaying, ps.buffering, ps.loading, ahead,
+                        ps.durationMs > 0 && ps.bufferedMs >= ps.durationMs - 1_000L)) return
+                if (now >= nextNoteAt) {
+                    PreviewDiagnostics.note("index waiting: buffering=${ps.buffering} loading=${ps.loading} aheadMs=$ahead")
+                    nextNoteAt = now + 10_000L
+                }
                 delay(1_000L)
             }
         }
@@ -1175,23 +1180,6 @@ internal object SeekThumbnails {
             pendingPriorityMs = -1L
             Log.i(TAG, "4K-C: player closed - finishing the coverage pass (up to ${AFTER_PLAYBACK_MAX_MS / 60_000} min)")
             return true
-        }
-
-        private suspend fun awaitFourKWindow() {
-            while (true) {
-                awaitForeground()
-                if (pendingPriorityMs >= 0) {   // scrubbing: the settle target may decode, so read the index
-                    decodeOpen = true
-                    return
-                }
-                val ps = sample() ?: return
-                if (!ps.buffering && fourKAllowed(ps)) {
-                    decodeOpen = true
-                    return
-                }
-                decodeOpen = false
-                delay(1_000L)
-            }
         }
 
         private fun buildSlots(idx: MediaIndex, durationMs: Long) {
@@ -1446,8 +1434,8 @@ internal object SeekThumbnails {
 
         /** P0 only waits out a rebuffer and rate limits; P1/P2 also need a healthy buffer. False = re-plan. */
         private suspend fun awaitGates(priority: Int): Boolean {
-            var anchorAhead = -1L
-            var anchorSince = 0L
+            val bufferGate = PreviewBufferGate(GATE_BUFFER_AHEAD_MS)
+            var notedDecodeWait = false
             val entryPriority = prioritySlot
             while (true) {
                 tendReserve()                        // waits here can be long
@@ -1490,13 +1478,17 @@ internal object SeekThumbnails {
                 lastSampledPlaying = ps.isPlaying
                 val small4K = fourK && !MemoryGovernor.isStrongBox
                 if (PrepareHandover.waitsForBuffering(ps.buffering, prepareStage in 1..4, ps.playWhenReady, small4K)) {
-                    anchorAhead = -1L
+                    bufferGate.reset()
                     if (small4K) closeDecoders()
                     delay(500L)
                     continue
                 }
                 if (fourK && !fourKAllowed(ps, priority)) {
                     decodeOpen = false
+                    if (!notedDecodeWait) {
+                        PreviewDiagnostics.note("4K original decode deferred; waiting for playback resources")
+                        notedDecodeWait = true
+                    }
                     closeDecoders()
                     delay(500L)
                     if (prioritySlot >= 0 && prioritySlot != entryPriority) return false
@@ -1507,12 +1499,7 @@ internal object SeekThumbnails {
                 if (priority > 0 && prioritySlot >= 0 && prioritySlot != entryPriority) return false
                 val ahead = ps.bufferedMs - ps.positionMs
                 val toEnd = ps.durationMs > 0 && ps.bufferedMs >= ps.durationMs - 1_000L
-                if (anchorAhead < 0 || kotlin.math.abs(ahead - anchorAhead) > PLATEAU_JITTER_MS) {
-                    anchorAhead = ahead
-                    anchorSince = now
-                }
-                val plateau = ahead >= PLATEAU_MIN_AHEAD_MS && now - anchorSince >= PLATEAU_WINDOW_MS
-                if (previewBufferReady(ps.isPlaying, ps.buffering, ps.loading, ahead, toEnd, GATE_BUFFER_AHEAD_MS) || plateau) return true
+                if (bufferGate.ready(now, ps.isPlaying, ps.buffering, ps.loading, ahead, toEnd)) return true
                 delay(1_000L)
             }
         }
