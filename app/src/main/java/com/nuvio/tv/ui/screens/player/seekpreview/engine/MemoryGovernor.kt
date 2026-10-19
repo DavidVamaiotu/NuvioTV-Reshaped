@@ -299,16 +299,22 @@ internal object MemoryGovernor {
         if (strict.allowed) return strict.copy(compactHd = mem.swapTotalMb > 0 && mem.swapFreeMb < 96L)
         if (!strict.swapLow) return strict
         if (am == null) return strict
-        return compactHdVerdict(mem, coldMb.toLong(), info.lowMemory, readMemoryStalls()) ?: strict
+        return compactHdVerdict(mem, coldMb.toLong(), info.lowMemory, readMemoryStalls(), info.threshold / MB) ?: strict
     }
 
-    /** Keep the normal RAM floor plus 64 MB spare, charge a cold HD decoder, and fail closed without quiet PSI. */
+    /** Keep Android's low-memory threshold plus spare RAM, charging a cold decoder before admitting transient HD. */
     internal fun compactHdVerdict(
         mem: Meminfo, chargeMb: Long, lowMemory: Boolean, stalls: PreviewMemoryStalls?,
+        platformThresholdMb: Long = 0L,
     ): GovernorVerdict? {
-        if (lowMemory || stalls?.quiet != true || mem.availableMb - chargeMb < FLOOR_LOW_RAM_MB + 64L) return null
+        // Untrusted Android apps often cannot read PSI. Compensate with a larger reserve, never assume quiet PSI.
+        if (lowMemory || stalls != null && !stalls.quiet) return null
+        val floor = maxOf(FLOOR_LOW_RAM_MB, platformThresholdMb)
+        val spare = if (stalls == null) 128L else 64L
+        if (mem.availableMb - chargeMb < floor + spare) return null
         return GovernorVerdict(true, "transient HD: available=${mem.availableMb} MB charge=$chargeMb MB " +
-            "swapFree=${mem.swapFreeMb} MB PSI=${stalls.somePercent}/${stalls.fullPercent}", compactHd = true)
+            "reserve=${floor + spare} MB swapFree=${mem.swapFreeMb} MB " +
+            "PSI=${stalls?.let { "${it.somePercent}/${it.fullPercent}" } ?: "unavailable"}", compactHd = true)
     }
 
     internal fun readMemoryStalls(): PreviewMemoryStalls? = runCatching {

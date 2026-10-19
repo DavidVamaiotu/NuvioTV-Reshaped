@@ -73,11 +73,13 @@ reduces output conversion/encoding/cache cost, not the full-resolution video's d
 
 The ordinary swap floors remain the default, including all 4K and next-episode work. The active
 original/copy workers may opt into transient HD decoding on low-RAM devices when a cold decoder
-still leaves the normal 200 MB RAM floor plus 64 MB spare, Android reports no low-memory state,
-and kernel memory PSI is readable and quiet (some avg10 below 2%, full avg10 below 0.5%). Missing
-or malformed PSI retains the strict swap gate. A full zram device alone need not mean active
-reclaim stalls; the decision uses current pressure instead of assuming every device behaves like
-the Fire TV on which the original absolute swap rule was tuned.
+still leaves the greater of the normal 200 MB RAM floor and Android's own low-memory threshold,
+plus spare RAM, and Android reports no low-memory state. Readable kernel memory PSI must be quiet
+(some avg10 below 2%, full avg10 below 0.5%); measured stalls block recovery. The spare margin is
+64 MB with quiet PSI and 128 MB if Android restricts that file or its readings are unavailable.
+Unknown pressure is never treated as a quiet reading. A full zram device alone need not mean active
+reclaim stalls; admission follows platform memory thresholds instead of assuming every device
+behaves like the Fire TV on which the original absolute swap rule was tuned.
 
 This path waits for stable admission, shares a three-second turn limit between original/copy
 workers, and backs off for ten seconds on buffering or dropped playback frames. It checks memory

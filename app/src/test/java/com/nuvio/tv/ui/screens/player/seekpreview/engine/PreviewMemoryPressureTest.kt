@@ -27,12 +27,21 @@ class PreviewMemoryPressureTest {
         assertNull(recovery(900, 54, low = true))
     }
 
-    @Test fun realReclaimStallsAndUnavailablePressureDataRetainTheStrictGate() {
+    @Test fun realReclaimStallsRetainTheStrictGate() {
         assertNull(recovery(900, 49, PreviewMemoryStalls(2.0, 0.0)))
         assertNull(recovery(900, 49, PreviewMemoryStalls(0.0, 0.5)))
-        assertNull(recovery(900, 49, null))
         // The general and 4K gate is unchanged; recovery requires explicit HD admission.
         assertFalse(MemoryGovernor.decodeVerdict(MemoryGovernor.Meminfo(900, 512, 49), 512, false, true).allowed)
+    }
+
+    @Test fun androidPressureFileRestrictionsRequireMoreRamRatherThanDisablingHdForTheSession() {
+        assertNull(recovery(407, 49, null))
+        assertTrue(recovery(408, 49, null)!!.compactHd)
+        assertNull(recovery(900, 49, null, low = true))
+        val mem = MemoryGovernor.Meminfo(500, 512, 28)
+        // A device with a higher platform low-memory threshold keeps that threshold after allocating the decoder.
+        assertNull(MemoryGovernor.compactHdVerdict(mem, 80, false, null, platformThresholdMb = 300))
+        assertNotNull(MemoryGovernor.compactHdVerdict(mem, 80, false, quiet, platformThresholdMb = 300))
     }
 
     @Test fun psiParsingRequiresBothValidMeasurements() {
