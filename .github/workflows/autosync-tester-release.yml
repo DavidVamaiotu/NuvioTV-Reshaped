@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Harden preview loading after safety audit; release tester'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with faster detached seek previews'
     runs-on: ubuntu-latest
 
     steps:
