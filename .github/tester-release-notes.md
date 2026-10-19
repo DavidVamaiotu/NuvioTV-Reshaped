@@ -1,6 +1,8 @@
-- Newly generated seek previews can appear before image compression and disk writes finish. Persistence is bounded to one outstanding image to control memory use.
-- Preview generation prioritizes the current seek direction and nearby filmstrip frames. Continuous scrubbing briefly settles before starting new work; cached images remain immediate.
-- Original-stream and smaller-copy preview generation now share work pacing that responds to playback buffer drain and dropped frames.
-- Low-memory TVs prefer suitable 720p copies and use smaller preview images, while preserving source compatibility checks and existing network, memory and 4K decode limits.
-- Cached aliases share bitmap memory safely, including when an image is replaced. Delayed writes cannot overwrite a newer image.
-- Preview sessions finish their owned jobs before handing over, and completed-cache markers require durable images and index data.
+- Fixed preview generation concentrating on the beginning or resume area while later parts of the movie stayed empty. Background work now covers both ends and spreads across the whole timeline before adding local detail.
+- Jumping to a blank section now prioritizes that position in the smaller-copy generator too, including after its background pass ends.
+- Spending the background request budget no longer disables later seek previews for the whole playback session. Foreground work has a separate bounded allowance that renews.
+- Failed frames receive a second coverage attempt. A later seek can retry a failed section after a cooldown without restarting playback.
+- Temporary network failures now enter a cooldown and recover. Cancelled scrub downloads no longer count as server failures.
+- Fixed waits that continued after a copy had already filled the requested frame, and copy frames waiting for a larger batch before refreshing the preview.
+- Existing copy caches become available as soon as their file identity is verified; new copies become visible after three generated frames while retaining the existing visual verification requirements.
+- Generation remains in the background with the existing playback, memory and rate-limit protections. This build does not add a startup playback hold.

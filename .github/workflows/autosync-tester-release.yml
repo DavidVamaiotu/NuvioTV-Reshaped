@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with faster detached seek previews'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with seek-preview coverage and recovery fixes'
     runs-on: ubuntu-latest
 
     steps:
