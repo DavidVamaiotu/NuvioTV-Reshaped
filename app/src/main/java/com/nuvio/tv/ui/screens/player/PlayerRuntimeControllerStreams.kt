@@ -2,6 +2,7 @@ package com.nuvio.tv.ui.screens.player
 
 import com.nuvio.tv.ui.screens.player.seekpreview.seekPreviewNextEpisode
 import com.nuvio.tv.core.player.recovery.AutoSourceRecoveryPlan
+import com.nuvio.tv.core.player.recovery.AutoSourceRecoverySettings
 import com.nuvio.tv.core.player.recovery.prepareAutoSource
 
 import com.nuvio.tv.ui.reshaped.livetv.keepPlayerForLiveTvZap // Nuvio RS hook
@@ -1982,23 +1983,24 @@ internal fun PlayerRuntimeController.playNextEpisode(userInitiated: Boolean = fa
                 streamAutoPlaySelectedPlugins = effectiveSelectedPlugins,
                 streamAutoPlayRegex = effectiveRegex
             )
-            val recoveryPlan = AutoSourceRecoveryPlan.create(
+            val recoveryPlan = if (AutoSourceRecoverySettings.applies(context, playerSettings)) AutoSourceRecoveryPlan.create(
                 streams = StreamAutoPlaySelector.orderAddonStreams(lastSuccessData.orEmpty(), installedAddonOrder).flatMap { it.streams },
                 settings = recoverySettings,
                 installedAddonNames = installedAddonOrder.toSet(),
                 preferredBingeGroup = if (playerSettings.streamAutoPlayPreferBingeGroupForNextEpisode) currentStreamBingeGroup else null,
                 initialSource = selectedStream, profileId = profileId, videoId = nextVideo.id,
                 bingeGroupOnly = bingeGroupOnlyManualMode
-            )
-            val prepared = selectedStream?.let {
-                prepareAutoSource(recoveryPlan, android.os.SystemClock::elapsedRealtime) { candidate ->
-                    val resolved = if (candidate.youTubeIdToResolve() != null) resolveYouTubeStream(candidate)
-                        else resolveDirectDebridStreamIfNeeded(candidate, nextVideo.season, nextVideo.episode)
-                    resolved?.takeIf { it.getStreamUrl() != null || torrentSettings.settings.first().p2pEnabled }
-                }
+            ) else null
+            val resolveSource: suspend (Stream) -> Stream? = { candidate ->
+                val resolved = if (candidate.youTubeIdToResolve() != null) resolveYouTubeStream(candidate)
+                    else resolveDirectDebridStreamIfNeeded(candidate, nextVideo.season, nextVideo.episode)
+                resolved?.takeIf { it.getStreamUrl() != null || torrentSettings.settings.first().p2pEnabled }
             }
-            if (prepared != null) {
-                val streamToPlay = prepared.value
+            val prepared = recoveryPlan?.let {
+                prepareAutoSource(it, android.os.SystemClock::elapsedRealtime, resolve = resolveSource)
+            }
+            val streamToPlay = if (recoveryPlan != null) prepared?.value else selectedStream?.let { resolveSource(it) }
+            if (streamToPlay != null) {
                 val sourceName = (streamToPlay.name?.takeIf { it.isNotBlank() } ?: streamToPlay.addonName).trim()
                 val countdownStartedAt = android.os.SystemClock.elapsedRealtime()
                 for (remaining in 3 downTo 1) {
@@ -2029,10 +2031,12 @@ internal fun PlayerRuntimeController.playNextEpisode(userInitiated: Boolean = fa
                     isAutoPlay = !userInitiated
                 )
                 // The intentional next-episode countdown is not a playback attempt.
-                val budget = prepared.plan.startupState?.let {
-                    it.copy(sessionStartedAtMs = it.sessionStartedAtMs + countdownMs, attemptStartedAtMs = it.attemptStartedAtMs + countdownMs)
+                prepared?.let { result ->
+                    val budget = result.plan.startupState?.let {
+                        it.copy(sessionStartedAtMs = it.sessionStartedAtMs + countdownMs, attemptStartedAtMs = it.attemptStartedAtMs + countdownMs)
+                    }
+                    beginAutoSourceRecovery(result.plan.copy(startupState = budget))
                 }
-                beginAutoSourceRecovery(prepared.plan.copy(startupState = budget))
             } else {
                 _uiState.update {
                     it.copy(

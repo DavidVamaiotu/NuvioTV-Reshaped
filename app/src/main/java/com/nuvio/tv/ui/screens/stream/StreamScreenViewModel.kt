@@ -1,6 +1,7 @@
 package com.nuvio.tv.ui.screens.stream
 
 import com.nuvio.tv.core.player.recovery.AutoSourceRecoveryPlan
+import com.nuvio.tv.core.player.recovery.AutoSourceRecoverySettings
 import com.nuvio.tv.core.player.recovery.AutoSourceRecoveryHandoff
 import com.nuvio.tv.core.player.recovery.prepareAutoSource
 
@@ -1494,6 +1495,7 @@ class StreamScreenViewModel @Inject constructor(
     private suspend fun autoSourceRecoveryPlan(initialSource: Stream?): AutoSourceRecoveryPlan? {
         if (contentType in listOf("tv", "channel", "cloud")) return null
         val settings = autoRecoverySettings ?: return null
+        if (!AutoSourceRecoverySettings.applies(context, settings)) return null
         val preferred = if (settings.streamAutoPlayPreferBingeGroupForNextEpisode && settings.streamAutoPlayReuseBingeGroup) {
             contentId?.let { bingeGroupCacheDataStore.get(it) }
         } else null

@@ -2,12 +2,22 @@ name: Automatic source recovery validation
 
 on:
   push:
-    branches: [feature/auto-source-recovery]
+    branches: [feature/auto-source-recovery, feature/tester-source-recovery-option, subtitle-autosync-tester]
+    paths:
+      - 'app/src/**/com/nuvio/tv/core/player/recovery/**'
+      - 'app/src/**/com/nuvio/tv/ui/screens/player/PlayerAutoSourceRecovery.kt'
+      - 'app/src/**/com/nuvio/tv/ui/screens/player/PlayerRuntimeController*.kt'
+      - 'app/src/**/com/nuvio/tv/ui/screens/stream/StreamScreen*.kt'
+      - 'app/src/**/com/nuvio/tv/ui/screens/settings/AutoSourceRecoverySettingsItems.kt'
+      - 'app/src/**/com/nuvio/tv/ui/screens/settings/NuvioReshapedSettingsContent.kt'
+      - '.github/workflows/auto-source-recovery.yml'
   pull_request:
     branches: [subtitle-autosync-tester]
     paths:
       - 'app/src/**/com/nuvio/tv/core/player/recovery/**'
       - 'app/src/**/com/nuvio/tv/ui/screens/player/PlayerAutoSourceRecovery.kt'
+      - 'app/src/**/com/nuvio/tv/ui/screens/settings/AutoSourceRecoverySettingsItems.kt'
+      - 'app/src/**/com/nuvio/tv/ui/screens/settings/NuvioReshapedSettingsContent.kt'
       - '.github/workflows/auto-source-recovery.yml'
   workflow_dispatch:
 
@@ -41,6 +51,7 @@ jobs:
           --tests 'com.nuvio.tv.core.player.recovery.*'
           --tests 'com.nuvio.tv.core.streams.ranking.*'
           --tests 'com.nuvio.tv.core.player.StreamAutoPlaySelectorTest'
+          --tests '*seekpreview*'
           --build-cache --max-workers=2
           -Pkotlin.compiler.execution.strategy=in-process
           -Dorg.gradle.jvmargs='-Xmx4096m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8'

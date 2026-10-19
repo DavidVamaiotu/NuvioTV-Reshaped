@@ -1,5 +1,7 @@
 # Automatic source startup recovery
 
+Enable **Automatically try another source** in **Nuvio Reshaped** settings. It is off by default and uses the existing **First Source** or **Regex** autoplay preference, including ranked regex priorities and source filters. Manual selection and external players do not activate recovery. Turning it off stops active startup recovery. The toggle is included in Reshaped's TV settings sync.
+
 Internal automatic playback gets up to three distinct source attempts, including the initial source. Each attempt has a 15-second deadline, with a 45-second overall budget. URL resolution and playback share that budget; rebuilding the same player or switching its engine does not reset it. The deliberate next-episode countdown is excluded.
 
 The existing autoplay selector chooses every retry after attempted source identities are excluded. Ranked regex exhausts higher priorities first and keeps existing order for ties. First Source keeps normal source order. Legacy regex, addon/plugin filters, playability, and binge-only preferences retain their existing semantics. No unmatched stream is used as a last resort. File identities use provider/addon, hash and file index when available; exact URLs are also excluded.

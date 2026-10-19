@@ -6,6 +6,7 @@ import com.nuvio.tv.R
 import com.nuvio.tv.core.player.StreamAutoPlaySelector
 import com.nuvio.tv.core.player.recovery.AutoSourceRecoveryHandoff
 import com.nuvio.tv.core.player.recovery.AutoSourceRecoveryPlan
+import com.nuvio.tv.core.player.recovery.AutoSourceRecoverySettings
 import com.nuvio.tv.core.player.recovery.StartupSourceRecovery
 import com.nuvio.tv.core.player.recovery.recoverySourceKey
 import com.nuvio.tv.core.network.NetworkResult
@@ -27,6 +28,7 @@ internal class PlayerAutoSourceRecovery(
     private var plan: AutoSourceRecoveryPlan
 ) {
     private val policy = StartupSourceRecovery(SystemClock.elapsedRealtime(), plan.startupState)
+    private val enabled = AutoSourceRecoverySettings.enabled(player.context)
     private val attempted = plan.attempted.toMutableSet()
     private var job: Job? = null
     private var active = true
@@ -43,7 +45,7 @@ internal class PlayerAutoSourceRecovery(
     }
 
     fun failDefinitively(): Boolean {
-        if (!active || player.isInBackground || player.userPausedManually || player.hasRenderedFirstFrame) return false
+        if (!active || !enabled.value || player.isInBackground || player.userPausedManually || player.hasRenderedFirstFrame) return false
         definitiveFailure = true
         return true
     }
@@ -55,7 +57,7 @@ internal class PlayerAutoSourceRecovery(
         job = player.scope.launch {
             try {
                 var previousPosition: Long? = null
-                while (active) {
+                while (active && enabled.value) {
                     val now = SystemClock.elapsedRealtime()
                     val position = player.currentPlaybackPositionMs()
                     val readyToConfirm = player.isPlaybackCurrentlyPlaying() &&
@@ -65,7 +67,10 @@ internal class PlayerAutoSourceRecovery(
                     // Seed only after playback is active: a restored seek position is not progress.
                     previousPosition = if (readyToConfirm) position else null
                     val state = player._uiState.value
-                    val interrupted = player.isInBackground || player.userPausedManually || state.showSourcesPanel || state.showEpisodesPanel
+                    // A deliberate player pause (including optional preview preparation) is not a failed source.
+                    val deliberatelyPaused = player.hasRenderedFirstFrame && player._exoPlayer?.playWhenReady == false
+                    val interrupted = player.isInBackground || player.userPausedManually || deliberatelyPaused ||
+                        state.showSourcesPanel || state.showEpisodesPanel
                     if (interrupted) break
                     when (policy.evaluate(now, progressing, interrupted = false, failed = definitiveFailure || state.error != null)) {
                         StartupSourceRecovery.Decision.Complete -> break
@@ -168,6 +173,7 @@ internal class PlayerAutoSourceRecovery(
 
 internal fun PlayerRuntimeController.beginAutoSourceRecovery(plan: AutoSourceRecoveryPlan) {
     autoSourceRecovery?.cancel()
+    if (!AutoSourceRecoverySettings.enabled(context).value || plan.mode == com.nuvio.tv.data.local.StreamAutoPlayMode.MANUAL) return
     if (contentType in listOf("tv", "channel", "cloud")) return
     val recovery = PlayerAutoSourceRecovery(this, plan)
     autoSourceRecovery = recovery
