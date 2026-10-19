@@ -1,8 +1,6 @@
-- Fixed preview generation concentrating on the beginning or resume area while later parts of the movie stayed empty. Background work now covers both ends and spreads across the whole timeline before adding local detail.
-- Jumping to a blank section now prioritizes that position in the smaller-copy generator too, including after its background pass ends.
-- Spending the background request budget no longer disables later seek previews for the whole playback session. Foreground work has a separate bounded allowance that renews.
-- Failed frames receive a second coverage attempt. A later seek can retry a failed section after a cooldown without restarting playback.
-- Temporary network failures now enter a cooldown and recover. Cancelled scrub downloads no longer count as server failures.
-- Fixed waits that continued after a copy had already filled the requested frame, and copy frames waiting for a larger batch before refreshing the preview.
-- Existing copy caches become available as soon as their file identity is verified; new copies become visible after three generated frames while retaining the existing visual verification requirements.
-- Generation remains in the background with the existing playback, memory and rate-limit protections. This build does not add a startup playback hold.
+- Added bounded HD preview recovery for low-swap TV boxes when available RAM and measured memory pressure show that a frame can be decoded safely. When Android restricts pressure readings, recovery requires a larger RAM reserve beyond the platform low-memory threshold. Measured reclaim stalls still block it.
+- Recovery admits one frame at a time, releases its native decoder immediately after rendering, and backs off when playback buffers or drops frames.
+- Small devices now check memory before downloading a keyframe, use one raw buffer, and release completed raw data and decoder contexts during memory waits.
+- The active smaller-copy generator uses the same guarded HD recovery path. Copy source selection and timing/edition checks are preserved.
+- Seek preview diagnostic exports now include the app version, device, Android version, process architecture, Java heap and current memory-pressure readings. Memory waits also record available RAM.
+- Preview generation remains in the background with the existing 4K protections.
