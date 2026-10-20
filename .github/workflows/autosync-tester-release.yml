@@ -323,6 +323,7 @@ jobs:
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.PcmTimestampTrackerTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SubtitleCandidatePoolTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SharedResourceTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.AsrMatchingTest' \
             --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$TESTER_TAG"
 

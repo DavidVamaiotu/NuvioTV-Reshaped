@@ -1225,8 +1225,12 @@ internal class AudioSubtitleSyncController(
             log = { SyncLog.i(it) },
             workerSetup = { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) },
         )
-        recognizer?.let(engine::setRecognizer)
-        asr = engine
+        // Publish the engine and attach any model under the same lock as model completion.
+        // Otherwise both threads can see the other's field as null and miss the handoff.
+        synchronized(recognizerLock) {
+            recognizer?.let(engine::setRecognizer)
+            asr = engine
+        }
         analyzer.chunkListener = SpeechSegmenter(engine::offerSegment)
         liveAnalyzer.chunkListener = SpeechSegmenter(engine::offerSegment)
         return AudioSyncDecoder(analyzer, liveAnalyzer) { mime ->
