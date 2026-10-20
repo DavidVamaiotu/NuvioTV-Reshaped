@@ -1,3 +1,3 @@
-- Audio sync starts recognizing words sooner on titles with many subtitles. The English references recognition needs ("checking English subtitles") now download on their own workers instead of waiting behind every same-language alternative, which could take a long time on titles with a dozen subtitle options or throttled subtitle hosts.
-- Each reference subtitle now downloads once, however many parts of audio sync ask for it. A failed copy never hides another download of the same file that succeeds.
-- A failing subtitle handler can no longer stop the download worker. No change to memory use: the two extra download threads only start when needed and hold no audio.
+- Audio sync now shows a message only for the first confirmed sync of a title. Fine-tuning estimates, "timing changed, re-synced" updates and later confirmations (another cut in the release, recognition taking over) adjust the subtitles silently.
+- Messages that are not about timing are unchanged: speech model download, Wi-Fi needed, and a sync that could not be confirmed.
+- Includes tester.23's faster start of word recognition on titles with many subtitles.
