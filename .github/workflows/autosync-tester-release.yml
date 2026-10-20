@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with earlier audio sync model loading'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with preoptimized ORT speech model'
     runs-on: ubuntu-latest
 
     steps:
@@ -324,6 +324,7 @@ jobs:
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SubtitleCandidatePoolTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SharedResourceTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.AsrMatchingTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.AsrModelFilesTest' \
             --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$TESTER_TAG"
 

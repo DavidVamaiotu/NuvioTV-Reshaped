@@ -1,5 +1,5 @@
-- Audio sync starts preparing an already-downloaded speech model as soon as the fallback is armed, before reference subtitle lookups and downloads. Low-memory TVs also start preparation early, so model memory is allocated sooner.
-- Model loading has a dedicated background worker and no longer queues behind subtitle HTTP requests. Subtitle work continues in parallel.
-- Concurrent players share one model initialization. Readiness checks remain responsive while loading, and closing a player safely returns a model that finishes loading later.
-- Audio-sync logs distinguish queueing from recognizer acquisition, show acquisition time while loading, and flag acquisitions longer than 10 seconds. A sub-10-second load is not guaranteed.
-- The speech model, recognition settings and three-minute reuse period are unchanged. No replacement model download is required.
+- Audio sync can load a pre-optimized ORT version of the same English speech model. Graph optimization is done before download; the app retains its current recognition settings, background loading worker and three-minute reuse period.
+- The first ORT use downloads about 74 MB once on an unmetered connection, or from Settings. Existing ONNX files remain usable offline or if the upgrade download fails. Settings deletion removes both versions.
+- Each new model file is verified by size and SHA-256 before being installed. Partial or corrupted downloads never replace completed files.
+- The statistics panel reports ORT or ONNX so the actual loaded format is visible. A cached ONNX model continues until a fresh load or app restart.
+- Native host tests showed faster model loading and matching recognized tokens on three speech clips, with token timestamp differences up to 40 ms. TV loading time, memory use and dialogue accuracy still need device testing; a sub-10-second load is not guaranteed.

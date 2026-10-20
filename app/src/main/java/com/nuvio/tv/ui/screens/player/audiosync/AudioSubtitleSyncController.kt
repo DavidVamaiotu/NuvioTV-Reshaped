@@ -1038,21 +1038,29 @@ internal class AudioSubtitleSyncController(
                     recognizerQueueMs = SystemClock.elapsedRealtime() - requestedAt
                     recognizerUnavailable = false
                     updateListening()
+                    var modelDirectory = AsrModel.directory(appContext)
                     if (!AsrModel.isReady(appContext)) {
-                        if (!AsrModel.isUnmetered(appContext)) {
+                        val mayDownload = AsrModel.isUnmetered(appContext)
+                        val legacy = AsrModel.legacyDirectory(appContext)
+                        if (!mayDownload && legacy == null) {
                             recognizerStatus = "model not downloaded (Settings › Playback)"
                             notify(AudioSyncStatus.ModelNeedsWifi(AsrModel.DOWNLOAD_MB))
                             recognizerUnavailable = true
                             updateListening()
                             return@execute
                         }
-                        notify(AudioSyncStatus.ModelDownloading(AsrModel.DOWNLOAD_MB))
-                        if (!AsrModel.download(appContext)) {
-                            SyncLog.w("speech model download failed; using speech detection only")
-                            recognizerStatus = "model download failed"
-                            recognizerUnavailable = true
-                            updateListening()
-                            return@execute
+                        if (mayDownload) notify(AudioSyncStatus.ModelDownloading(AsrModel.DOWNLOAD_MB))
+                        if (!mayDownload || !AsrModel.download(appContext)) {
+                            if (legacy != null) {
+                                modelDirectory = legacy
+                                SyncLog.i("ORT upgrade unavailable; using the existing ONNX model")
+                            } else {
+                                SyncLog.w("speech model download failed; using speech detection only")
+                                recognizerStatus = "model download failed"
+                                recognizerUnavailable = true
+                                updateListening()
+                                return@execute
+                            }
                         }
                     }
                     if (released || !enabled) return@execute
@@ -1061,7 +1069,7 @@ internal class AudioSubtitleSyncController(
                     val startedAt = SystemClock.elapsedRealtime()
                     recognizerAcquireStartedAtMs = startedAt
                     SyncLog.i("speech model loading queueMs=$recognizerQueueMs cached=$alreadyLoaded")
-                    val loaded = SharedRecognizer.acquire(AsrModel.directory(appContext), RECOGNIZER_THREADS)
+                    val loaded = SharedRecognizer.acquire(modelDirectory, RECOGNIZER_THREADS)
                     recognizerAcquireMs = SystemClock.elapsedRealtime() - startedAt
                     synchronized(recognizerLock) {
                         if (released || !enabled) {
@@ -1069,7 +1077,7 @@ internal class AudioSubtitleSyncController(
                             return@execute
                         }
                         val seconds = recognizerAcquireMs / 100 / 10.0
-                        recognizerReady = if (alreadyLoaded) "ready" else "ready (loaded in ${seconds}s)"
+                        recognizerReady = if (alreadyLoaded) "ready (${loaded.modelFormat})" else "ready (${loaded.modelFormat}, loaded in ${seconds}s)"
                         recognizer = loaded
                         asr?.setRecognizer(loaded)
                     }

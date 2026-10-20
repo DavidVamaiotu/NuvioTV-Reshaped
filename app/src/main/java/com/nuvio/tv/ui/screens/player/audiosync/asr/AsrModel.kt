@@ -17,24 +17,14 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Progress and errors are published to [SubtitleSyncStatus.speechModel].
  */
 internal object AsrModel {
-    const val ENCODER = "encoder.int8.onnx"
-    const val DECODER = "decoder.int8.onnx"
-    const val JOINER = "joiner.int8.onnx"
     const val TOKENS = "tokens.txt"
     const val DOWNLOAD_MB = 74
 
-    private const val VERSION = "gigaspeech-2023-12-12"
-    private const val MIRROR = "https://github.com/DavidVamaiotu/NuvioMobile-AutoSync/releases/download/asr-models/"
-    private const val UPSTREAM = "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-gigaspeech-2023-12-12/resolve/main/"
-
-    /** Local name to (mirror name, upstream name, expected size in bytes). */
-    private val FILES = listOf(
-        Triple(ENCODER, "gigaspeech-encoder.int8.onnx", "encoder-epoch-30-avg-1.int8.onnx") to 72_850_738L,
-        Triple(DECODER, "gigaspeech-decoder.int8.onnx", "decoder-epoch-30-avg-1.int8.onnx") to 540_688L,
-        Triple(JOINER, "gigaspeech-joiner.int8.onnx", "joiner-epoch-30-avg-1.int8.onnx") to 259_417L,
-        Triple(TOKENS, "gigaspeech-tokens.txt", "tokens.txt") to 5_020L,
-    )
-    private val TOTAL_BYTES = FILES.sumOf { it.second }
+    private const val LEGACY_VERSION = "gigaspeech-2023-12-12"
+    private const val VERSION = "$LEGACY_VERSION-ort-v1"
+    private const val DOWNLOAD = "https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases/download/asr-models-ort-v1/"
+    private val FILES = AsrModelFiles.optimized
+    private val TOTAL_BYTES = FILES.sumOf { it.size }
 
     private val downloading = AtomicBoolean(false)
 
@@ -54,6 +44,7 @@ internal object AsrModel {
                 val ctx = appContext ?: return
                 if (downloading.get()) return
                 directory(ctx).deleteRecursively()
+                File(ctx.filesDir, "audiosync/asr/$LEGACY_VERSION").deleteRecursively()
                 publish(ctx)
             }
         }
@@ -62,10 +53,12 @@ internal object AsrModel {
 
     fun directory(context: Context): File = File(context.filesDir, "audiosync/asr/$VERSION")
 
-    fun isReady(context: Context): Boolean {
-        val dir = directory(context)
-        return FILES.all { (names, size) -> File(dir, names.first).length() == size }
-    }
+    fun isReady(context: Context): Boolean = AsrModelFiles.isComplete(directory(context), FILES)
+
+    /** Keep the old download usable offline or if the one-time ORT upgrade cannot complete. */
+    fun legacyDirectory(context: Context): File? =
+        File(context.filesDir, "audiosync/asr/$LEGACY_VERSION")
+            .takeIf { AsrModelFiles.isComplete(it, AsrModelFiles.legacy) }
 
     fun isUnmetered(context: Context): Boolean {
         val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
@@ -89,6 +82,7 @@ internal object AsrModel {
      * Downloads missing files. Blocking; call from a background thread. Returns true when the model
      * is ready afterwards.
      */
+    @Synchronized
     fun download(context: Context): Boolean {
         if (isReady(context)) {
             publish(context)
@@ -100,21 +94,19 @@ internal object AsrModel {
             publish(context)
             val dir = directory(context).apply { mkdirs() }
             var doneBytes = 0L
-            for ((names, size) in FILES) {
-                val (local, mirrorName, upstreamName) = names
-                val file = File(dir, local)
-                if (file.length() != size) {
+            for (asset in FILES) {
+                val file = File(dir, asset.name)
+                if (!file.isFile || file.length() != asset.size) {
                     val onBytes: (Long) -> Unit = { bytes ->
                         publish(context, progress = (doneBytes + bytes).toFloat() / TOTAL_BYTES)
                     }
-                    val failure = fetch(MIRROR + mirrorName, file, size, onBytes)
-                        ?.let { first -> fetch(UPSTREAM + upstreamName, file, size, onBytes)?.let { "$first; $it" } }
+                    val failure = fetch(DOWNLOAD + asset.name, dir, asset, onBytes)
                     if (failure != null) {
                         error = failure
                         return false
                     }
                 }
-                doneBytes += size
+                doneBytes += asset.size
             }
             return isReady(context).also { if (!it) error = "downloaded files are incomplete" }
         } finally {
@@ -124,56 +116,39 @@ internal object AsrModel {
     }
 
     /** Returns null on success, otherwise a short reason. */
-    private fun fetch(url: String, target: File, expectedSize: Long, onBytes: (Long) -> Unit): String? {
-        val partial = File(target.path + ".part")
+    private fun fetch(url: String, directory: File, asset: AsrModelFiles.Asset, onBytes: (Long) -> Unit): String? {
+        var connection: HttpURLConnection? = null
         return try {
-            var connection = URL(url).openConnection() as HttpURLConnection
-            connection.connectTimeout = 15_000
-            connection.readTimeout = 30_000
+            var location = URL(url)
             var redirects = 0
-            // HttpURLConnection does not follow cross-host redirects (GitHub release -> CDN).
-            while (connection.responseCode in 300..399 && redirects < 5) {
-                val location = connection.getHeaderField("Location") ?: break
-                connection.disconnect()
-                connection = URL(URL(url), location).openConnection() as HttpURLConnection
-                connection.connectTimeout = 15_000
-                connection.readTimeout = 30_000
-                redirects++
+            while (true) {
+                val current = (location.openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = false
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
+                }
+                connection = current
+                if (current.responseCode !in 300..399) break
+                if (++redirects > 5) return "Too many model download redirects"
+                val next = current.getHeaderField("Location") ?: return "Missing model download redirect"
+                location = URL(location, next)
+                current.disconnect()
             }
-            if (connection.responseCode != 200) {
-                val code = connection.responseCode
-                connection.disconnect()
+            val response = checkNotNull(connection)
+            if (response.responseCode != 200) {
+                val code = response.responseCode
                 SyncLog.w("model download HTTP $code for $url")
                 return "HTTP $code"
             }
-            var written = 0L
-            var lastReport = 0L
-            connection.inputStream.use { input ->
-                partial.outputStream().use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        output.write(buffer, 0, read)
-                        written += read
-                        if (written - lastReport >= 512 * 1024) {
-                            lastReport = written
-                            onBytes(written)
-                        }
-                    }
-                }
+            response.inputStream.use { input ->
+                AsrModelFiles.saveVerified(input, directory, asset, onBytes)
             }
-            connection.disconnect()
-            if (partial.length() != expectedSize) {
-                partial.delete()
-                return "size ${partial.length()} != $expectedSize"
-            }
-            if (!partial.renameTo(target)) return "could not save file"
             null
         } catch (failure: Exception) {
             SyncLog.w("model download failed for $url: ${failure.message}")
-            partial.delete()
             failure.message ?: failure.javaClass.simpleName
+        } finally {
+            connection?.disconnect()
         }
     }
 }
