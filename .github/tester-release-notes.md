@@ -1,5 +1,5 @@
-- Low-memory 1080p playback can use an available matching 720p SDR H.264 copy when the smaller-copy setting is enabled. Source metadata and actual file headers are checked, followed by the existing timing, edition and picture verification.
-- Original and copy previews share one native decoding slot on small devices, recheck memory before decoding, and release decoder memory between turns. Foreground seeking also respects playback pacing while the movie plays.
-- Completed thumbnails remain on disk across the movie after RAM is cleared. Low-memory devices keep smaller decoded-image caches and encode new thumbnails once at WebP quality 70; slots sharing a keyframe share one encoded image.
-- Coverage is only marked complete when every planned slot is saved. A 97% count can no longer hide a missing section. Superseded pending images skip unnecessary encoding and disk appends.
-- Existing playback, memory, rate-limit and 4K protections remain active. No complete movie download or forced swap use is added.
+- Audio sync starts preparing an already-downloaded speech model as soon as the fallback is armed, before reference subtitle lookups and downloads. Low-memory TVs also start preparation early, so model memory is allocated sooner.
+- Model loading has a dedicated background worker and no longer queues behind subtitle HTTP requests. Subtitle work continues in parallel.
+- Concurrent players share one model initialization. Readiness checks remain responsive while loading, and closing a player safely returns a model that finishes loading later.
+- Audio-sync logs distinguish queueing from recognizer acquisition, show acquisition time while loading, and flag acquisitions longer than 10 seconds. A sub-10-second load is not guaranteed.
+- The speech model, recognition settings and three-minute reuse period are unchanged. No replacement model download is required.

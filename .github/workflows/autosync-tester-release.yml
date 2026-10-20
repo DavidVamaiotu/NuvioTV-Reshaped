@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with low-memory copies and durable preview coverage'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with earlier audio sync model loading'
     runs-on: ubuntu-latest
 
     steps:
@@ -322,6 +322,7 @@ jobs:
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.PcmTimestampTrackerTest' \
             --tests 'com.nuvio.tv.ui.screens.player.audiosync.SubtitleCandidatePoolTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.SharedResourceTest' \
             --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$TESTER_TAG"
 

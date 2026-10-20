@@ -110,9 +110,11 @@ internal class AudioSyncFallback private constructor(
         controller.enabled = true
         controller.samplingOnMobileData = AudioSyncSettings.samplingOnMobileData.value
         controller.listensBeforeSession = true
+        // Start an already-downloaded recognizer before subtitle discovery, downloads or
+        // AutoSync's analysis. Recognition can then begin immediately on a later takeover.
+        controller.prepareRecognizer()
         if (!armed) {
-            // Only now, so a stream AutoSync syncs on its own never loads the speech model or
-            // fetches references for the fallback.
+            // Only now, so streams that never arm the fallback do not fetch its references.
             armed = true
             val type = runtime.contentType
             val videoId = runtime.videoId
