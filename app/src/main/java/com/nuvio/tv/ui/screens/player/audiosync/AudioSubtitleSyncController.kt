@@ -100,6 +100,15 @@ internal class AudioSubtitleSyncController(
         }, "NuvioAudioSyncFetch").apply { isDaemon = true }
     }
 
+    // English references recognition waits for. Kept apart from [fetchPool], which can hold a dozen
+    // same-language alternatives, so recognition never queues behind them. Threads start on first use.
+    private val referenceFetchPool: ExecutorService = Executors.newFixedThreadPool(2) { runnable ->
+        Thread({
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+            runnable.run()
+        }, "NuvioAudioSyncReference").apply { isDaemon = true }
+    }
+
     // Model initialization must not queue behind subtitle HTTP requests. Keep its existing
     // background priority so loading does not take CPU priority over video playback.
     private val recognizerLoader: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -118,7 +127,13 @@ internal class AudioSubtitleSyncController(
 
     /** Parsed dialogue of reference subtitles by url; empty list = failed. */
     private val parsedReferences = ConcurrentHashMap<String, List<Triple<Long, Long, String>>>()
-    private val pendingReferenceFetches = ConcurrentHashMap.newKeySet<String>()
+    private val referenceFetcher = ReferenceFetcher(
+        normal = fetchPool,
+        urgent = referenceFetchPool,
+        parsed = parsedReferences,
+        download = { url -> downloadReference(url) },
+        log = SyncLog::w,
+    )
 
     @Volatile
     private var asr: AsrSyncEngine? = null
@@ -721,6 +736,7 @@ internal class AudioSubtitleSyncController(
         asr?.release()
         aligner.shutdownNow()
         fetchPool.shutdownNow()
+        referenceFetchPool.shutdownNow()
         // Do not interrupt native initialization. A late acquisition is returned below by
         // its worker, and the cache can serve the next player instead of starting over.
         recognizerLoader.shutdown()
@@ -737,7 +753,7 @@ internal class AudioSubtitleSyncController(
         candidates = list
         if (list.isNotEmpty()) prepareRecognizer()
         // Download the likeliest English references now so a later pick is instant.
-        englishCandidates().take(PREFETCH_REFERENCES).forEach { fetchReference(it, onReady = null) }
+        englishCandidates().take(PREFETCH_REFERENCES).forEach { fetchReference(it, urgent = true, onReady = null) }
         // Subtitles listed after the pick join the running search.
         session?.let { current -> if (model == null || estimated) startPool(current) }
     }
@@ -891,7 +907,7 @@ internal class AudioSubtitleSyncController(
                 SyncLog.i("English reference lookup for $videoId found ${found.size}")
                 fallbackCandidates = found
                 fallbackState = FallbackState.Done
-                found.take(PREFETCH_REFERENCES).forEach { fetchReference(it, onReady = null) }
+                found.take(PREFETCH_REFERENCES).forEach { fetchReference(it, urgent = true, onReady = null) }
                 fallbackListeners.forEach { runCatching(it) }
                 fallbackListeners.clear()
             }
@@ -914,27 +930,25 @@ internal class AudioSubtitleSyncController(
         }
     }
 
-    private fun fetchReference(candidate: ReferenceCandidate, onReady: ((List<Triple<Long, Long, String>>) -> Unit)?) {
-        parsedReferences[candidate.url]?.let { cached ->
-            if (cached.isNotEmpty()) onReady?.invoke(cached)
-            return
-        }
-        if (!pendingReferenceFetches.add(candidate.url) && onReady == null) return
-        try {
-            fetchPool.execute {
-                val dialogue = parsedReferences[candidate.url] ?: runCatching {
-                    val raw = downloadWithRetry(candidate)
-                    dialogueOf(parseSidecarTimedCuesRobust(raw, candidate.url).cues)
-                }.getOrElse {
-                    SyncLog.w("reference download failed for ${candidate.url}: ${it.message}")
-                    emptyList()
-                }
-                parsedReferences[candidate.url] = dialogue
-                pendingReferenceFetches.remove(candidate.url)
-                if (dialogue.isNotEmpty()) onReady?.invoke(dialogue)
-            }
-        } catch (_: Exception) {
-            // Released.
+    /** See [ReferenceFetcher]: each file downloads once; [urgent] ones skip the alternatives' queue. */
+    private fun fetchReference(
+        candidate: ReferenceCandidate,
+        urgent: Boolean = false,
+        onReady: ((List<Triple<Long, Long, String>>) -> Unit)?,
+    ) {
+        referenceHeaders.putIfAbsent(candidate.url, candidate)
+        referenceFetcher.fetch(candidate.url, urgent, onReady)
+    }
+
+    private val referenceHeaders = ConcurrentHashMap<String, ReferenceCandidate>()
+
+    private fun downloadReference(url: String): List<Triple<Long, Long, String>> {
+        val candidate = referenceHeaders[url] ?: ReferenceCandidate(url = url, language = "", headers = emptyMap())
+        return runCatching {
+            dialogueOf(parseSidecarTimedCuesRobust(downloadWithRetry(candidate), url).cues)
+        }.getOrElse {
+            SyncLog.w("reference download failed for $url: ${it.message}")
+            emptyList()
         }
     }
 
@@ -988,7 +1002,7 @@ internal class AudioSubtitleSyncController(
         val matched = java.util.concurrent.atomic.AtomicInteger(0)
         val finished = java.util.concurrent.atomic.AtomicInteger(0)
         for (candidate in references) {
-            fetchReference(candidate) { dialogue ->
+            fetchReference(candidate, urgent = true) { dialogue ->
                 if (session !== current) return@fetchReference
                 val referenceTrack = SubtitleSpeechTrack.fromCues(dialogue)
                 val bridge = SubtitleBridge.align(current.track, referenceTrack)

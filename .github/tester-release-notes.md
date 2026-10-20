@@ -1,5 +1,3 @@
-- Audio sync can load a pre-optimized ORT version of the same English speech model. Graph optimization is done before download; the app retains its current recognition settings, background loading worker and three-minute reuse period.
-- The first ORT use downloads about 74 MB once on an unmetered connection, or from Settings. Existing ONNX files remain usable offline or if the upgrade download fails. Settings deletion removes both versions.
-- Each new model file is verified by size and SHA-256 before being installed. Partial or corrupted downloads never replace completed files.
-- The statistics panel reports ORT or ONNX so the actual loaded format is visible. A cached ONNX model continues until a fresh load or app restart.
-- Native host tests showed faster model loading and matching recognized tokens on three speech clips, with token timestamp differences up to 40 ms. TV loading time, memory use and dialogue accuracy still need device testing; a sub-10-second load is not guaranteed.
+- Audio sync starts recognizing words sooner on titles with many subtitles. The English references recognition needs ("checking English subtitles") now download on their own workers instead of waiting behind every same-language alternative, which could take a long time on titles with a dozen subtitle options or throttled subtitle hosts.
+- Each reference subtitle now downloads once, however many parts of audio sync ask for it. A failed copy never hides another download of the same file that succeeds.
+- A failing subtitle handler can no longer stop the download worker. No change to memory use: the two extra download threads only start when needed and hold no audio.
