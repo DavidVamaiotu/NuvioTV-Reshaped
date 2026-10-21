@@ -38,7 +38,8 @@ data class AutoSourceRecoveryPlan(
             selectedPlugins = selectedPlugins,
             preferredBingeGroup = preferredBingeGroup,
             preferBingeGroupInSelection = preferredBingeGroup != null,
-            bingeGroupOnly = bingeGroupOnly
+            bingeGroupOnly = bingeGroupOnly,
+            bingeKeepsFilters = true
         )
     }
 

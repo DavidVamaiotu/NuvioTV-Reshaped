@@ -69,7 +69,8 @@ object StreamAutoPlaySelector {
         preferredBingeGroup: String? = null,
         preferBingeGroupInSelection: Boolean = false,
         bingeGroupOnly: Boolean = false,
-        rankedRegexPatterns: List<String> = emptyList()
+        rankedRegexPatterns: List<String> = emptyList(),
+        bingeKeepsFilters: Boolean = false // Nuvio RS: source recovery retries stay inside the user's filters
     ): Stream? {
         return com.nuvio.tv.core.streams.ranking.RankedRegexWork.run(
             enabled = mode == StreamAutoPlayMode.REGEX_MATCH && rankedRegexPatterns.isNotEmpty() && !bingeGroupOnly
@@ -86,7 +87,8 @@ object StreamAutoPlaySelector {
                 preferBingeGroupInSelection = preferBingeGroupInSelection,
                 bingeGroupOnly = bingeGroupOnly,
                 rankedRegexPatterns = rankedRegexPatterns,
-                rankedRegexCheckCancelled = checkpoint
+                rankedRegexCheckCancelled = checkpoint,
+                bingeKeepsFilters = bingeKeepsFilters
             )
         }
     }
@@ -103,7 +105,8 @@ object StreamAutoPlaySelector {
         preferBingeGroupInSelection: Boolean = false,
         bingeGroupOnly: Boolean = false,
         rankedRegexPatterns: List<String> = emptyList(),
-        rankedRegexCheckCancelled: () -> Unit = {}
+        rankedRegexCheckCancelled: () -> Unit = {},
+        bingeKeepsFilters: Boolean = false // Nuvio RS: source recovery retries stay inside the user's filters
     ): Stream? {
         if (streams.isEmpty()) return null
 
@@ -136,7 +139,7 @@ object StreamAutoPlaySelector {
         // not be limited by autoplay source/addon selection filters.
         val targetBingeGroup = preferredBingeGroup?.trim().orEmpty()
         if (preferBingeGroupInSelection && targetBingeGroup.isNotEmpty()) {
-            val bingeGroupMatch = streams.firstOrNull { stream ->
+            val bingeGroupMatch = (if (bingeKeepsFilters) candidateStreams else streams).firstOrNull { stream ->
                 !stream.isExternal() &&
                     stream.behaviorHints?.bingeGroup == targetBingeGroup &&
                     isPlayable(stream)
