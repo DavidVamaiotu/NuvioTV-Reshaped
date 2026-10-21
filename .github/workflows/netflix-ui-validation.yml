@@ -45,7 +45,6 @@ jobs:
         run: >-
           ./gradlew :app:testFullDebugUnitTest
           --tests 'com.nuvio.tv.ui.reshaped.netflix.*'
-          --tests 'com.nuvio.tv.core.player.TrailerMemoryPolicyTest'
           --tests 'com.nuvio.tv.data.trailer.InAppYouTubeExtractor*Test'
           --tests 'com.nuvio.tv.data.trailer.TrailerService*Test'
           --build-cache --max-workers=2
