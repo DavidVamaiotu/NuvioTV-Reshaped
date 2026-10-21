@@ -949,6 +949,7 @@ internal fun PlayerRuntimeController.scheduleDeferredPlayerReinitialize(
     clearResumeProgress: Boolean = false
 ) {
     cancelFirstFrameWatchdog()
+    cancelTunnelAvSyncWatchdog() // Nuvio RS hook: Arc formats
     cancelStallWatchdog()
     if (clearResumeProgress) {
         pendingResumeProgress = null

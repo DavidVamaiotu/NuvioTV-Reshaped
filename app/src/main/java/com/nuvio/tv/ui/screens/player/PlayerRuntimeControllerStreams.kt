@@ -1589,6 +1589,8 @@ internal fun PlayerRuntimeController.switchToEpisodeStream(
         persistSelectedStreamForReuse(stream = stream, url = playbackUrl, headers = playbackHeaders)
     }
     persistedTrackPreference = null
+    losslessAudioDefaultAppliedForStream = false // Nuvio RS hook: Arc formats
+    persistedAudioPreferenceSeenForStream = false
     subtitleDisabledByPersistedPreference = false
     subtitleAddonRestoredByPersistedPreference = false
     pendingRestoredAddonSubtitle = null
@@ -1702,6 +1704,8 @@ private fun PlayerRuntimeController.switchToEpisodeStreamCommon(
     currentFilename = stream.behaviorHints?.filename
 
     persistedTrackPreference = null
+    losslessAudioDefaultAppliedForStream = false // Nuvio RS hook: Arc formats
+    persistedAudioPreferenceSeenForStream = false
     subtitleDisabledByPersistedPreference = false
     subtitleAddonRestoredByPersistedPreference = false
     pendingRestoredAddonSubtitle = null

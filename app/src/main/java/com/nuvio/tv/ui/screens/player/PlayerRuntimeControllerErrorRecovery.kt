@@ -329,10 +329,12 @@ internal fun PlayerRuntimeController.resetErrorRetryState() {
 internal fun PlayerRuntimeController.scheduleStableProgressReset() {
     stableProgressResetJob?.cancel()
     stableProgressResetJob = scope.launch {
+        val playingSinceMs = android.os.SystemClock.elapsedRealtime()
         delay(STABLE_PROGRESS_RESET_DELAY_MS)
         val player = _exoPlayer ?: return@launch
         if (player.playbackState == Player.STATE_READY && player.isPlaying) {
             resetErrorRetryState()
+            noteFormatsStablePlayback(player, playingSinceMs) // Nuvio RS hook: Arc formats
         }
     }
 }

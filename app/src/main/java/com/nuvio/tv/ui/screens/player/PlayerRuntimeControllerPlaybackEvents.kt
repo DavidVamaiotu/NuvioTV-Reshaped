@@ -85,7 +85,7 @@ internal fun PlayerRuntimeController.skipInterval(interval: SkipInterval): Boole
 
 internal fun PlayerRuntimeController.applyAudioAmplification(db: Int) {
     val clampedDb = db.coerceIn(AUDIO_AMPLIFICATION_MIN_DB, AUDIO_AMPLIFICATION_MAX_DB)
-    val isAudioAmplificationAvailable = isUsingMpvEngine() || _exoPlayer != null
+    val isAudioAmplificationAvailable = isUsingMpvEngine() || (_exoPlayer != null && !isAudioOutputBypassing) // Nuvio RS hook: no gain on a bitstream
     val wasActive = gainAudioProcessor.isGainEnabled()
     gainAudioProcessor.setGainDb(if (isAudioAmplificationAvailable) clampedDb else AUDIO_AMPLIFICATION_MIN_DB)
     val isActiveNow = gainAudioProcessor.isGainEnabled()
@@ -121,7 +121,7 @@ internal fun PlayerRuntimeController.updateAudioControlAvailability(
     selectedAudioIndex: Int = _uiState.value.selectedAudioTrackIndex
 ) {
     val selectedTrack = audioTracks.getOrNull(selectedAudioIndex)
-    val isAudioAmplificationAvailable = isUsingMpvEngine() || _exoPlayer != null
+    val isAudioAmplificationAvailable = isUsingMpvEngine() || (_exoPlayer != null && !isAudioOutputBypassing) // Nuvio RS hook: no gain on a bitstream
     val isCenterMixAvailable =
         ffmpegAudioRenderer?.isCenterMixActive() == true && (selectedTrack?.channelCount ?: 0) > 2
     val clampedDb = _uiState.value.audioAmplificationDb
