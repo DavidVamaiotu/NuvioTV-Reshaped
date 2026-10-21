@@ -347,6 +347,8 @@ internal fun PlayerRuntimeController.initializePlayer(
                                 "displayHdr10=${result.displayHdr10} " +
                                 "displayHdr10Plus=${result.displayHdr10Plus} " +
                                 "codecDvheDtb=${result.codecSupportsDvheDtb} " +
+                                "codecDvheSt=${result.codecSupportsDvheSt} " +
+                                "manualConversion=${result.usesManualConversion} " +
                                 "bridgeReady=${result.bridgeReady} " +
                                 "api=${result.apiLevel} " +
                                 "host=${url.safeHost()}"
@@ -831,8 +833,11 @@ internal fun PlayerRuntimeController.initializePlayer(
             // failed to play, force mode 1 this time (before the HDR10 fallback).
             val dv7Mode1Forced = dv7Mode1ForcedStreamUrls.contains(url)
             val manualDv81Selected = playerSettings.dv7HandlingMode == Dv7HandlingMode.DV81_LIBDOVI
+            // Arc: Auto on a device that converts the way manual Convert-to-DV8.1 does also uses mode 2.
+            val autoDv81Mode2 = playerSettings.dv7HandlingMode == Dv7HandlingMode.AUTO &&
+                dv7AutoResult?.usesManualConversion == true
             isManualDv81Mode2ActiveForCurrentPlayback =
-                manualDv81Selected &&
+                (manualDv81Selected || autoDv81Mode2) &&
                 effectiveDv7Mode == Dv7HandlingMode.DV81_LIBDOVI &&
                 !libdoviModeOverrideActive &&
                 !dv7Mode1Forced
@@ -858,8 +863,9 @@ internal fun PlayerRuntimeController.initializePlayer(
             }
             com.nuvio.tv.core.player.dvmkv.DolbyVisionCompatibility.setHdr10BaseLayerModeActive(isHdr10BaseLayerModeActive)
             isMapDv7ToHevcActiveForCurrentPlayback = mapDv7ToHevcEnabled
+            // Arc: keyed off the effective mode, so manual Convert-to-DV8.1 also gets the hidden-DV-decoder selector.
             val convertToDv81Active = !mapDv7ToHevcEnabled &&
-                    dv7AutoResult?.decision == DolbyVisionBaseLayerPolicy.Decision.CONVERT_TO_DV81
+                    effectiveDv7Mode == Dv7HandlingMode.DV81_LIBDOVI
             val codecSelector = createDolbyVisionFallbackCodecSelector(convertToDv81Active = convertToDv81Active)
             scope.launch(kotlinx.coroutines.Dispatchers.Default) { softwareOnlyDecoderNames }
             // Bluetooth media sink (A2DP / LE Audio): Media3 only advertises PCM. Do not attempt
@@ -987,13 +993,13 @@ internal fun PlayerRuntimeController.initializePlayer(
                                 dv7Mode1Forced -> 1
                                 else -> -1
                             },
-                            preserveMapping = playerSettings.dv7ToDv81PreserveMappingEnabled &&
-                                    manualDv81Selected,
                             dv5Enabled = playerSettings.dv5ToDv81Enabled,
-                            manualDv81 = manualDv81Selected && !dv7Mode1Forced
+                            manualDv81 = manualDv81Selected && !dv7Mode1Forced,
+                            autoMode2 = autoDv81Mode2 && !dv7Mode1Forced
                         ),
                         stripDvRpu = stripDvRpuEnabled,
-                        stripHdr10PlusSei = stripHdr10PlusSei
+                        stripHdr10PlusSei = stripHdr10PlusSei,
+                        injectHdr10Sei = formatSettings().injectHdr10MetadataOnStrip // Nuvio RS: Arc HDR10 metadata on strip
                     ).let { autoSyncExtractorsFactory(it, url, headers) } // AutoSync hook
 
             setLoadingStatus(
@@ -2614,6 +2620,22 @@ private inline fun <reified T : Throwable> Throwable.findCause(): T? {
 }
 
 private fun PlaybackException.isDolbyVisionDecoderFailure(): Boolean {
+    // media3 surfaces failure-to-instantiate as
+    // ERROR_CODE_DECODER_INIT_FAILED ("Decoder init failed..."), which the
+    // message-string match below never catches - so the mode2 -> mode1 -> HDR10
+    // retry ladder would never fire on devices whose DV decoder exists but refuses to
+    // start (the hidden/broken-licence Amlogic case DolbyVisionCodecFallback
+    // documents). Match init failures by code + the failing format's DV MIME.
+    if (errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED) {
+        val mime = (this as? androidx.media3.exoplayer.ExoPlaybackException)
+            ?.rendererFormat?.sampleMimeType
+        if (mime?.contains("dolby-vision", ignoreCase = true) == true) return true
+        // Init-failure messages name the codec; catch DV decoders that way too.
+        val initDetails = (message ?: "") + ' ' + (cause?.message ?: "")
+        return initDetails.contains("dvhe", ignoreCase = true) ||
+            initDetails.contains("dvh1", ignoreCase = true) ||
+            initDetails.contains("dolby", ignoreCase = true)
+    }
     if (errorCode != PlaybackException.ERROR_CODE_DECODING_FAILED) return false
     val details = buildString {
         append(message ?: "")
@@ -2744,18 +2766,42 @@ private fun createDolbyVisionFallbackCodecSelector(
     // which only touches profile 7. We must NOT force video/dolby-vision to the HEVC
     // decoder here: that also catches DV5, which has no HDR10 base layer and ends up
     // decoded without its reshaping (wrong colors). DV5 keeps the DV decoder.
-    if (convertToDv81Active) {
-        return MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
-            val defaults = MediaCodecSelector.DEFAULT.getDecoderInfos(
-                mimeType, requiresSecureDecoder, requiresTunnelingDecoder
-            )
-            if (mimeType != MimeTypes.VIDEO_DOLBY_VISION || defaults.isNotEmpty()) {
-                return@MediaCodecSelector defaults
-            }
-            DolbyVisionCodecFallback.findDvDecodersIgnoringProfile()
+    return MediaCodecSelector { mimeType, requiresSecureDecoder, requiresTunnelingDecoder ->
+        val defaults = MediaCodecSelector.DEFAULT.getDecoderInfos(
+            mimeType, requiresSecureDecoder, requiresTunnelingDecoder
+        )
+        if (defaults.isNotEmpty()) {
+            return@MediaCodecSelector defaults
         }
+        // VC-1 MIME bridge. media3 tags Blu-ray VC-1 as video/wvc1, but Amlogic
+        // (S905X5) registers its VC-1 decoders as video/vc1, so a video/wvc1 query
+        // returns nothing on hardware that can decode it (MediaCodecList lists
+        // supportedTypes=[video/vc1] for c2.amlogic.vc1.decoder and .sw, and nothing
+        // under video/wvc1). Re-query under video/vc1; the returned
+        // MediaCodecInfo carries codecMimeType=video/vc1, which the renderer sets as
+        // the MediaFormat KEY_MIME at configure, so the codec gets a string it accepts.
+        if (mimeType.equals(MimeTypes.VIDEO_VC1, ignoreCase = true)) {
+            val vc1Decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(
+                "video/vc1", requiresSecureDecoder, requiresTunnelingDecoder
+            )
+            if (vc1Decoders.isNotEmpty()) {
+                return@MediaCodecSelector vc1Decoders
+            }
+        }
+        // DivX 4/5/6 is MPEG-4 ASP; few devices register a decoder under video/divx.
+        if (mimeType.equals(MimeTypes.VIDEO_DIVX, ignoreCase = true)) {
+            val mpeg4Decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(
+                MimeTypes.VIDEO_MP4V, requiresSecureDecoder, requiresTunnelingDecoder
+            )
+            if (mpeg4Decoders.isNotEmpty()) {
+                return@MediaCodecSelector mpeg4Decoders
+            }
+        }
+        if (convertToDv81Active && mimeType == MimeTypes.VIDEO_DOLBY_VISION) {
+            return@MediaCodecSelector DolbyVisionCodecFallback.findDvDecodersIgnoringProfile()
+        }
+        defaults
     }
-    return MediaCodecSelector.DEFAULT
 }
 
 private fun describeExtensionRendererMode(mode: Int): String {

@@ -46,6 +46,7 @@ internal fun NuvioReshapedSettingsContent(
         )
         autoSyncBubbleSettingsItems(enabled = playerSettings.playerPreference != PlayerPreference.EXTERNAL) // Nuvio RS hook: AutoSync bubble
         autoSourceRecoverySettingsItems(playerSettings)
+        reshapedFormatsSettingsItems(playerSettings) // Nuvio RS: Arc sound and picture formats
         seekrKeySettingsItems()
         seekPreviewSettingsItems()
         subtitleFontSettingsItems()

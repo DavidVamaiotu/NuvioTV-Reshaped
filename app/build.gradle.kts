@@ -51,13 +51,13 @@ val devProperties = Properties().apply {
 }
 
 val enableDoviNative = parseBooleanProperty(
-    resolveProperty(devProperties, localProperties, "DOVI_NATIVE_ENABLED")
+    resolveProperty(devProperties, localProperties, "DOVI_NATIVE_ENABLED", "true") // Nuvio RS: Arc builds the DV bridge with libdovi by default
 )
 val doviExtractorHookReady = parseBooleanProperty(
-    resolveProperty(devProperties, localProperties, "DOVI_EXTRACTOR_HOOK_READY")
+    resolveProperty(devProperties, localProperties, "DOVI_EXTRACTOR_HOOK_READY", "true") // Nuvio RS: Arc builds the DV bridge with libdovi by default
 )
 val doviEnableRealLink = parseBooleanProperty(
-    resolveProperty(devProperties, localProperties, "DOVI_ENABLE_REAL_LINK")
+    resolveProperty(devProperties, localProperties, "DOVI_ENABLE_REAL_LINK", "true") // Nuvio RS: Arc builds the DV bridge with libdovi by default
 )
 val doviStaticLibPath = resolveProperty(devProperties, localProperties, "DOVI_LIBDOVI_STATIC_LIB")
 val doviIncludeDirPath = resolveProperty(devProperties, localProperties, "DOVI_LIBDOVI_INCLUDE_DIR")
