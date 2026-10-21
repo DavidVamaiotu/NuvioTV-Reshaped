@@ -1,3 +1,5 @@
-- Audio sync now shows a message only for the first confirmed sync of a title. Fine-tuning estimates, "timing changed, re-synced" updates and later confirmations (another cut in the release, recognition taking over) adjust the subtitles silently.
-- Messages that are not about timing are unchanged: speech model download, Wi-Fi needed, and a sync that could not be confirmed.
-- Includes tester.23's faster start of word recognition on titles with many subtitles.
+- Now built on Nuvio TV 1.1.0-beta.7 (everything in Beta 1.1.0-beta.7-autosync.2 is in this build).
+- Nuvio Arc's sound format handling: TrueHD and DTS-HD (including Atmos and DTS:X) are sent lossless to your receiver through Arc's own IEC path, surround is matched to what your TV, soundbar or receiver reports, and a format the receiver refuses is learned and decoded instead, then tried again when the output changes. Tunnelled playback that freezes is rebuilt without the tunnel.
+- Nuvio Arc's Dolby Vision handling: Profile 7 is converted to 8.1 on every Dolby Vision TV, Dolby Vision decoders that fail to start fall back step by step instead of erroring, and HDR10 metadata can be added when Dolby Vision is stripped. The Dolby Vision converter (libdovi) is now part of the app.
+- New section Settings > Nuvio Reshaped > Sound and picture formats. One switch turns Arc's sound handling off and plays sound exactly as Nuvio does.
+- The stats overlay shows the audio path (passthrough, IEC, decoded or transcoded) and what happens to Dolby Vision.
