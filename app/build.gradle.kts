@@ -82,6 +82,7 @@ fun truthy(value: String?): Boolean {
 }
 
 val buildingAppBundle = gradle.startParameter.taskNames.any { it.contains("bundle", ignoreCase = true) }
+val testerArm32Only = truthy(providers.gradleProperty("testerArm32Only").orNull)
 val useDebugReleaseSigning = env("CI_USE_DEBUG_SIGNING").equals("true", ignoreCase = true)
 val useLocalFfmpegDecoder = truthy(
     providers.gradleProperty("useLocalFfmpegDecoder").orNull
@@ -107,6 +108,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 36
+
+        if (testerArm32Only) {
+            ndk { abiFilters += "armeabi-v7a" }
+        }
         versionCode = 1070
         versionName = "1.1.0-beta.7"
 
@@ -277,8 +282,12 @@ android {
         abi {
             isEnable = !buildingAppBundle
             reset()
-            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-            isUniversalApk = true
+            if (testerArm32Only) {
+                include("armeabi-v7a")
+            } else {
+                include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            }
+            isUniversalApk = !testerArm32Only
         }
     }
 
