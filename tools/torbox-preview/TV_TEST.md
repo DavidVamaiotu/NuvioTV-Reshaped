@@ -1,11 +1,14 @@
 # TorBox seek-preview TV test
 
 Experimental branch: feat/torbox-seek-preview. Uses the existing seek bar and
-filmstrip UI. Stable, Beta and Tester release branches are not modified.
+filmstrip UI. Stable, Beta and Tester source branches are not modified. This feature branch
+publishes a signed Tester prerelease using the existing update channel.
 
 ## Tester setup
 
-1. Install the debug APK from the branch's TorBox seek preview test APK workflow.
+1. Select the Tester update channel and install the new TorBox preview Tester release.
+   The build checks package, signing certificate and increasing versionCode against
+   the prior Tester/Beta APKs before publication. Manual APK installation also works.
 2. Connect your own TorBox account in the existing Debrid settings.
 3. Open Settings > Nuvio Reshaped > Add preview library.
 4. The button reads published-batches.json, skips batches already in your account,

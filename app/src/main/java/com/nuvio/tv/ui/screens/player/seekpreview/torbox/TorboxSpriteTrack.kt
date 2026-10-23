@@ -16,7 +16,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Call
-import okhttp3.FormBody
+import okhttp3.MultipartBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -281,8 +281,9 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
     suspend fun addCached(hash: String, name: String): Boolean {
         val magnet = "magnet:?xt=urn:btih:$hash&dn=" + java.net.URLEncoder.encode(name, "UTF-8") +
             "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce"
-        val form = FormBody.Builder().add("magnet", magnet).add("add_only_if_cached", "true")
-            .add("allow_zip", "false").add("seed", "2").build()
+        val form = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("magnet", magnet).addFormDataPart("add_only_if_cached", "true")
+            .addFormDataPart("allow_zip", "false").addFormDataPart("seed", "2").build()
         val request = Request.Builder().url("https://api.torbox.app/v1/api/torrents/createtorrent")
             .header("Authorization", "Bearer $key").post(form).build()
         val response = JSONObject(String(get(request, 64 * 1024), Charsets.UTF_8))
