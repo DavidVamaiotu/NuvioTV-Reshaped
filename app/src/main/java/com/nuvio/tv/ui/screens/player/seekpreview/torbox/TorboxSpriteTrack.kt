@@ -7,6 +7,10 @@ import android.graphics.Rect
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewThumbnail
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewTrack
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -25,57 +29,78 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
+import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.coroutineContext
 import kotlin.math.roundToLong
 
 /**
  * Reads an already-added preview torrent using the viewer's own TorBox account.
- * No raw video reads, torrent adds, or generation. Sheets are fetched lazily and region-decoded.
+ * Compressed sheets are prefetched and cached; only requested tiles are region-decoded.
  */
 internal class TorboxSpriteTrack private constructor(
     private val http: PreviewTorboxHttp,
     private val batch: PreviewBatch,
     private val match: TorboxPackMatch,
-    private val timeline: TorboxSpriteTimeline
+    private val timeline: TorboxSpriteTimeline,
+    cacheDirectory: File
 ) : SeekPreviewTrack {
     override var offsetMs: Long = 0L
     private val mutex = Mutex()
-    private val sheets = LinkedHashMap<String, ByteArray>(4, .75f, true)
+    private val bytes = TorboxSpriteByteCache(TorboxSpriteDiskCache(cacheDirectory))
+    private val warming = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val warmStarted = AtomicBoolean(false)
+    @Volatile private var prefetchQueue: TorboxPrefetchQueue? = null
     private val tiles = LinkedHashMap<Long, SeekPreviewThumbnail>(8, .75f, true)
-    private var sheetBytes = 0
     private var bitmapBytes = 0
     @Volatile private var closed = false
     private val healthy = MutableStateFlow(true)
     val available: StateFlow<Boolean> get() = healthy
 
-    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            if (closed || !healthy.value) return@withLock null
-            val frame = timeline.frameAt(positionMs + offsetMs) ?: return@withLock null
-            tiles[frame.startMs]?.let { return@withLock it }
-            try {
-                val sheet = requireNotNull(timeline.sheets[frame.sheet])
-                val directory = match.pack.indexPath.substringBeforeLast('/')
-                val path = "$directory/${sheet.path}"
-                val bytes = sheets[path] ?: http.file(batch, path, sheet.bytes).also {
-                    require(it.size == sheet.bytes && sha256(it) == sheet.sha256)
-                    sheets[path] = it
-                    sheetBytes += it.size
-                    while (sheetBytes > 2 * 1024 * 1024 && sheets.size > 1) {
-                        val first = sheets.entries.iterator()
-                        sheetBytes -= first.next().value.size
-                        first.remove()
-                    }
+    /** Called after the player owns this track, so cancellation always closes the workers. */
+    fun prefetch(positionMs: Long) {
+        if (closed || !warmStarted.compareAndSet(false, true)) return
+        val queue = TorboxPrefetchQueue(timeline.frames, timeline.sheets, positionMs)
+        prefetchQueue = queue
+        repeat(2) {
+            warming.launch {
+                while (!closed) {
+                    val sheet = queue.next() ?: break
+                    try { sheetBytes(sheet) }
+                    catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) { break } // Keep already cached previews on a background failure.
+                    catch (_: OutOfMemoryError) { break }
                 }
-                coroutineContext.ensureActive()
+            }
+        }
+    }
+
+    private suspend fun sheetBytes(sheet: TorboxSpriteSheet): ByteArray = bytes.get(sheet) {
+        val directory = match.pack.indexPath.substringBeforeLast('/')
+        http.file(batch, "$directory/${sheet.path}", sheet.bytes)
+    }
+
+    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? = withContext(Dispatchers.IO) {
+        if (closed || !healthy.value) return@withContext null
+        val frame = timeline.frameAt(positionMs + offsetMs) ?: return@withContext null
+        mutex.withLock { tiles[frame.startMs] }?.let { return@withContext it }
+        try {
+            val sheet = requireNotNull(timeline.sheets[frame.sheet])
+            prefetchQueue?.prioritize(sheet.path)
+            val data = sheetBytes(sheet)
+            coroutineContext.ensureActive()
+            mutex.withLock {
+                if (closed || !healthy.value) return@withLock null
+                tiles[frame.startMs]?.let { return@withLock it }
                 @Suppress("DEPRECATION")
-                val decoder = BitmapRegionDecoder.newInstance(bytes, 0, bytes.size, false)
+                val decoder = BitmapRegionDecoder.newInstance(data, 0, data.size, false)
                     ?: throw IOException("No sprite decoder")
                 val bitmap: Bitmap
                 try {
@@ -85,6 +110,7 @@ internal class TorboxSpriteTrack private constructor(
                         ?: throw IOException("No sprite tile")
                 } finally { decoder.recycle() }
                 coroutineContext.ensureActive()
+                if (closed) { bitmap.recycle(); return@withLock null }
                 val picture = SeekPreviewThumbnail(bitmap, frame.startMs, frame.endMs,
                     approximate = !match.exactSource, origin = "TORBOX",
                     actualFrameMs = if (match.exactSource) frame.actualMs else null)
@@ -96,25 +122,27 @@ internal class TorboxSpriteTrack private constructor(
                     first.remove() // Compose may still reference a tile: never recycle a displayed bitmap.
                 }
                 picture
-            } catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { healthy.value = false; null }
-            catch (_: OutOfMemoryError) { healthy.value = false; null }
-        }
+            }
+        } catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { healthy.value = false; null }
+        catch (_: OutOfMemoryError) { healthy.value = false; null }
     }
 
     override fun close() {
         closed = true
         healthy.value = false
+        warming.cancel()
         http.close()
+        bytes.close()
         // All cache mutations, including release, share the lookup lock.
         if (mutex.tryLock()) {
-            try { sheets.clear(); tiles.clear(); sheetBytes = 0; bitmapBytes = 0 }
+            try { tiles.clear(); bitmapBytes = 0 }
             finally { mutex.unlock() }
         }
     }
 
     companion object {
-        suspend fun open(key: String, request: TorboxMovieRequest): TorboxSpriteTrack? = withContext(Dispatchers.IO) {
+        suspend fun open(key: String, request: TorboxMovieRequest, cacheDirectory: File): TorboxSpriteTrack? = withContext(Dispatchers.IO) {
             if (key.isBlank() || request.durationMs <= 0L || PreviewTorboxGate.blocked()) return@withContext null
             val http = PreviewTorboxHttp(key)
             var transferred = false
@@ -169,7 +197,7 @@ internal class TorboxSpriteTrack private constructor(
                 val timeline = TorboxSpriteTimeline(frames, sheets)
                 require(timeline.frames.last().endMs == match.pack.durationMs)
                 transferred = true
-                TorboxSpriteTrack(http, batch, match, timeline)
+                TorboxSpriteTrack(http, batch, match, timeline, cacheDirectory)
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { null }
             catch (_: OutOfMemoryError) { null }
@@ -203,8 +231,8 @@ private data class PreviewBatch(val id: String, val name: String, val files: Lis
 /** One isolated client: API authorization is never attached to CDN requests or logs. */
 private class PreviewTorboxHttp(private val key: String) : Closeable {
     @Volatile private var closed = false
-    @Volatile private var current: Call? = null
-    private val links = mutableMapOf<String, String>()
+    private val calls = ConcurrentHashMap.newKeySet<Call>()
+    private val links = ConcurrentHashMap<String, String>()
 
     suspend fun batches(): List<PreviewBatch> {
         // Recently added batches normally occur on the first page. Bound discovery work.
@@ -304,7 +332,7 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
         PreviewTorboxGate.enter()
         if (closed) throw IOException("Preview closed")
         val call = client.newCall(request)
-        current = call
+        calls.add(call)
         if (closed) call.cancel()
         try {
             call.execute().use { response ->
@@ -329,10 +357,10 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
                 }
                 return output.toByteArray()
             }
-        } finally { if (current === call) current = null }
+        } finally { calls.remove(call) }
     }
 
-    override fun close() { closed = true; current?.cancel(); links.clear() }
+    override fun close() { closed = true; calls.forEach { it.cancel() }; links.clear() }
 
     companion object {
         private val client = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS)

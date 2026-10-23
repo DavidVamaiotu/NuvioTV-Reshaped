@@ -144,8 +144,9 @@ class SeekPreviewState internal constructor(
             .transformLatest<Triple<String, String?, TorboxMovieRequest>, TorboxSpriteTrack?> { (key, _, request) ->
                 setOffset(0)
                 _previewCue.value = null
-                val owned = TorboxSpriteTrack.open(key, request)
+                val owned = TorboxSpriteTrack.open(key, request, controller.context.cacheDir.resolve("torbox-sprites-v1"))
                 try {
+                    owned?.prefetch(runCatching { controller.currentPlaybackPositionMs() }.getOrNull() ?: 0L)
                     emit(owned)
                     if (owned != null) {
                         owned.available.first { !it }

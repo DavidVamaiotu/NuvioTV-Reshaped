@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with preoptimized ORT speech model' || github.event.head_commit.message == 'Release Tester with TorBox seek previews'
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with preoptimized ORT speech model' || github.event.head_commit.message == 'Release Tester with TorBox seek previews' || github.event.head_commit.message == 'Release Tester with prefetched TorBox previews'
     runs-on: ubuntu-latest
 
     steps:

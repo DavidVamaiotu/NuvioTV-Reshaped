@@ -1,3 +1,3 @@
-- Added **Add preview library** under Settings > Nuvio Reshaped. Connect your own TorBox account first; the button adds the shared ten-movie sprite batch only if it is cached and skips batches already in your account.
-- Seeking matching movies now fetches compressed sprite sheets from your TorBox account and uses the existing TV preview strip. Exact source matches are preferred; compatible runtime matches are approximate.
-- More preview batches can be appended to the published batch list. Press the button again to add them without importing a Share link.
+- TorBox movie sprite sheets now preload in the background from the current playback position, with two downloads and priority for requested seek positions.
+- Added an 8 MiB compressed-sheet RAM cache, a separate 3 MiB decoded-tile cache, and a bounded 128 MiB disk cache. Reopening a movie reuses verified sheets, and only requested tiles are decoded.
+- Retained request pacing and Retry-After handling. Prefetch stops when leaving the movie, and concurrent requests for the same sheet share one download.
