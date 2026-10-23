@@ -119,3 +119,28 @@ def test_invalid_sheet_leaves_catalog_unchanged(tmp_path):
         m.prepare(results, inv, output, "2", "tt0000002", None, 1, "second")
     assert (output / "catalog.json").read_bytes() == old
     assert not (output / "NuvioPreviews-second").exists()
+
+
+def test_combined_batch_contains_every_movie_and_still_allows_append(tmp_path):
+    from prepare_batch import prepare_batch
+    results, inv = fixture(tmp_path)
+    output = tmp_path / "combined"
+    movies=[{"source_id":"1","imdb_id":"tt0000001"},
+            {"source_id":"2","imdb_id":"tt0000002"}]
+    first=prepare_batch(results, inv, output, movies, "all")
+    internal=m.read_json(output / "NuvioPreviews-all/catalog.json")
+    assert len(internal["packs"]) == 2
+    assert {p["imdb_id"] for p in internal["packs"]} == {"tt0000001", "tt0000002"}
+    assert len({p["batch_info_hash"] for p in m.read_json(output / "catalog.json")["packs"]}) == 1
+    old_torrent=Path(first["torrent_file"]).read_bytes()
+    old_catalog=m.read_json(output / "catalog.json")
+    prepare_batch(results, inv, output,
+                  [{"source_id":"1","imdb_id":"tt0000001","revision":2}], "extra")
+    appended=m.read_json(output / "catalog.json")
+    assert appended["packs"][:2] == old_catalog["packs"]
+    assert len(appended["packs"]) == 3
+    assert Path(first["torrent_file"]).read_bytes() == old_torrent
+    parsed, end=decode(old_torrent)
+    paths=[f[b"path"] for f in parsed[b"info"][b"files"]]
+    assert [b"catalog.json"] in paths
+    assert sum(path[-1] == b"index.json" for path in paths) == 2
