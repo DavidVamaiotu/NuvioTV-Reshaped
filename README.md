@@ -1,99 +1,59 @@
 <div align="center">
 
-  <img src="assets/brand/app_logo_wordmark.png" alt="NuvioTV" width="300" />
-  <br />
-  <br />
+  <img src="assets/brand/app_logo_wordmark.png" alt="NuvioTV Reshaped" width="300" />
 
-  [![Contributors][contributors-shield]][contributors-url]
-  [![Forks][forks-shield]][forks-url]
-  [![Stargazers][stars-shield]][stars-url]
-  [![Issues][issues-shield]][issues-url]
-  [![License][license-shield]][license-url]
+  <h1>NuvioTV Reshaped</h1>
 
   <p>
-    A modern Android TV media player powered by the Stremio addon ecosystem.
+    A community fork of <a href="https://github.com/tapframe/NuvioTV">NuvioTV</a> for Android TV.
     <br />
-    Stremio Addon ecosystem • Android TV optimized • Playback-focused experience
+    TV-first browsing and playback with the Stremio addon ecosystem, anime trackers and phone-assisted tracker sign-in.
   </p>
+
+  [Download](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases/latest) · [All releases](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases) · [Mobile edition](https://github.com/DavidVamaiotu/NuvioMobile-Reshaped) · [Official Nuvio](https://nuvio.tv)
 
 </div>
 
 ## About
 
-NuvioTV is a modern media player designed specifically for Android TV.
+NuvioTV Reshaped is the Android TV edition of the Reshaped forks. It builds on NuvioTV's Kotlin, Jetpack Compose and Media3 player, with support for user-installed Stremio addons for discovery and source resolution.
 
-It acts as a client-side playback interface that can integrate with the Stremio addon ecosystem for content discovery and source resolution through user-installed extensions.
+This branch includes MyAnimeList, AniList and Kitsu tracker integration, phone-assisted tracker sign-in, and synchronization of tracker tokens and per-profile settings across devices. The [mobile edition](https://github.com/DavidVamaiotu/NuvioMobile-Reshaped) runs on Android phones and tablets; its player features and build instructions are documented in its own README.
 
-Built with Kotlin and optimized for a TV-first viewing experience.
+This is a community fork, not an official Nuvio release. Report fork issues in [this repository](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/issues).
 
 ## Installation
 
-### Android TV
+Download an APK from [NuvioTV Reshaped Releases](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases) and sideload it onto your Android TV device. If no release is available, build from source below.
 
-Download the latest APK from [GitHub Releases](https://github.com/tapframe/NuvioTV/releases/latest) and install on your Android TV device.
+## Build from source
 
-## Development
-
-### Prerequisites
-
-- Android Studio (latest version)
-- JDK 11+
-- Android SDK (API 29+)
-- Gradle 8.0+
-
-### Setup
+Use Android Studio, JDK 17 and the Android SDK with API 36 installed. The app supports Android 7.0 (API 24) and later. Use the included Gradle wrapper.
 
 ```bash
-git clone https://github.com/tapframe/NuvioTV.git
-cd NuvioTV
-./gradlew build
+git clone -b animeIntegration https://github.com/DavidVamaiotu/NuvioTV-Reshaped.git
+cd NuvioTV-Reshaped
+cp local.example.properties local.properties
+# Set sdk.dir and any service credentials needed for your build in local.properties.
+CI_USE_DEBUG_SIGNING=true ./gradlew :app:assembleRelease
 ```
 
-### Running on Emulator or Device
+`animeIntegration` is this fork's main branch. The command above uses debug signing for a local release build; distribution builds should use your own release signing configuration. Features backed by external services require their corresponding configuration.
 
-```bash
-# Debug build
-./gradlew installDebug
+## Credits and license
 
-# Run on connected device
-adb shell am start -n com.nuvio.tv/.MainActivity
-```
+Built on [NuvioTV](https://github.com/tapframe/NuvioTV) by its upstream contributors and the [NuvioMedia](https://github.com/NuvioMedia) team. Consider [supporting Nuvio](https://nuvio.tv/support).
 
-## Legal & DMCA
+Licensed under the [GNU General Public License v3.0](./LICENSE), the same as upstream.
 
-NuvioTV functions solely as a client-side interface for browsing metadata and playing media provided by user-installed extensions and/or user-provided sources. It is intended for content the user owns or is otherwise authorized to access.
+## Legal
 
-NuvioTV is not affiliated with any third-party extensions or content providers. It does not host, store, or distribute any media content.
+NuvioTV Reshaped browses metadata and plays media from user-installed extensions or user-provided sources. Use it only for content you own or are authorized to access. It does not host, store or distribute media and is not affiliated with third-party extensions or content providers.
 
-For comprehensive legal information, including our full disclaimer, third-party extension policy, and DMCA/Copyright information, please visit our **[Legal & Disclaimer Page](https://tapframe.github.io/NuvioTV/#legal)**.
+See the upstream [Legal & Disclaimer Page](https://tapframe.github.io/NuvioTV/#legal) for additional information about the original project.
 
-## Built With
+## Maintaining the fork README
 
-* Kotlin
-* Jetpack Compose & TV Material3
-* ExoPlayer / Media3
-* Hilt (Dependency Injection)
-* Retrofit (Networking)
-* Gradle
+`README.md` belongs to NuvioTV Reshaped. Keep its fork branding, platform details, downloads and upstream credits when updating it. Do not replace it with upstream documentation during syncs, releases or branch merges.
 
-## Star History
-
-<a href="https://www.star-history.com/#tapframe/NuvioTV&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tapframe/NuvioTV&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tapframe/NuvioTV&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tapframe/NuvioTV&type=date&legend=top-left" />
- </picture>
-</a>
-
-<!-- MARKDOWN LINKS & IMAGES -->
-[contributors-shield]: https://img.shields.io/github/contributors/tapframe/NuvioTV.svg?style=for-the-badge
-[contributors-url]: https://github.com/tapframe/NuvioTV/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/tapframe/NuvioTV.svg?style=for-the-badge
-[forks-url]: https://github.com/tapframe/NuvioTV/network/members
-[stars-shield]: https://img.shields.io/github/stars/tapframe/NuvioTV.svg?style=for-the-badge
-[stars-url]: https://github.com/tapframe/NuvioTV/stargazers
-[issues-shield]: https://img.shields.io/github/issues/tapframe/NuvioTV.svg?style=for-the-badge
-[issues-url]: https://github.com/tapframe/NuvioTV/issues
-[license-shield]: https://img.shields.io/github/license/tapframe/NuvioTV.svg?style=for-the-badge
-[license-url]: http://www.gnu.org/licenses/gpl-3.0.en.html
+After fetching an upstream target, run `bash .github/scripts/merge-nuvio-upstream.sh <target> "<message>"`. This preserves the fork README and workflows even when upstream README changes would merge cleanly. Resolve any remaining source conflicts manually. The README branding workflow checks future pushes and pull requests for accidental reversions.
