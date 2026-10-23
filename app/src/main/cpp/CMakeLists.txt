@@ -6,6 +6,8 @@ set(DOVI_LIBDOVI_STATIC_LIB "" CACHE FILEPATH "Path to libdovi static archive (.
 set(DOVI_LIBDOVI_INCLUDE_DIR "" CACHE PATH "Path to libdovi C headers")
 set(DOVI_LIBDOVI_PREBUILT_ROOT "" CACHE PATH "Root path containing ABI folders for prebuilt libdovi artifacts")
 
+option(DOVI_BUILD_BRIDGE "Build the playback Dolby Vision bridge" ON)
+if (DOVI_BUILD_BRIDGE)
 add_library(
     dovi_bridge
     SHARED
@@ -75,3 +77,8 @@ else()
     endif()
     target_link_libraries(dovi_bridge ${log-lib})
 endif()
+
+endif()
+
+# Feature-owned preview decoder: reuses FFmpeg runtimes already packaged by the app.
+add_subdirectory(seekpreview)

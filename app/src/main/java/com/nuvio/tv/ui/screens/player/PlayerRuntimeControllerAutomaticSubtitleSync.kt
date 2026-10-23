@@ -82,6 +82,7 @@ internal fun PlayerRuntimeController.autoSyncExtractorsFactory(
         context = context,
         sourceKey = url,
         factory = AudioSyncTaps.wrapExtractors(delegate, url),
+        headers = headers, // Preview-owned range requests use the same stream credentials.
     )
     AutoSyncPreferences.ensureLoaded(context)
     if (!AutoSyncPreferences.isEnabled(context)) return tapped

@@ -19,6 +19,7 @@ internal class LocalPreviewSource(
     val owner: Any,
     val sourceKey: String,
     val context: Context,
+    val headers: Map<String, String> = emptyMap(),
 ) {
     @Volatile var released = false
     @Volatile var track: LocalPreviewTrack? = null
@@ -61,8 +62,8 @@ internal object LocalPreviewSources {
      * Registers [sourceKey] as [owner]'s playing stream and returns [factory] wrapped so its
      * video keyframes reach that stream's preview track while playback demuxes them.
      */
-    fun register(owner: Any, context: Context, sourceKey: String, factory: ExtractorsFactory): ExtractorsFactory {
-        val source = LocalPreviewSource(owner, sourceKey, context.applicationContext)
+    fun register(owner: Any, context: Context, sourceKey: String, factory: ExtractorsFactory, headers: Map<String, String> = emptyMap()): ExtractorsFactory {
+        val source = LocalPreviewSource(owner, sourceKey, context.applicationContext, headers.toMap())
         current.value?.let { stale ->
             stale.released = true
             stale.track = null
@@ -105,7 +106,7 @@ internal object LocalPreviewSources {
      * The caller closes it.
      */
     fun open(source: LocalPreviewSource, cacheKey: String, durationMs: Long): LocalPreviewTrack? {
-        if (source.released || durationMs <= 0L) return null
+        if (source.released || durationMs !in 1..172_800_000L) return null
         val track = LocalPreviewTrack(source.context, cacheKey, durationMs, source::keyframeNear)
         source.track = track
         track.start()
@@ -129,5 +130,5 @@ internal fun localSeekPreviewCacheKey(
     contentId.orEmpty(),
     season?.toString().orEmpty(),
     episode?.toString().orEmpty(),
-    (durationMs / 1000L).toString(),
+    durationMs.toString(),
 ).joinToString("|")
