@@ -1,0 +1,56 @@
+name: TorBox seek preview test APK
+
+on:
+  push:
+    branches: [feat/torbox-seek-preview]
+    paths:
+      - 'app/src/**/seekpreview/**'
+      - 'app/src/main/java/com/nuvio/tv/ui/screens/settings/TorboxPreviewSettings.kt'
+      - 'app/src/main/java/com/nuvio/tv/ui/screens/settings/NuvioReshapedSettingsContent.kt'
+      - 'app/src/main/res/values/torbox_preview_strings.xml'
+      - '.github/workflows/torbox-seek-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: torbox-preview-test
+  cancel-in-progress: true
+
+jobs:
+  test-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Configure isolated debug signing
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/torbox-debug.jks" -storepass android -alias androiddebugkey -keypass android -dname "CN=TorBox Preview Test,O=Nuvio,C=US" -keyalg RSA -keysize 2048 -validity 10000
+          printf 'NUVIO_RELEASE_STORE_FILE=%s/torbox-debug.jks\nNUVIO_RELEASE_KEY_ALIAS=androiddebugkey\nNUVIO_RELEASE_KEY_PASSWORD=android\nNUVIO_RELEASE_STORE_PASSWORD=android\n' "$RUNNER_TEMP" > local.properties
+      - name: Test preview matching and build TV test APK
+        run: >-
+          ./gradlew :app:testFullDebugUnitTest
+          --tests 'com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxPreviewModelsTest'
+          :app:assembleFullDebug
+          --build-cache --max-workers=2
+          -Pkotlin.compiler.execution.strategy=in-process
+          -Dorg.gradle.jvmargs='-Xmx4096m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8'
+          --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: torbox-seek-preview-test
+          path: |
+            app/build/outputs/apk/full/debug/*.apk
+            app/build/reports/tests/testFullDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14
