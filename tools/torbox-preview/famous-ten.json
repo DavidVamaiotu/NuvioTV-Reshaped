@@ -1,0 +1,52 @@
+[
+  {
+    "source_id": "inception-2010",
+    "imdb_id": "tt1375666",
+    "tmdb_id": 27205
+  },
+  {
+    "source_id": "school-of-rock-2003",
+    "imdb_id": "tt0332379",
+    "tmdb_id": 1584
+  },
+  {
+    "source_id": "glass-onion-2022",
+    "imdb_id": "tt11564570",
+    "tmdb_id": 661374
+  },
+  {
+    "source_id": "tropic-thunder-2008",
+    "imdb_id": "tt0942385",
+    "tmdb_id": 7446
+  },
+  {
+    "source_id": "saving-private-ryan-1998",
+    "imdb_id": "tt0120815",
+    "tmdb_id": 857
+  },
+  {
+    "source_id": "101-dalmatians-1961",
+    "imdb_id": "tt0055254",
+    "tmdb_id": 12230
+  },
+  {
+    "source_id": "project-hail-mary-2026",
+    "imdb_id": "tt12042730",
+    "tmdb_id": null
+  },
+  {
+    "source_id": "last-airbender-2010",
+    "imdb_id": "tt0938283",
+    "tmdb_id": 10196
+  },
+  {
+    "source_id": "lion-king-1994",
+    "imdb_id": "tt0110357",
+    "tmdb_id": 8587
+  },
+  {
+    "source_id": "forrest-gump-1994",
+    "imdb_id": "tt0109830",
+    "tmdb_id": 13
+  }
+]
