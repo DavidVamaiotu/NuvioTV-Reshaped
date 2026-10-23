@@ -1,68 +1,68 @@
 <div align="center">
 
-  <img src="branding/nuvio-rs-logo.png" alt="Nuvio Reshaped" width="128" />
-
-  <h1>Nuvio Reshaped for TV</h1>
+  <h1>NuvioTV Reshaped</h1>
 
   <p>
-    A community fork of <a href="https://github.com/NuvioMedia/NuvioTV">Nuvio TV</a> for Android TV and Google TV.
+    A community fork of <a href="https://github.com/tapframe/NuvioTV">NuvioTV</a> for Android TV.
     <br />
-    Everything you know from Nuvio, plus subtitles that sync themselves, instant seeking with previews, Live TV and a calmer, more cinematic player. Tuned to stay light on low-end TVs.
+    Subtitle timing, seek previews, custom fonts, pill navigation, Live TV and Google sync — configured under Settings &gt; Nuvio Reshaped.
   </p>
 
-  [Download](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases) · [Phone version](https://github.com/DavidVamaiotu/NuvioMobile-Reshaped) · [Official Nuvio](https://nuvio.tv)
+  [Download](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases/latest) · [All releases](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases) · [Mobile edition](https://github.com/DavidVamaiotu/NuvioMobile-Reshaped) · [Official Nuvio](https://nuvio.tv)
 
 </div>
 
-## What's different from Nuvio
+## Reshaped settings
 
-Nuvio Reshaped tracks official Nuvio TV closely and only adds on top. Every addition lives on its own page under **Settings > Nuvio Reshaped**, and the extras that change how Nuvio looks or behaves are off until you turn them on.
+Open **Settings > Nuvio Reshaped**. This page contains the following additions in the TV **tester** branch, `subtitle-autosync-tester`:
 
-### Subtitles
+- **Auto Sync Subtitles.** Align an add-on subtitle with subtitles embedded in the video. Set a tolerance to leave small differences alone, or enable **Thorough Auto Sync Search** to compare more references before applying a confident match.
+- **AutoSync bubble notifications.** Show synchronization progress and results in an optional bubble.
+- **Automatically try another source.** If playback fails to start, try the next source using your **First Source** or **Regex** autoplay preference. Requires an internal player and one of those autoplay modes.
+- **Sound and picture formats — Arc format handling.** Enable the format handling ported from Nuvio Arc for the built-in player. It adds TrueHD/DTS-HD passthrough handling, automatic or manual surround-format capabilities, system passthrough, an ARC soundbar mode, optional AC-3 conversion, and a stereo/5.1/7.1 decode target. You can retest lossless passthrough, clear learned audio refusals or tunnel stalls, and enable HDR10 metadata injection when supported Dolby Vision Profile 8 video is played as HDR10. Actual output depends on your device and audio system.
+- **Seekr API key.** Supply your own Seekr key for seek-preview thumbnails.
+- **Generate previews on device.** Make seek thumbnails from video already downloaded during playback. Seekr fills gaps for parts you have not watched yet.
+- **Custom subtitle fonts.** Choose a subtitle font by uploading it from your phone.
+- **Connection-aware stream ordering.** Use measured playback speed to move streams that are likely too heavy for your connection further down the list.
+- **Pill menu.** Replace the sidebar with a floating menu at the top. Press Up to reach it and Back to jump to it.
+- **Netflix-style Home.** Use a billboard at the top and rows whose focused title expands to show details. It changes the presentation while keeping the existing rows and actions. The pill menu stays enabled while this layout is on.
+- **Live TV.** Configure your live-channel sources and programme guide from the Reshaped Live TV options.
+- **Sync with Google.** Sync Reshaped settings and Live TV across your TVs and phone. Settings sync and Live TV sync have separate switches, plus a **Sync now** action. Buffer sizes and channel-preview options stay per device.
 
-- **Subtitle AutoSync.** When playback starts, your preferred add-on subtitle is compared against the stream's embedded subtitles and shifted into place automatically. Only confident matches are applied.
-- **Sync to audio.** When there's nothing to compare against, AutoSync can align the subtitle by listening to the dialogue, with an optional on-device speech model for English audio.
-- **Secondary language.** AutoSync also works for a second subtitle language.
-- **Bubble notifications.** Optional frosted-glass bubble that shows AutoSync progress and results instead of plain toasts.
-- **Custom subtitle fonts.** Scan a QR code on the TV and upload a `.ttf` or `.otf` font from your phone.
+For the phone and tablet options, see the [mobile README](https://github.com/DavidVamaiotu/NuvioMobile-Reshaped#readme).
 
-### Player
+This is a community fork. Report fork issues in [this repository](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/issues).
 
-- **Seek previews.** A thumbnail above the seek bar while you skip through a film, made on the TV from the video you're already watching. No extra downloads, and no work while the film is playing.
-- **Seek buffer.** Reads ahead to a temporary file on disk so jumping forward is instant. Nothing is kept once you close the player.
-- **Volume boost.** Nuvio's audio amplification is shown as a percentage up to 200%, with a red-tinted bar, and peaks are softened so boosted dialogue doesn't crackle.
+## Installation
 
-### Browsing
-
-- **Pill navigation.** An optional glass pill across the top for Home, Search, Library and Settings, fully usable with the D-pad.
-- **Streams that fit your connection.** Learns your real playback speed and moves streams that are likely too heavy further down, keeping your add-on's order otherwise.
-- **Live TV.** Add M3U, Xtream or Stalker playlists from your phone by scanning a QR code, then watch with a programme guide in Nuvio's own player. Zap with up and down or CH+ and CH-, and press left for the channel list.
-
-## Get it
-
-Download the APK from [Releases](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases). There are two channels:
-
-- **Stable** follows the official Nuvio TV stable release.
-- **Beta** follows the official Nuvio TV beta and gets new fork features first.
-
-Nuvio Reshaped installs as **Nuvio RS**, next to the official app, so you can keep both. Once installed, it checks this repository for updates and offers them in the app on the channel you pick.
+Download an APK from [NuvioTV Reshaped Releases](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases) and sideload it onto your Android TV device. If no release is available, build from source below.
 
 ## Build from source
 
-Development requires Android Studio, a JDK and the Android SDK.
+Use Android Studio, a JDK and the Android SDK.
 
 ```bash
-git clone -b subtitle-autosync https://github.com/DavidVamaiotu/NuvioTV-Reshaped.git
+git clone -b subtitle-autosync-tester https://github.com/DavidVamaiotu/NuvioTV-Reshaped.git
 cd NuvioTV-Reshaped
 ./gradlew :app:assembleFullDebug
 ```
 
-`subtitle-autosync` is the beta branch and `subtitle-autosync-stable` the stable one. The app is built with Kotlin, Jetpack Compose, TV Material 3 and Media3.
+`subtitle-autosync-tester` contains the tester settings described above. Some options are not available in beta or stable builds. `subtitle-autosync` is the beta branch and `subtitle-autosync-stable` is the stable branch.
 
-## Credits
+## Credits and license
 
-Nuvio Reshaped is built on [Nuvio](https://nuvio.tv) by the [NuvioMedia](https://github.com/NuvioMedia) team, who do the real work on the app. It is not an official Nuvio release, so please report problems with this fork here rather than to Nuvio. If you enjoy it, consider [supporting Nuvio](https://nuvio.tv/support).
+Built on [NuvioTV](https://github.com/tapframe/NuvioTV) by its upstream contributors and the [NuvioMedia](https://github.com/NuvioMedia) team. Consider [supporting Nuvio](https://nuvio.tv/support).
 
-## License
+Licensed under the [GNU General Public License v3.0](./LICENSE), the same as upstream.
 
-[GNU General Public License v3.0](./LICENSE), the same as upstream Nuvio.
+## Legal
+
+NuvioTV Reshaped browses metadata and plays media from user-installed extensions or user-provided sources. Use it only for content you own or are authorized to access. It does not host, store or distribute media and is not affiliated with third-party extensions or content providers.
+
+See the upstream [Legal & Disclaimer Page](https://tapframe.github.io/NuvioTV/#legal) for additional information about the original project.
+
+## Maintaining the fork README
+
+`README.md` belongs to NuvioTV Reshaped. Keep its fork branding, platform details, downloads and upstream credits when updating it. The feature list must describe only controls present in **Settings > Nuvio Reshaped** on `subtitle-autosync-tester`. Check the tester settings page and its setting descriptions before changing the feature list. Do not add general Nuvio features or integrations from other settings pages. Do not replace it with upstream documentation during syncs, releases or branch merges.
+
+After fetching an upstream target, run `bash .github/scripts/merge-nuvio-upstream.sh <target> "<message>"`. This preserves the fork README and workflows even when upstream README changes would merge cleanly. Resolve any remaining source conflicts manually. The README branding workflow checks future pushes and pull requests for accidental reversions.
