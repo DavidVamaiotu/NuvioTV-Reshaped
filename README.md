@@ -7,20 +7,44 @@
   <p>
     A community fork of <a href="https://github.com/tapframe/NuvioTV">NuvioTV</a> for Android TV.
     <br />
-    TV-first browsing and playback with the Stremio addon ecosystem, anime trackers and phone-assisted tracker sign-in.
+    Adds MyAnimeList, AniList and Kitsu lists, watch-progress updates and tracker sync.
   </p>
 
   [Download](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases/latest) · [All releases](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases) · [Mobile edition](https://github.com/DavidVamaiotu/NuvioMobile-Reshaped) · [Official Nuvio](https://nuvio.tv)
 
 </div>
 
-## About
+## What Reshaped adds
 
-NuvioTV Reshaped is the Android TV edition of the Reshaped forks. It builds on NuvioTV's Kotlin, Jetpack Compose and Media3 player, with support for user-installed Stremio addons for discovery and source resolution.
+This branch adds anime tracking to upstream [NuvioTV](https://github.com/tapframe/NuvioTV).
 
-This branch includes MyAnimeList, AniList and Kitsu tracker integration, phone-assisted tracker sign-in, and synchronization of tracker tokens and per-profile settings across devices. The [mobile edition](https://github.com/DavidVamaiotu/NuvioMobile-Reshaped) runs on Android phones and tablets; its player features and build instructions are documented in its own README.
+### MyAnimeList, AniList and Kitsu on your home screen
 
-This is a community fork, not an official Nuvio release. Report fork issues in [this repository](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/issues).
+Connect your tracker accounts under **Settings > Integrations**. Reshaped turns your lists into home-screen rows, so you can browse what you are watching, plan to watch, have completed, put on hold or dropped. Choose which status rows appear and their order separately for each tracker.
+
+### Watch progress sent to your trackers
+
+With **Send watch progress** enabled for a tracker, Reshaped updates it when an episode reaches the watched threshold (80%) or you mark an item watched from its details screen. It can send updates to multiple connected trackers.
+
+Progress only moves forward: replaying an earlier episode does not lower your existing episode count. Rewatch counts must be managed on the tracker itself. Updates without a usable anime mapping are skipped.
+
+### Episode mapping for anime seasons and parts
+
+A TV season can cover several entries on an anime tracker, or a tracker entry can span multiple TV seasons. Reshaped adds episode-offset mapping to translate between those layouts and send progress to the corresponding entry. This also avoids marking an entire tracker entry complete just because one TV season has ended.
+
+### Tracker sign-in from your phone
+
+The TV's tracker connection flow provides a QR code or link you can open on your phone. Complete authorization there, then return to the TV to finish connecting.
+
+### Tracker accounts and preferences across devices
+
+Reshaped adds synchronization of tracker credentials and per-profile preferences: visible list statuses, row order and the send-progress toggle. This allows compatible devices using the same sync account and profile to pick up those tracker connections and choices. It requires the corresponding tracker-sync backend; a standalone build without that backend cannot provide this feature.
+
+## Mobile edition
+
+The [mobile edition](https://github.com/DavidVamaiotu/NuvioMobile-Reshaped) has a separate set of Reshaped additions, documented in its README. Its subtitle AutoSync, seek buffer and player customizations are mobile features.
+
+This is a community fork. Report fork issues in [this repository](https://github.com/DavidVamaiotu/NuvioTV-Reshaped/issues).
 
 ## Installation
 
@@ -54,6 +78,6 @@ See the upstream [Legal & Disclaimer Page](https://tapframe.github.io/NuvioTV/#l
 
 ## Maintaining the fork README
 
-`README.md` belongs to NuvioTV Reshaped. Keep its fork branding, platform details, downloads and upstream credits when updating it. Do not replace it with upstream documentation during syncs, releases or branch merges.
+`README.md` belongs to NuvioTV Reshaped. Keep its fork branding, platform details, downloads and upstream credits when updating it. Describe only additions verified against the upstream version this branch builds on; keep upstream features out of the Reshaped feature list. Do not replace it with upstream documentation during syncs, releases or branch merges.
 
 After fetching an upstream target, run `bash .github/scripts/merge-nuvio-upstream.sh <target> "<message>"`. This preserves the fork README and workflows even when upstream README changes would merge cleanly. Resolve any remaining source conflicts manually. The README branding workflow checks future pushes and pull requests for accidental reversions.
