@@ -61,8 +61,8 @@ internal fun tunnelStallsExpired(
 }
 
 data class ReshapedFormatSettings(
-    /** Master switch. Off plays sound and picture exactly as NuvioTV does. */
-    val enabled: Boolean = true,
+    /** Master switch. Off by default; plays sound and picture exactly as NuvioTV does until enabled. */
+    val enabled: Boolean = false,
     /** Sends TrueHD and DTS-HD through Android's own passthrough instead of the IEC engine. */
     val useSystemPassthrough: Boolean = false,
     val surroundFormatMode: SurroundFormatMode = SurroundFormatMode.AUTO,
@@ -137,7 +137,7 @@ object ReshapedFormatSettingsStore {
     private fun read(p: SharedPreferences): ReshapedFormatSettings {
         val tunnelExpired = tunnelClassesExpired(p)
         return ReshapedFormatSettings(
-            enabled = p.getBoolean(KEY_ENABLED, true),
+            enabled = p.getBoolean(KEY_ENABLED, false),
             useSystemPassthrough = p.getBoolean(KEY_USE_SYSTEM_PASSTHROUGH, false),
             surroundFormatMode = SurroundFormatMode.fromStoredString(p.getString(KEY_SURROUND_MODE, null)),
             surroundChannelTarget = SurroundChannelTarget.fromStoredString(p.getString(KEY_CHANNEL_TARGET, null)),
