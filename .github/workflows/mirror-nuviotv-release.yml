@@ -1,6 +1,6 @@
 name: AutoSync TV Release
 
-# Release trigger: NuvioTV 1.1.0-beta.5 sync, lighter AutoSync
+# Manual releases build the selected branch as Beta, including subtitle-autosync-tester.
 
 
 on:
@@ -24,12 +24,14 @@ jobs:
   release:
     if: github.event_name != 'push' || github.event.head_commit.message != 'Trigger stable AutoSync TV release'
     runs-on: ubuntu-latest
+    env:
+      RELEASE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.ref_name || 'subtitle-autosync' }}
 
     steps:
-      - name: Checkout AutoSync branch
+      - name: Checkout release source
         uses: actions/checkout@v6
         with:
-          ref: subtitle-autosync
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || 'subtitle-autosync' }}
           fetch-depth: 0
 
       - name: Find latest official NuvioTV release
@@ -38,22 +40,39 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          RELEASE_JSON="$(gh api repos/NuvioMedia/NuvioTV/releases --jq '[.[] | select(.draft == false)][0]')"
-          UPSTREAM_TAG="$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name')"
-          PRERELEASE="$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')"
-
-          if [[ -z "$UPSTREAM_TAG" || "$UPSTREAM_TAG" == "null" ]]; then
-            echo "No official NuvioTV release found"
-            exit 1
-          fi
-
-          # Not `grep -q`: it exits on the first match, git log then dies of
-          # SIGPIPE and pipefail turns the match into a miss, so every
-          # scheduled run would think upstream needs syncing and re-release.
-          if git log --format='%s' | grep -Fx -- "Sync NuvioTV $UPSTREAM_TAG" >/dev/null; then
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF_TYPE" != "branch" ]]; then
+              echo "Dispatch beta releases from a branch, not a tag." >&2
+              exit 1
+            fi
+            # Release exactly the selected branch. Tester may be ahead of the beta branch;
+            # merging upstream here would change the source after it was selected for release.
+            SYNC_SUBJECT="$(git log -n 1 --format=%s --grep='^Sync NuvioTV ')"
+            UPSTREAM_TAG="${SYNC_SUBJECT#Sync NuvioTV }"
+            if [[ ! "$UPSTREAM_TAG" =~ ^v?[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "Could not read the selected branch's Nuvio version from '$SYNC_SUBJECT'." >&2
+              exit 1
+            fi
+            PRERELEASE=true
             NEEDS_SYNC=false
           else
-            NEEDS_SYNC=true
+            RELEASE_JSON="$(gh api repos/NuvioMedia/NuvioTV/releases --jq '[.[] | select(.draft == false)][0]')"
+            UPSTREAM_TAG="$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name')"
+            PRERELEASE="$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')"
+
+            if [[ -z "$UPSTREAM_TAG" || "$UPSTREAM_TAG" == "null" ]]; then
+              echo "No official NuvioTV release found"
+              exit 1
+            fi
+
+            # Not `grep -q`: it exits on the first match, git log then dies of
+            # SIGPIPE and pipefail turns the match into a miss, so every
+            # scheduled run would think upstream needs syncing and re-release.
+            if git log --format='%s' | grep -Fx -- "Sync NuvioTV $UPSTREAM_TAG" >/dev/null; then
+              NEEDS_SYNC=false
+            else
+              NEEDS_SYNC=true
+            fi
           fi
 
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
@@ -211,7 +230,7 @@ jobs:
                 printf -- '- %s\n' "$line"
               done <<< "$CHANGES"
             else
-              echo "- Rebuilt from the current subtitle-autosync branch."
+              echo "- Rebuilt from the current $RELEASE_BRANCH branch."
             fi
 
             echo
@@ -383,6 +402,19 @@ jobs:
           AUTOSYNC_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
+          if [[ "$RELEASE_BRANCH" == "subtitle-autosync-tester" ]]; then
+            # Preserve the tester branch's release gates when promoting its features to Beta.
+            python scripts/test_seek_preview_native.py
+            ./gradlew :app:testFullReleaseUnitTest \
+              --tests '*seekpreview*' \
+              --tests 'com.nuvio.tv.core.streams.ranking.*' \
+              --tests 'com.nuvio.tv.core.player.recovery.*' \
+              --tests 'com.nuvio.tv.core.player.StreamAutoPlaySelectorTest' \
+              --tests 'com.nuvio.tv.ui.screens.player.audiosync.AsrMatchingTest' \
+              --tests 'com.nuvio.tv.ui.screens.player.audiosync.AsrModelFilesTest' \
+              --tests 'com.nuvio.tv.ui.screens.player.audiosync.SharedResourceTest' \
+              --build-cache --stacktrace
+          fi
           ./gradlew :app:testFullReleaseUnitTest --tests 'com.nuvio.tv.updater.*' --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSubtitleSyncTest' --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSyncDiagnosticsTest' --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' --tests 'com.nuvio.tv.ui.screens.player.audiosync.SubtitleCandidatePoolTest' --tests 'com.nuvio.tv.ui.screens.player.audiosync.PcmTimestampTrackerTest' --tests 'com.nuvio.tv.ui.screens.player.autosync.bubble.AutoSyncBubbleToastsTest' --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$AUTOSYNC_TAG"
 
@@ -392,7 +424,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           AUTOSYNC_TAG: ${{ steps.version.outputs.tag }}
           PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
-        run: .github/scripts/reshaped-tv-apks.sh verify "$AUTOSYNC_TAG" "$PREVIOUS_TAG"
+        run: |
+          set -euo pipefail
+          .github/scripts/reshaped-tv-apks.sh verify "$AUTOSYNC_TAG" "$PREVIOUS_TAG"
+          if [[ "$RELEASE_BRANCH" == "subtitle-autosync-tester" ]]; then
+            PREVIOUS_TESTER="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '[.[] | select(.draft == false and (.tag_name | test("-tester[.][0-9]+$")))][0].tag_name // ""')"
+            if [[ -n "$PREVIOUS_TESTER" ]]; then
+              rm -rf previous-reshaped
+              .github/scripts/reshaped-tv-apks.sh verify "$AUTOSYNC_TAG" "$PREVIOUS_TESTER"
+            fi
+          fi
 
       - name: Commit canonical release anchor
         if: steps.upstream.outputs.should_release == 'true'
@@ -417,7 +459,7 @@ jobs:
             fi
           fi
 
-          git push origin HEAD:subtitle-autosync
+          git push origin "HEAD:refs/heads/$RELEASE_BRANCH"
 
       - name: Create canonical AutoSync release
         if: steps.upstream.outputs.should_release == 'true'
