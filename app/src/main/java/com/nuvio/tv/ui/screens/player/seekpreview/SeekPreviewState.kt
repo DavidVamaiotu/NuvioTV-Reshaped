@@ -1,5 +1,10 @@
 package com.nuvio.tv.ui.screens.player.seekpreview
 
+import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxFirstPreviewTrack
+import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxMovieRequest
+import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxSpriteTrack
+import com.nuvio.tv.ui.screens.player.seekpreview.torbox.torboxPreviewKeys
+import kotlinx.coroutines.flow.first
 import com.nuvio.tv.ui.screens.player.PlayerEvent
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
 import com.nuvio.tv.ui.screens.player.currentPlaybackDurationMs
@@ -123,6 +128,34 @@ class SeekPreviewState internal constructor(
         }
     }
 
+    /** Experimental TorBox sprites: only batches already present in the connected account. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val torboxTrack: StateFlow<TorboxSpriteTrack?> =
+        combine(
+            controller.playbackTimeline.map { if (it.isLive) 0L else it.duration }
+                .distinctUntilChanged { a, b -> (a > 0L) == (b > 0L) && abs(a - b) <= 1_000L },
+            controller.uiState.map { Triple(it.currentStreamUrl, it.currentStreamInfoHash, it.currentStreamFileIdx) }
+                .distinctUntilChanged(),
+            torboxPreviewKeys(controller.context)
+        ) { duration, stream, key ->
+            Triple(key, stream.first, TorboxMovieRequest(controller.contentId, controller.contentType,
+                duration, stream.second, stream.third))
+        }.distinctUntilChanged()
+            .transformLatest<Triple<String, String?, TorboxMovieRequest>, TorboxSpriteTrack?> { (key, _, request) ->
+                setOffset(0)
+                _previewCue.value = null
+                val owned = TorboxSpriteTrack.open(key, request)
+                try {
+                    emit(owned)
+                    if (owned != null) {
+                        owned.available.first { !it }
+                        owned.close()
+                        emit(null) // Resume existing providers if the TorBox track becomes unavailable.
+                    }
+                    awaitCancellation()
+                } finally { owned?.close() }
+            }.stateIn(scope, SharingStarted.Eagerly, null)
+
     /**
      * On-device thumbnails for the stream this player shows with ExoPlayer, while "Generate
      * previews on device" is on. Opened when the stream registers and its duration is known,
@@ -138,9 +171,10 @@ class SeekPreviewState internal constructor(
                 .distinctUntilChanged { old, new -> (old > 0L) == (new > 0L) && abs(old - new) <= 1_000L },
             LocalSeekPreviewSettings.enabled(controller.context),
             LocalPreviewSources.sourceFor(controller),
-            PreviewPreferences.options(controller.context)
-        ) { durationMs, enabled, source, options ->
-            PreviewLocalRequest(durationMs, enabled, source, options)
+            PreviewPreferences.options(controller.context),
+            torboxTrack
+        ) { durationMs, enabled, source, options, torbox ->
+            PreviewLocalRequest(durationMs, enabled && torbox == null, source, options)
         }
             .distinctUntilChanged()
             .transformLatest<PreviewLocalRequest, SeekPreviewTrack?> { (durationMs, enabled, source) ->
@@ -197,11 +231,12 @@ class SeekPreviewState internal constructor(
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     val previewTrack: StateFlow<SeekPreviewTrack?> =
-        combine(localTrack, track) { local, seekr -> local to seekr }
-        .transformLatest<Pair<SeekPreviewTrack?, BoundedSeekrTrack?>, SeekPreviewTrack?> { (local, seekr) ->
+        combine(localTrack, track, torboxTrack) { local, seekr, torbox -> Triple(local, seekr, torbox) }
+        .transformLatest<Triple<SeekPreviewTrack?, BoundedSeekrTrack?, TorboxSpriteTrack?>, SeekPreviewTrack?> { (local, seekr, torbox) ->
             val hybrid = if (local != null && seekr != null) HybridSeekPreviewTrack(local, SeekrPreviewTrack(seekr)) else null
+            val fallback = hybrid ?: local ?: seekr?.let(::SeekrPreviewTrack)
             try {
-                emit(hybrid ?: local ?: seekr?.let(::SeekrPreviewTrack))
+                emit(if (torbox != null) TorboxFirstPreviewTrack(torbox, fallback) else fallback)
                 awaitCancellation()
             } finally {
                 hybrid?.close()

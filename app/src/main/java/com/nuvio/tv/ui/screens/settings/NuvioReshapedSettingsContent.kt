@@ -49,6 +49,7 @@ internal fun NuvioReshapedSettingsContent(
         reshapedFormatsSettingsItems(playerSettings) // Nuvio RS: Arc sound and picture formats
         seekrKeySettingsItems()
         seekPreviewSettingsItems()
+        torboxPreviewSettingsItems()
         subtitleFontSettingsItems()
         connectionSpeedSettingsItems()
         pillNavSettingsItems()

@@ -1,5 +1,3 @@
-- Now built on Nuvio TV 1.1.0-beta.7 (everything in Beta 1.1.0-beta.7-autosync.2 is in this build).
-- Nuvio Arc's sound format handling: TrueHD and DTS-HD (including Atmos and DTS:X) are sent lossless to your receiver through Arc's own IEC path, surround is matched to what your TV, soundbar or receiver reports, and a format the receiver refuses is learned and decoded instead, then tried again when the output changes. Tunnelled playback that freezes is rebuilt without the tunnel.
-- Nuvio Arc's Dolby Vision handling: Profile 7 is converted to 8.1 on every Dolby Vision TV, Dolby Vision decoders that fail to start fall back step by step instead of erroring, and HDR10 metadata can be added when Dolby Vision is stripped. The Dolby Vision converter (libdovi) is now part of the app.
-- New section Settings > Nuvio Reshaped > Sound and picture formats. One switch turns Arc's sound handling off and plays sound exactly as Nuvio does.
-- The stats overlay shows the audio path (passthrough, IEC, decoded or transcoded) and what happens to Dolby Vision.
+- Added **Add preview library** under Settings > Nuvio Reshaped. Connect your own TorBox account first; the button adds the shared ten-movie sprite batch only if it is cached and skips batches already in your account.
+- Seeking matching movies now fetches compressed sprite sheets from your TorBox account and uses the existing TV preview strip. Exact source matches are preferred; compatible runtime matches are approximate.
+- More preview batches can be appended to the published batch list. Press the button again to add them without importing a Share link.

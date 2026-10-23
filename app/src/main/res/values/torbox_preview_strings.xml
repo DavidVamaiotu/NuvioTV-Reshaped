@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="torbox_preview_add">Add preview library</string>
+    <string name="torbox_preview_description">Add the shared movie previews to your TorBox account. Already added packs are kept.</string>
+    <string name="torbox_preview_connect">Connect TorBox in Debrid settings first.</string>
+    <string name="torbox_preview_adding">Adding previews…</string>
+    <string name="torbox_preview_ready">Preview library is in your TorBox account. Open a supported movie to try seeking.</string>
+    <string name="torbox_preview_unavailable">Some previews are not available yet. Try again later.</string>
+    <string name="torbox_preview_limited">TorBox asked us to wait. Try again after the cooldown.</string>
+    <string name="torbox_preview_failed">Could not add previews. Check your TorBox connection and try again.</string>
+</resources>
