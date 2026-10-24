@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.nuvio.tv.BuildConfig
+import com.nuvio.tv.updater.model.DownloadedUpdate
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -27,6 +28,13 @@ class UpdatePreferences @Inject constructor(
     private val lastCheckAtKey = longPreferencesKey("last_check_at_ms")
     private val updateBannerEnabledKey = booleanPreferencesKey("update_banner_enabled")
     private val updateChannelKey = stringPreferencesKey("update_channel")
+    private val autoInstallEnabledKey = booleanPreferencesKey("auto_install_enabled")
+    private val downloadedTagKey = stringPreferencesKey("downloaded_release_tag")
+    private val downloadedApkPathKey = stringPreferencesKey("downloaded_apk_path")
+    private val downloadedPublishedAtKey = stringPreferencesKey("downloaded_release_published_at")
+    private val downloadedPrereleaseKey = booleanPreferencesKey("downloaded_release_prerelease")
+    private val autoInstalledTagKey = stringPreferencesKey("auto_installed_release_tag")
+    private val autoInstallNoticeEnabledKey = booleanPreferencesKey("auto_install_notice_enabled")
 
     val ignoredTag: Flow<String?> = dataStore.data.map { prefs ->
         prefs[ignoredTagKey]
@@ -43,6 +51,28 @@ class UpdatePreferences @Inject constructor(
     val updateChannel: Flow<UpdateChannel> = dataStore.data.map { prefs ->
         UpdateChannel.fromStoredValue(prefs[updateChannelKey])
             ?: UpdateChannel.defaultForVersion(BuildConfig.VERSION_NAME)
+    }
+
+    val autoInstallEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[autoInstallEnabledKey] ?: false
+    }
+
+    /** Release tag and APK path of the update already downloaded, if any, so it survives the app being closed. */
+    val downloadedUpdate: Flow<DownloadedUpdate?> = dataStore.data.map { prefs ->
+        val tag = prefs[downloadedTagKey]
+        val path = prefs[downloadedApkPathKey]
+        if (tag != null && path != null) DownloadedUpdate(
+            tag, path, prefs[downloadedPublishedAtKey], prefs[downloadedPrereleaseKey] ?: false
+        ) else null
+    }
+
+    /** Release the idle job last installed without asking, so the next launch can say the app was updated. */
+    val autoInstalledTag: Flow<String?> = dataStore.data.map { prefs ->
+        prefs[autoInstalledTagKey]
+    }
+
+    val autoInstallNoticeEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[autoInstallNoticeEnabledKey] ?: true
     }
 
     suspend fun getOrInitializeUpdateChannel(): UpdateChannel {
@@ -72,6 +102,40 @@ class UpdatePreferences @Inject constructor(
     suspend fun setUpdateBannerEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[updateBannerEnabledKey] = enabled
+        }
+    }
+
+    suspend fun setAutoInstallEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[autoInstallEnabledKey] = enabled
+        }
+    }
+
+    suspend fun setDownloadedUpdate(tag: String?, apkPath: String?, publishedAt: String? = null, prerelease: Boolean = false) {
+        dataStore.edit { prefs ->
+            if (tag == null || apkPath == null) {
+                prefs.remove(downloadedTagKey)
+                prefs.remove(downloadedApkPathKey)
+                prefs.remove(downloadedPublishedAtKey)
+                prefs.remove(downloadedPrereleaseKey)
+            } else {
+                prefs[downloadedTagKey] = tag
+                prefs[downloadedApkPathKey] = apkPath
+                if (publishedAt != null) prefs[downloadedPublishedAtKey] = publishedAt else prefs.remove(downloadedPublishedAtKey)
+                prefs[downloadedPrereleaseKey] = prerelease
+            }
+        }
+    }
+
+    suspend fun setAutoInstallNoticeEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[autoInstallNoticeEnabledKey] = enabled
+        }
+    }
+
+    suspend fun setAutoInstalledTag(tag: String?) {
+        dataStore.edit { prefs ->
+            if (tag == null) prefs.remove(autoInstalledTagKey) else prefs[autoInstalledTagKey] = tag
         }
     }
 

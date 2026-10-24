@@ -311,21 +311,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/test_seek_preview_native.py
-          ./gradlew :app:testFullReleaseUnitTest \
-            --tests 'com.nuvio.tv.updater.*' \
-            --tests '*seekpreview*' \
-            --tests 'com.nuvio.tv.core.streams.ranking.*' \
-            --tests 'com.nuvio.tv.core.player.recovery.*' \
-            --tests 'com.nuvio.tv.core.player.StreamAutoPlaySelectorTest' \
-            --tests 'com.nuvio.tv.ui.screens.player.autosync.bubble.*' \
-            --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSyncDiagnosticsTest' \
-            --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' \
-            --tests 'com.nuvio.tv.ui.screens.player.audiosync.PcmTimestampTrackerTest' \
-            --tests 'com.nuvio.tv.ui.screens.player.audiosync.SubtitleCandidatePoolTest' \
-            --tests 'com.nuvio.tv.ui.screens.player.audiosync.SharedResourceTest' \
-            --tests 'com.nuvio.tv.ui.screens.player.audiosync.AsrMatchingTest' \
-            --tests 'com.nuvio.tv.ui.screens.player.audiosync.AsrModelFilesTest' \
-            --build-cache --stacktrace
+          ./gradlew :app:testFullReleaseUnitTest --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$TESTER_TAG"
 
       - name: Verify in-place update compatibility
