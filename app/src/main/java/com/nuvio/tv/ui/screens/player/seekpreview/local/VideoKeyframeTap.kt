@@ -23,6 +23,9 @@ internal interface KeyframeSink {
     /** Cheap check made for every chunk of video data; false leaves the track untouched. */
     fun wantsKeyframes(): Boolean
 
+    /** Reject unsupported resolutions before copying video bytes on playback's loader thread. */
+    fun acceptsFormat(format: Format): Boolean = true
+
     /** Only for keyframes the sink may want ([wantsKeyframe]); [data] is valid during the call only. */
     fun onKeyframe(format: Format, timeUs: Long, data: ByteArray, offset: Int, size: Int)
 
@@ -122,12 +125,14 @@ private class VideoTapExtractorOutput(
  * so each one is copied once. Between keyframes no slot could use (see
  * [KeyframeSink.mayWantKeyframesNear]) nothing is copied at all.
  */
-private class VideoTapTrackOutput(
+internal class VideoTapTrackOutput(
     private val delegate: TrackOutput,
     private val sink: KeyframeSink,
+    private val growBuffer: (ByteArray, Int) -> ByteArray = { bytes, size -> bytes.copyOf(size) },
 ) : TrackOutput {
     private var format: Format? = null
     private var capturing = false
+    private var captureFailed = false
     private var pending = ByteArray(0)
     private var start = 0
     private var end = 0
@@ -206,11 +211,18 @@ private class VideoTapTrackOutput(
     }
 
     private fun updateCapturing(): Boolean {
-        val wanted = format != null && keyframeInReach && runCatching { sink.wantsKeyframes() }.getOrDefault(false)
+        val eligible = !captureFailed && format?.let { current ->
+            runCatching { sink.wantsKeyframes() && sink.acceptsFormat(current) }.getOrDefault(false)
+        } == true
+        val wanted = eligible && keyframeInReach
         if (wanted != capturing) {
             capturing = wanted
             start = 0
             end = 0
+        }
+        if (!eligible && pending.isNotEmpty()) {
+            pending = ByteArray(0)
+            pendingReader.reset(pending)
         }
         return wanted
     }
@@ -240,11 +252,20 @@ private class VideoTapTrackOutput(
             end = 0
             return false
         }
-        pending = pending.copyOf(maxOf(required.toInt(), pending.size * 2, 65_536))
+        try {
+            pending = growBuffer(pending, maxOf(required.toInt(), pending.size * 2, 65_536).coerceAtMost(MAX_PENDING_BYTES))
+        } catch (_: OutOfMemoryError) {
+            captureFailed = true
+            capturing = false
+            start = 0; end = 0
+            pending = ByteArray(0)
+            pendingReader.reset(pending)
+            return false // Playback still receives the original input; previews stop copying this stream.
+        }
         return true
     }
 
     companion object {
-        private const val MAX_PENDING_BYTES = 24 * 1024 * 1024
+        private const val MAX_PENDING_BYTES = 8 * 1024 * 1024
     }
 }

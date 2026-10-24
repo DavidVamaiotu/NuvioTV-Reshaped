@@ -19,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -90,7 +92,6 @@ internal class Filmstrip(
  */
 internal suspend fun SeekPreviewTrack.fillFilmstrip(strip: Filmstrip, refreshAll: Boolean): Filmstrip {
     val frames = strip.frames.toMutableList()
-    val offset = strip.offsetMs
     for (direction in intArrayOf(1, -1)) {
         var from: SeekPreviewThumbnail? = strip.center ?: break
         for (distance in 1..FilmstripSideFrames) {
@@ -105,12 +106,7 @@ internal suspend fun SeekPreviewTrack.fillFilmstrip(strip: Filmstrip, refreshAll
             val frame = if (known != null && !refreshAll) {
                 known
             } else {
-                val probe = if (direction > 0) edge.cueEndMs - offset else edge.cueStartMs - offset - 1
-                val found = sideThumbnailFor(probe)?.takeIf { candidate ->
-                    // No progress means the title ends (or starts) here.
-                    if (direction > 0) candidate.cueStartMs > edge.cueStartMs else candidate.cueStartMs < edge.cueStartMs
-                }
-                FilmstripFrame(found)
+                FilmstripFrame(neighborThumbnailFor(edge, forward = direction > 0))
             }
             frames[index] = frame
             from = frame.thumbnail
@@ -159,8 +155,13 @@ internal fun SeekPreviewFilmstripRow(
                     ) {
                         frame?.thumbnail?.let { thumbnail ->
                             val image = remember(thumbnail.bitmap) { thumbnail.bitmap.asImageBitmap() }
+                            val painter = remember(image, thumbnail.crop) {
+                                val crop = thumbnail.crop
+                                if (crop == null) BitmapPainter(image) else BitmapPainter(image,
+                                    srcOffset = IntOffset(crop.left, crop.top), srcSize = IntSize(crop.width(), crop.height()))
+                            }
                             Image(
-                                bitmap = image,
+                                painter = painter,
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()

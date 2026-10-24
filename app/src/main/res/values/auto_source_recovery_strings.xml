@@ -1,0 +1,9 @@
+<resources>
+    <string name="settings_auto_source_recovery">Automatically try another source</string>
+    <string name="settings_auto_source_recovery_description">If playback fails to start, try the next source using your First Source or Regex autoplay preference.</string>
+    <string name="settings_auto_source_recovery_unavailable">Choose First Source or Regex autoplay with an internal player in Playback settings to use this option.</string>
+    <string name="player_auto_source_recovery_exhausted">Automatic sources could not start. Choose another source.</string>
+    <string name="player_auto_source_recovery_switching">Trying another source: %1$s</string>
+    <string name="player_auto_source_recovery_timeout">The previous source took too long to start.</string>
+    <string name="player_auto_source_recovery_resolve_failed">The previous source could not be opened.</string>
+</resources>

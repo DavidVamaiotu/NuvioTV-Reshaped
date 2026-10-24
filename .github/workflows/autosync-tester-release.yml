@@ -1,8 +1,9 @@
 name: AutoSync TV Tester Release
 
 # Builds the Tester channel (TesterChannel.kt) from subtitle-autosync-tester. Runs only when started
-# by hand (Actions > AutoSync TV Tester Release > Run workflow): no file edit or push starts it, so
-# it can never be set off by accident and it never touches the beta or stable releases.
+# by hand (Actions > AutoSync TV Tester Release > Run workflow), or by the exact release-trigger
+# commit below when this workflow file changes. Ordinary code pushes never publish a release.
+# It never touches the beta or stable releases.
 #
 # Tags are <nuvio version>-tester.N, always pre-releases and never "latest". Stable and Beta apps
 # only follow tags ending in -autosync.N, so they never see these. Builds use the same app id,
@@ -11,6 +12,9 @@ name: AutoSync TV Tester Release
 
 on:
   workflow_dispatch:
+  push:
+    branches: [subtitle-autosync-tester]
+    paths: [".github/workflows/autosync-tester-release.yml"]
 
 permissions:
   contents: write
@@ -24,6 +28,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Release tester with preoptimized ORT speech model'
     runs-on: ubuntu-latest
 
     steps:
@@ -305,7 +310,22 @@ jobs:
           TESTER_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          ./gradlew :app:testFullReleaseUnitTest --tests 'com.nuvio.tv.updater.*' --build-cache --stacktrace
+          python scripts/test_seek_preview_native.py
+          ./gradlew :app:testFullReleaseUnitTest \
+            --tests 'com.nuvio.tv.updater.*' \
+            --tests '*seekpreview*' \
+            --tests 'com.nuvio.tv.core.streams.ranking.*' \
+            --tests 'com.nuvio.tv.core.player.recovery.*' \
+            --tests 'com.nuvio.tv.core.player.StreamAutoPlaySelectorTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.autosync.bubble.*' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.AudioSyncDiagnosticsTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.SpotSamplingTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.PcmTimestampTrackerTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.SubtitleCandidatePoolTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.SharedResourceTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.AsrMatchingTest' \
+            --tests 'com.nuvio.tv.ui.screens.player.audiosync.AsrModelFilesTest' \
+            --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$TESTER_TAG"
 
       - name: Verify in-place update compatibility
@@ -331,6 +351,7 @@ jobs:
           # The APKs were built with the stamped version. Restore the source file so release
           # metadata stays ephemeral, then tag a unique empty commit.
           git restore --staged --worktree app/build.gradle.kts
+          # GITHUB_TOKEN cannot modify workflow files. Keep the release anchor empty.
           git commit --allow-empty -m "Release $TESTER_TAG"
           git push origin HEAD:subtitle-autosync-tester
 

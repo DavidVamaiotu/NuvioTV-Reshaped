@@ -129,6 +129,9 @@ fun BoxScope.SeekPreviewSyncLayer(
     uiState: PlayerUiState,
     onDismissed: () -> Unit,
 ) {
+    LaunchedEffect(uiState.error != null) {
+        if (uiState.error != null) viewModel.seekPreview.stopGenerationForError()
+    }
     val seekPreview = viewModel.seekPreview
     val isOpen by seekPreview.showSyncOverlay.collectAsStateWithLifecycle()
     val visible = isOpen && uiState.error == null && !uiState.showLoadingOverlay

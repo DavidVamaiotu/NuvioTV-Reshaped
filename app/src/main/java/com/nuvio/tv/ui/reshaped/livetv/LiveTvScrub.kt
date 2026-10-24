@@ -66,6 +66,22 @@ internal object LiveTvScrubSteps {
     fun stepMs(repeatCount: Int): Long = PlayerScrubRates.stepMsForKeyRepeat(repeatCount)
 
     /**
+     * Where a held ◀ from [fromMs] to [toMs] stops: at the start of a show it would pass (the
+     * latest, so the show it is in), else [toMs]; one stopped at a start stays there. Starts are
+     * in time order, so the search stops early.
+     */
+    fun heldBackTo(schedule: List<LiveTvProgramme>, fromMs: Long, toMs: Long): Long {
+        var stop = toMs
+        for (programme in schedule) {
+            val start = programme.startEpochMs
+            if (start == fromMs) return fromMs
+            if (start > fromMs) break
+            if (start > stop) stop = start
+        }
+        return stop
+    }
+
+    /**
      * Where the bar starts for a time [atMs]: the start of the programme on then in [schedule],
      * else [NO_GUIDE_SPAN_MS] before; never before [earliestMs] (what the provider keeps).
      */

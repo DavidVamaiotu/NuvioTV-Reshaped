@@ -15,12 +15,14 @@ uniform float outset;
 uniform half3 tint;
 uniform float4 lens;
 uniform float focus;
+// How much of the dark glass body is mixed in: 0.46 normally, 0 for clear glass (Netflix look).
+uniform float veil;
 
 // TVs draw the pill over the sharp screen (no blur pass), so each sample is a small 4-tap soften:
 // enough to keep the labels readable, far cheaper than a blur.
-half4 soft(float2 p) {
-    float2 a = float2(1.5, 0.75) * density;
-    float2 b = float2(-0.75, 1.5) * density;
+half4 soft(float2 p, float amount) {
+    float2 a = float2(1.5, 0.75) * density * amount;
+    float2 b = float2(-0.75, 1.5) * density * amount;
     return (backdrop.eval(p + a) + backdrop.eval(p - a) + backdrop.eval(p + b) + backdrop.eval(p - b)) * 0.25;
 }
 
@@ -71,14 +73,19 @@ half4 main(float2 position) {
         }
     }
 
+    // Clear glass (veil 0) shows the screen through it, so it stays sharp in the middle and only softens
+    // where the rim bends it; dispersion and vibrancy are toned down to match.
+    bool clearGlass = veil < 0.01;
+    float softness = clearGlass ? edge : 1.0;
+    if (clearGlass) spread *= 0.4;
     half3 color = half3(
-        soft(samplePos + spread).r,
-        soft(samplePos).g,
-        soft(samplePos - spread).b
+        soft(samplePos + spread, softness).r,
+        soft(samplePos, softness).g,
+        soft(samplePos - spread, softness).b
     );
     half luminance = dot(color, half3(0.2126, 0.7152, 0.0722));
-    color = clamp(mix(half3(luminance), color, 1.45), 0.0, 1.0);
-    color = mix(color, mix(half3(28.0, 28.0, 30.0) / 255.0, tint, 0.08), 0.46);
+    color = clamp(mix(half3(luminance), color, clearGlass ? 1.12 : 1.45), 0.0, 1.0);
+    color = mix(color, mix(half3(28.0, 28.0, 30.0) / 255.0, tint, 0.08), veil);
 
     // Thickness: the glass darkens slightly towards its lower rim, and the selected lens is a touch brighter.
     color *= 1.0 - 0.14 * pow(edge, 3.0) * max(normal.y, 0.0);

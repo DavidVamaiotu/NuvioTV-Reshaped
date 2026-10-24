@@ -424,6 +424,11 @@ private fun dataAttributionItems() = listOf(
 @Composable
 private fun playbackLicenseItems() = listOf(
     LicenseAttributionItem(
+        title = stringResource(R.string.ranked_regex_license_title),
+        body = stringResource(R.string.ranked_regex_license_body),
+        url = "https://github.com/florianingerl/com.florianingerl.util.regex"
+    ),
+    LicenseAttributionItem(
         title = stringResource(R.string.licenses_attributions_exoplayer_title),
         body = stringResource(R.string.licenses_attributions_exoplayer_body),
         url = ApacheLicenseUrl

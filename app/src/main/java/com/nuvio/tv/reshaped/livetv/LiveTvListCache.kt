@@ -16,7 +16,7 @@ import java.util.zip.GZIPOutputStream
  * Portals (Stalker) are not saved: their lists carry a session that is renewed on each load.
  */
 internal object LiveTvListCache {
-    private const val VERSION = 1
+    private const val VERSION = 2
     private const val DIR = "live_tv_lists"
 
     /** What a provider gave, before the list tags the channels with their source. */
@@ -54,7 +54,9 @@ internal object LiveTvListCache {
     fun read(file: File, source: LiveTvSource): Entry? = runCatching {
         if (!file.isFile) return null
         DataInputStream(GZIPInputStream(file.inputStream().buffered(64 * 1024), 64 * 1024).buffered(64 * 1024)).use { input ->
-            if (input.readInt() != VERSION || input.readUTF() != key(source)) return null
+            // A list saved before guide shifts were kept (version 1) is read too, without them.
+            val version = input.readInt()
+            if (version !in 1..VERSION || input.readUTF() != key(source)) return null
             val savedAtMs = input.readLong()
             val epgUrls = List(input.readInt()) { input.readUTF() }
             val groupOrder = List(input.readInt()) { input.readUTF() }
@@ -80,6 +82,7 @@ internal object LiveTvListCache {
                     headers = headerSets[input.readInt()],
                     tvgName = input.readOptional(),
                     catchup = input.readInt().let { if (it < 0) null else catchups[it] },
+                    guideShiftMinutes = if (version >= 2) input.readInt() else 0,
                 )
             }
             Entry(channels, epgUrls, groupOrder, savedAtMs)
@@ -136,6 +139,7 @@ internal object LiveTvListCache {
                     out.writeInt(headerIndex.getValue(channel.headers))
                     out.writeOptional(channel.tvgName)
                     out.writeInt(channel.catchup?.let(catchupIndex::getValue) ?: -1)
+                    out.writeInt(channel.guideShiftMinutes)
                 }
             }
             if (!temp.renameTo(file)) {

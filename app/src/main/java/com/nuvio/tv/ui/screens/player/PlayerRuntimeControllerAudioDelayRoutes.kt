@@ -90,15 +90,18 @@ internal fun PlayerRuntimeController.registerAudioDelayRouteCallback() {
     val audioManager = context.getSystemService(android.content.Context.AUDIO_SERVICE) as? AudioManager ?: return
     val callback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            if (isFormatsRegistrationEcho(addedDevices)) return // Nuvio RS hook: Arc formats
             onAudioOutputRouteMaybeChanged("added", addedDevices)
         }
 
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            noteFormatsOutputsRemoved(removedDevices) // Nuvio RS hook: Arc formats
             onAudioOutputRouteMaybeChanged("removed", removedDevices)
         }
     }
 
     runCatching {
+        noteFormatsKnownOutputs(audioManager) // Nuvio RS hook: Arc formats
         audioManager.registerAudioDeviceCallback(callback, null)
         audioOutputRouteCallback = callback
         Log.d(PlayerRuntimeController.TAG, "Registered audio output route callback")
@@ -125,6 +128,7 @@ private fun PlayerRuntimeController.onAudioOutputRouteMaybeChanged(
 ) {
     if (isReleasingPlayer) return
     if (_exoPlayer == null && !isUsingMpvEngine()) return
+    if (ignoresFormatsNonOutputEvent(reason, devices)) return // Nuvio RS hook: Arc formats
 
     Log.d(
         PlayerRuntimeController.TAG,
@@ -141,6 +145,7 @@ private fun PlayerRuntimeController.onAudioOutputRouteMaybeChanged(
         if (newRoute != null) {
             currentAudioOutputRoute = newRoute
         }
+        onFormatsOutputRouteChanged(reason) // Nuvio RS hook: Arc formats
 
         if (rememberAudioDelayPerDeviceEnabled) {
             applyStoredAudioDelayForCurrentRouteIfEnabled()
@@ -162,6 +167,7 @@ private fun PlayerRuntimeController.onAudioOutputRouteMaybeChanged(
                     PlayerRuntimeController.TAG,
                     "Audio route after device $reason: bluetooth=$isBluetooth (was=$wasBluetooth); player stays running"
                 )
+                if (reason == "added" && !isBluetooth) schedulePassthroughReturnCheck("device added") // Nuvio RS hook
             }
             BluetoothRoutePlaybackAction.UPDATE_SINK_IN_PLACE -> {
                 if (_exoPlayer == null) return@launch

@@ -17,7 +17,7 @@ internal object LiveTvGuideCache {
     // 5: playlist-scoped channel identities and complete guide imports. 6: no overlapping programmes.
     // 7: id matches rank over name matches. 8: a name match fills in for an id without programmes.
     // 9: a name match with the channel's own country tag wins.
-    private const val VERSION = 9
+    private const val VERSION = 10
     private const val MAX_TITLE = 1_000
 
     class Entry(val schedule: LiveTvSchedule, val logos: Map<String, String>, val nextReadAtMs: Long)
@@ -31,7 +31,7 @@ internal object LiveTvGuideCache {
         key = key * 31 + channels
         key = key * 31 + window.pastMs
         key = key * 31 + window.aheadMs
-        key = key * 31 + window.maxPast * 1_000 + window.maxAhead
+        key = key * 31 + window.maxPast * 1_000 + window.maxAhead + window.maxShortAhead * 100_000L
         key = key * 31 + window.catchupPastMs + window.maxCatchupPast
         key = key * 31 + window.detailsMs + window.maxDescription * 1_000L + window.detailsPerChannel
         key = key * 31 + window.detailsBudgetChars + window.maxCatchupProgrammes
@@ -54,11 +54,12 @@ internal object LiveTvGuideCache {
             }
             val logos = HashMap<String, String>()
             repeat(input.readInt()) { logos[input.readUTF()] = input.readUTF() }
+            // Titles and descriptions are saved once each and named by index: repeats share one
+            // copy, as after a full read, and a week of catch-up reads no more text than a day.
+            val texts = Array(input.readInt()) { input.readUTF() }
+            fun DataInputStream.readShared(): String = texts[readInt()]
             val channels = input.readInt()
             val schedule = HashMap<String, List<LiveTvProgramme>>(channels * 2)
-            // Repeated titles share one copy, as after a full read.
-            val shared = HashMap<String, String>()
-            fun DataInputStream.readShared(): String = readUTF().let { shared.getOrPut(it) { it } }
             repeat(channels) {
                 val guideKey = input.readUTF()
                 val count = input.readInt()
@@ -91,15 +92,25 @@ internal object LiveTvGuideCache {
                     out.writeUTF(guideKey)
                     out.writeUTF(logo)
                 }
+                val texts = LinkedHashMap<String, Int>()
+                entry.schedule.values.forEach { programmes ->
+                    programmes.forEach { programme ->
+                        texts.getOrPut(programme.title.take(MAX_TITLE)) { texts.size }
+                        programme.description?.let { texts.getOrPut(it.take(MAX_TITLE)) { texts.size } }
+                    }
+                }
+                out.writeInt(texts.size)
+                texts.keys.forEach(out::writeUTF)
                 out.writeInt(entry.schedule.size)
                 entry.schedule.forEach { (guideKey, programmes) ->
                     out.writeUTF(guideKey)
                     out.writeInt(programmes.size)
                     programmes.forEach { programme ->
-                        out.writeUTF(programme.title.take(MAX_TITLE))
+                        out.writeInt(texts.getValue(programme.title.take(MAX_TITLE)))
                         out.writeLong(programme.startEpochMs)
                         out.writeLong(programme.stopEpochMs)
-                        out.writeOptional(programme.description?.take(MAX_TITLE))
+                        out.writeBoolean(programme.description != null)
+                        programme.description?.let { out.writeInt(texts.getValue(it.take(MAX_TITLE))) }
                         // A cut link would be a broken one.
                         out.writeOptional(programme.image?.takeIf { it.length <= MAX_TITLE })
                     }

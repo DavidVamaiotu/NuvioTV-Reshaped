@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewPreferences
 import com.nuvio.tv.R
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalSeekPreviewSettings
 
@@ -29,4 +30,19 @@ internal fun LazyListScope.seekPreviewSettingsItems(
             onFocused = onItemFocused,
         )
     }
+    item(key = "seek_preview_copies") {
+        val context = LocalContext.current
+        val options by PreviewPreferences.options(context).collectAsStateWithLifecycle()
+        ToggleSettingsItem(icon = Icons.Default.Image, title = stringResource(R.string.settings_seek_preview_copies),
+            subtitle = stringResource(R.string.settings_seek_preview_copies_description), isChecked = options.copies,
+            onCheckedChange = { PreviewPreferences.set(context, options.copy(copies = it)) }, onFocused = onItemFocused)
+    }
+    item(key = "seek_preview_next_episode") {
+        val context = LocalContext.current
+        val options by PreviewPreferences.options(context).collectAsStateWithLifecycle()
+        ToggleSettingsItem(icon = Icons.Default.Image, title = stringResource(R.string.settings_seek_preview_next),
+            subtitle = stringResource(R.string.settings_seek_preview_next_description), isChecked = options.nextEpisode,
+            onCheckedChange = { PreviewPreferences.set(context, options.copy(nextEpisode = it)) }, onFocused = onItemFocused)
+    }
+
 }

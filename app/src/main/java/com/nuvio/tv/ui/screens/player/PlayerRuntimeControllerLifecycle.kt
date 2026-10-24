@@ -12,8 +12,14 @@ internal fun PlayerRuntimeController.releasePlayer() {
 // engine's local url, which stops serving once the torrent stream is stopped.
 internal fun PlayerRuntimeController.releasePlayer(
     flushPlaybackState: Boolean,
-    keepTorrentStream: Boolean = false
+    keepTorrentStream: Boolean = false,
+    preserveRecovery: Boolean = false // Nuvio RS hook: Arc formats recovery survives its own rebuild
 ) {
+    if (!preserveRecovery) {
+        playbackRecoveryJob?.cancel()
+        playbackRecoveryJob = null
+        playbackRecoveryGate.cancel(resetIdentity = flushPlaybackState)
+    }
     logScrobbleDiagnostic("release_player", "flushPlaybackState=$flushPlaybackState")
     isReleasingPlayer = true
     com.nuvio.tv.core.connection.PlaybackThroughput.finish()
@@ -89,6 +95,7 @@ internal fun PlayerRuntimeController.releasePlayer(
     currentBitrateAwareLoadControl = null
     currentParallelChunkOverheadMb = 0
     ffmpegAudioRenderer = null
+    isAudioOutputBypassing = false // Nuvio RS hook: no player, no bypass
     updateAudioControlAvailability()
     playbackSpeedAwareAudioSink = null
     resetPlaybackTimeline()

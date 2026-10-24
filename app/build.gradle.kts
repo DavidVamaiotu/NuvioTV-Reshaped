@@ -12,6 +12,7 @@ plugins {
 import com.android.build.gradle.internal.tasks.L8DexDesugarLibTask
 import java.io.File
 import java.util.Properties
+import java.security.MessageDigest
 
 fun parseBooleanProperty(value: String?): Boolean {
     val normalized = value?.trim()?.lowercase() ?: return false
@@ -50,13 +51,13 @@ val devProperties = Properties().apply {
 }
 
 val enableDoviNative = parseBooleanProperty(
-    resolveProperty(devProperties, localProperties, "DOVI_NATIVE_ENABLED")
+    resolveProperty(devProperties, localProperties, "DOVI_NATIVE_ENABLED", "true") // Nuvio RS: Arc builds the DV bridge with libdovi by default
 )
 val doviExtractorHookReady = parseBooleanProperty(
-    resolveProperty(devProperties, localProperties, "DOVI_EXTRACTOR_HOOK_READY")
+    resolveProperty(devProperties, localProperties, "DOVI_EXTRACTOR_HOOK_READY", "true") // Nuvio RS: Arc builds the DV bridge with libdovi by default
 )
 val doviEnableRealLink = parseBooleanProperty(
-    resolveProperty(devProperties, localProperties, "DOVI_ENABLE_REAL_LINK")
+    resolveProperty(devProperties, localProperties, "DOVI_ENABLE_REAL_LINK", "true") // Nuvio RS: Arc builds the DV bridge with libdovi by default
 )
 val doviStaticLibPath = resolveProperty(devProperties, localProperties, "DOVI_LIBDOVI_STATIC_LIB")
 val doviIncludeDirPath = resolveProperty(devProperties, localProperties, "DOVI_LIBDOVI_INCLUDE_DIR")
@@ -126,6 +127,9 @@ android {
         buildConfigField("String", "DEVICE_LOGIN_WEB_BASE_URL", "\"${localProperties.getProperty("DEVICE_LOGIN_WEB_BASE_URL", "https://nuvio.tv/link")}\"")
         buildConfigField("boolean", "DOVI_NATIVE_ENABLED", enableDoviNative.toString())
         buildConfigField("boolean", "DOVI_EXTRACTOR_HOOK_READY", doviExtractorHookReady.toString())
+        externalNativeBuild {
+            cmake { arguments("-DDOVI_BUILD_BRIDGE=${if (enableDoviNative) "ON" else "OFF"}") }
+        }
         if (enableDoviNative) {
             externalNativeBuild {
                 cmake {
@@ -175,12 +179,9 @@ android {
         }
     }
 
-    if (enableDoviNative) {
-        externalNativeBuild {
-            cmake {
-                path = file("src/main/cpp/CMakeLists.txt")
-            }
-        }
+    // Preview decoder builds independently of the Dolby Vision playback bridge.
+    externalNativeBuild {
+        cmake { path = file("src/main/cpp/CMakeLists.txt") }
     }
 
     signingConfigs {
@@ -398,6 +399,8 @@ sentry {
 }
 
 dependencies {
+    // Isolated ranked-regex matcher: preserves lookarounds while enforcing a read budget on Android.
+    implementation("com.github.florianingerl.util:regex:1.1.11")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     val composeBom = platform("androidx.compose:compose-bom:2026.05.01")
 
@@ -566,3 +569,17 @@ dependencies {
 }
 
 apply(from = "reshaped.gradle") // Nuvio RS hook: fork build settings
+
+// FFmpeg 6.0 fallback ABI pin. Updating this AAR requires reviewing the preview backend headers too.
+val verifyPreviewFfmpegAbi by tasks.registering {
+    val aar = layout.projectDirectory.file("libs/nextlib-mediainfo-local.aar")
+    inputs.file(aar)
+    doLast {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(aar.asFile.readBytes()).joinToString("") { "%02x".format(it) }
+        check(digest == "509e645e0f4232bdd3c6e1b2e4b82c3686140a0355f13656890f3641d8b7fb53") {
+            "Preview FFmpeg ABI changed: review seekpreview native backend and headers before updating the pin."
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn(verifyPreviewFfmpegAbi) }

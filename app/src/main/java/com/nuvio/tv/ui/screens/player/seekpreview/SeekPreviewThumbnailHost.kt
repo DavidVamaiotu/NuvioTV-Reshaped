@@ -2,7 +2,6 @@ package com.nuvio.tv.ui.screens.player.seekpreview
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -36,7 +35,6 @@ private val MinFrameWidth = 240.dp
 private val MaxFrameWidth = 400.dp
 private val FrameGapAboveBar = 10.dp
 private const val LingerAfterScrubMs = 1500L
-private const val SlideMs = 220
 
 /**
  * The scrub-time preview, Netflix style, above the progress bar: the frame of the cue the scrub
@@ -112,7 +110,7 @@ fun SeekPreviewThumbnailHost(
             val covering = cachedCovering
             if (offset == cachedOffsetMs &&
                 (rev == cachedRevision || !visible) &&
-                covering != null &&
+                covering != null && covering.canAlignSeek &&
                 covering.contains(positionMs) &&
                 covering.prefersSuccessorFor(positionMs) == cachedPrefersSuccessor
             ) {
@@ -129,20 +127,33 @@ fun SeekPreviewThumbnailHost(
             // Single writer for the track's offset: the manual sync correction is pushed in
             // right before the lookup so a nudge is reflected on the very next frame.
             activeTrack.offsetMs = offset
-            // Only overwrite on success — keeps the last good frame visible during a fetch.
-            val coveringThumbnail = activeTrack.thumbnailFor(positionMs) ?: return@collect
+            val coveringThumbnail = activeTrack.thumbnailFor(positionMs)
+            // A slow provider may finish after the remote moved elsewhere. Never snap back to that old request.
+            if (requestFlow.value.positionMs != positionMs || requestFlow.value.offsetMs != offset) return@collect
+            if (coveringThumbnail == null) {
+                // A previous scene is not a preview of a distant uncached target.
+                val center = strip?.center
+                if (center == null || !SeekPreviewCue(center.cueStartMs - offset, center.cueEndMs - offset).represents(positionMs)) {
+                    fillJob?.cancel()
+                    strip = null
+                    cachedCovering = null
+                    seekPreview.onPreviewCueResolved(null)
+                }
+                return@collect
+            }
             // Cue times arrive on the preview timeline; undo the sync offset so they can be
             // compared with, and assigned to, playback positions.
             val coveringCue = SeekPreviewCue(
                 startMs = coveringThumbnail.cueStartMs - offset,
-                endMs = coveringThumbnail.cueEndMs - offset
+                endMs = coveringThumbnail.cueEndMs - offset,
+                canAlignSeek = !coveringThumbnail.approximate && coveringThumbnail.actualFrameMs == null,
             )
 
             // A cue's frame is captured at its start, so past the halfway mark the next cue's
             // frame is the closer one.
-            val prefersSuccessor = coveringCue.prefersSuccessorFor(positionMs)
+            val prefersSuccessor = coveringCue.canAlignSeek && coveringCue.prefersSuccessorFor(positionMs)
             val successor = if (prefersSuccessor) {
-                activeTrack.thumbnailFor(coveringCue.endMs)
+                activeTrack.sideThumbnailFor(coveringCue.endMs)
                     ?.takeIf { it.cueStartMs != coveringThumbnail.cueStartMs }
             } else {
                 null
@@ -159,20 +170,12 @@ fun SeekPreviewThumbnailHost(
             val seeded = Filmstrip.around(center, previous, steps, rev, offset)
             strip = seeded
             seekPreview.onPreviewCueResolved(
-                SeekPreviewCue(center.cueStartMs - offset, center.cueEndMs - offset)
+                SeekPreviewCue(center.cueStartMs - offset, center.cueEndMs - offset,
+                    canAlignSeek = !center.approximate && center.actualFrameMs == null)
             )
-            if (!visible) {
-                scope.launch { slide.snapTo(0f) }
-            } else if (steps != null && steps != 0) {
-                scope.launch {
-                    val start = (slide.value + steps)
-                        .coerceIn(-FilmstripSideFrames.toFloat(), FilmstripSideFrames.toFloat())
-                    slide.snapTo(start)
-                    slide.animateTo(0f, tween(SlideMs, easing = FastOutSlowInEasing))
-                }
-            } else if (steps == null) {
-                scope.launch { slide.snapTo(0f) }
-            }
+            // Each step shows the next frame at once. Sliding it there lagged behind a held scrub,
+            // every repeat restarting the slide, so the strip sat off centre until release.
+            if (slide.value != 0f) scope.launch { slide.snapTo(0f) }
             // Neighbours only matter while the strip is on screen; hidden, only the centre's
             // cue is kept current for grid-locked seeking.
             fillJob?.cancel()

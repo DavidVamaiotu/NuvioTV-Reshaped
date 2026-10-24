@@ -66,6 +66,7 @@ internal fun PlayerRuntimeController.switchToInternalPlayerEngine(
     targetEngine: InternalPlayerEngine,
     reason: String = "manual-switch"
 ) {
+    autoSourceRecovery?.cancel()
     if (currentStreamUrl.isBlank()) return
 
     beginSwitchTraceSession(reason = reason, targetEngine = targetEngine)

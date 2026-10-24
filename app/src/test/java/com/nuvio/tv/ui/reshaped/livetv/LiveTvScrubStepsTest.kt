@@ -24,4 +24,17 @@ class LiveTvScrubStepsTest {
         assertEquals(10_000L, LiveTvScrubSteps.stepMs(0))
         assertEquals(minute, LiveTvScrubSteps.stepMs(100))
     }
+
+    @Test fun aHeldRewindStopsAtTheStartOfAShow() {
+        val before = LiveTvProgramme(title = "Film", startEpochMs = 40 * minute, stopEpochMs = 100 * minute)
+        val schedule = listOf(before, show)
+        // Inside a show it moves as far as the step goes.
+        assertEquals(129 * minute, LiveTvScrubSteps.heldBackTo(schedule, 130 * minute, 129 * minute))
+        // A step past the show's start stops on it, and stays there while the key is held.
+        assertEquals(100 * minute, LiveTvScrubSteps.heldBackTo(schedule, 101 * minute, 99 * minute))
+        assertEquals(100 * minute, LiveTvScrubSteps.heldBackTo(schedule, 100 * minute, 99 * minute))
+        // Once a press has gone past it, holding goes on through the show before.
+        assertEquals(98 * minute, LiveTvScrubSteps.heldBackTo(schedule, 99 * minute, 98 * minute))
+        assertEquals(40 * minute, LiveTvScrubSteps.heldBackTo(schedule, 41 * minute, 10 * minute))
+    }
 }

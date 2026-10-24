@@ -97,6 +97,15 @@ internal fun PlaybackStreamSelectionSection(
             subtitle = settings.streamAutoPlayRegex.ifBlank { stringResource(R.string.autoplay_regex_placeholder) },
             onClick = { onOpenDialog(PlaybackDialog.STREAM_REGEX) }
         )
+        SettingsActionRow(
+            title = stringResource(R.string.ranked_regex_title),
+            subtitle = if (settings.streamAutoPlayRankedRegex.isEmpty()) {
+                stringResource(R.string.ranked_regex_disabled)
+            } else {
+                stringResource(R.string.ranked_regex_count, settings.streamAutoPlayRankedRegex.size)
+            },
+            onClick = { onOpenDialog(PlaybackDialog.STREAM_RANKED_REGEX) }
+        )
     }
 
     if (settings.streamAutoPlayMode != StreamAutoPlayMode.MANUAL) {
@@ -331,6 +340,14 @@ internal fun AutoPlaySettingsDialogs(
             selectedSource = settings.streamAutoPlaySource,
             onSourceSelected = { source ->
                 onUpdate { setStreamAutoPlaySource(source) }
+                onDismiss()
+            },
+            onDismiss = onDismiss
+        )
+        PlaybackDialog.STREAM_RANKED_REGEX -> RankedRegexDialog(
+            initialPatterns = settings.streamAutoPlayRankedRegex,
+            onSave = { patterns ->
+                onUpdate { setStreamAutoPlayRankedRegex(patterns) }
                 onDismiss()
             },
             onDismiss = onDismiss
@@ -669,40 +686,7 @@ private fun StreamRegexDialog(
     var isInputFocused by remember { mutableStateOf(false) }
     val inputFocusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
-    val presetAny1080p = stringResource(R.string.autoplay_regex_preset_any_1080p_plus)
-    val preset4kRemux = stringResource(R.string.autoplay_regex_preset_4k_remux)
-    val preset1080pStandard = stringResource(R.string.autoplay_regex_preset_1080p_standard)
-    val preset720pSmaller = stringResource(R.string.autoplay_regex_preset_720p_smaller)
-    val presetWebSources = stringResource(R.string.autoplay_regex_preset_web_sources)
-    val presetBlurayQuality = stringResource(R.string.autoplay_regex_preset_bluray_quality)
-    val presetHevcX265 = stringResource(R.string.autoplay_regex_preset_hevc_x265)
-    val presetAvcX264 = stringResource(R.string.autoplay_regex_preset_avc_x264)
-    val presetHdrDv = stringResource(R.string.autoplay_regex_preset_hdr_dolby_vision)
-    val presetDolbyAtmosDts = stringResource(R.string.autoplay_regex_preset_dolby_atmos_dts)
-    val presetEnglish = stringResource(R.string.autoplay_regex_preset_english)
-    val presetNoCamTs = stringResource(R.string.autoplay_regex_preset_no_cam_ts)
-    val presetNoRemuxHdr = stringResource(R.string.autoplay_regex_preset_no_remux_hdr)
-    val presets = remember(
-        presetAny1080p, preset4kRemux, preset1080pStandard, preset720pSmaller,
-        presetWebSources, presetBlurayQuality, presetHevcX265, presetAvcX264,
-        presetHdrDv, presetDolbyAtmosDts, presetEnglish, presetNoCamTs, presetNoRemuxHdr
-    ) {
-        listOf(
-            presetAny1080p to "(2160p|4k|1080p)",
-            preset4kRemux to "(2160p|4k|remux)",
-            preset1080pStandard to "(1080p|full\\s*hd)",
-            preset720pSmaller to "(720p|webrip|web-dl)",
-            presetWebSources to "(web[-\\s]?dl|webrip)",
-            presetBlurayQuality to "(bluray|b[dr]rip|remux)",
-            presetHevcX265 to "(hevc|x265|h\\.265)",
-            presetAvcX264 to "(x264|h\\.264|avc)",
-            presetHdrDv to "(hdr|hdr10\\+?|dv|dolby\\s*vision)",
-            presetDolbyAtmosDts to "(atmos|truehd|dts[-\\s]?hd|dtsx?)",
-            presetEnglish to "(\\beng\\b|english)",
-            presetNoCamTs to "^(?!.*\\b(cam|hdcam|ts|telesync)\\b).*$",
-            presetNoRemuxHdr to "(?is)^(?!.*\\b(hdr|hdr10|dv|dolby|vision|hevc|remux|2160p)\\b).+$"
-        )
-    }
+    val presets = streamRegexPresets()
 
     LaunchedEffect(Unit) {
         inputFocusRequester.requestFocus()

@@ -1,6 +1,5 @@
 package com.nuvio.tv.core.player
 
-import android.util.Log
 import androidx.media3.common.util.UnstableApi
 import java.io.ByteArrayOutputStream
 
@@ -28,18 +27,20 @@ internal object HevcHdr10PlusStripper {
     private val HDR10_PLUS_T35_SIGNATURE = byteArrayOf(
         0xB5.toByte(), 0x00, 0x3C.toByte(), 0x00, 0x01
     )
+    private val EMPTY = ByteArray(0)
 
     /**
-     * Rewrites a length-delimited (MP4/fMP4) sample, removing HDR10+ SEI messages.
-     * Returns the rewritten bytes, or null if nothing was stripped.
+     * Rewrites a length-delimited (MP4/fMP4) sample into [out], removing HDR10+ SEI messages.
+     * Returns true when something was stripped; [out] then holds the new sample. Samples
+     * without HDR10+ are not copied.
      */
     fun stripHdr10PlusLengthDelimited(
         sample: ByteArray,
         sampleLen: Int,
-        nalLengthFieldLength: Int
-    ): ByteArray? {
-        if (sampleLen < nalLengthFieldLength) return null
-        val out = ByteArrayOutputStream(sampleLen)
+        nalLengthFieldLength: Int,
+        out: ExposedByteArrayOutputStream
+    ): Boolean {
+        if (sampleLen < nalLengthFieldLength) return false
         var pos = 0
         var changed = false
         while (pos + nalLengthFieldLength <= sampleLen) {
@@ -51,46 +52,41 @@ internal object HevcHdr10PlusStripper {
             if (nalSize <= 0 || nalStart + nalSize > sampleLen) {
                 // Fallback: If length field parsing fails due to missing/corrupted CSD,
                 // perform an emergency Annex-B byte scan pass over this sample frame.
-                return stripHdr10PlusAnnexB(sample, sampleLen)
+                return stripHdr10PlusAnnexB(sample, sampleLen, out)
             }
             val nalType = (sample[nalStart].toInt() ushr 1) and 0x3F
-            if (nalType == NAL_TYPE_PREFIX_SEI || nalType == NAL_TYPE_SUFFIX_SEI) {
-                val filtered = filterSeiNal(sample, nalStart, nalSize)
-                when {
-                    filtered == null -> {
-                        // No HDR10+ in this NAL; keep as-is
-                        for (i in nalLengthFieldLength - 1 downTo 0) {
-                            out.write((nalSize ushr (i * 8)) and 0xFF)
-                        }
-                        out.write(sample, nalStart, nalSize)
-                    }
-                    filtered.isNotEmpty() -> {
-                        // Some HDR10+ stripped; output reduced SEI NAL
-                        changed = true
-                        for (i in nalLengthFieldLength - 1 downTo 0) {
-                            out.write((filtered.size ushr (i * 8)) and 0xFF)
-                        }
-                        out.write(filtered)
-                    }
-                    else -> changed = true // entire NAL was HDR10+; drop it
-                }
+            val filtered = if (nalType == NAL_TYPE_PREFIX_SEI || nalType == NAL_TYPE_SUFFIX_SEI) {
+                filterSeiNal(sample, nalStart, nalSize)
             } else {
-                for (i in nalLengthFieldLength - 1 downTo 0) {
-                    out.write((nalSize ushr (i * 8)) and 0xFF)
+                null
+            }
+            if (filtered != null) {
+                if (!changed) {
+                    changed = true
+                    out.reset()
+                    out.write(sample, 0, pos)
                 }
-                out.write(sample, nalStart, nalSize)
+                // An empty result means the entire NAL was HDR10+; drop it.
+                if (filtered.isNotEmpty()) {
+                    for (i in nalLengthFieldLength - 1 downTo 0) {
+                        out.write((filtered.size ushr (i * 8)) and 0xFF)
+                    }
+                    out.write(filtered, 0, filtered.size)
+                }
+            } else if (changed) {
+                out.write(sample, pos, nalLengthFieldLength + nalSize)
             }
             pos = nalStart + nalSize
         }
-        return if (changed) out.toByteArray() else null
+        return changed
     }
 
     /**
-     * Rewrites an Annex-B (TS/raw HEVC) sample, removing HDR10+ SEI messages.
-     * Returns the rewritten bytes, or null if nothing was stripped.
+     * Rewrites an Annex-B (TS/raw HEVC) sample into [out], removing HDR10+ SEI messages.
+     * Returns true when something was stripped.
      */
-    fun stripHdr10PlusAnnexB(sample: ByteArray, sampleLen: Int): ByteArray? {
-        val out = ByteArrayOutputStream(sampleLen)
+    fun stripHdr10PlusAnnexB(sample: ByteArray, sampleLen: Int, out: ExposedByteArrayOutputStream): Boolean {
+        out.reset()
         var scan = 0
         var changed = false
         while (scan < sampleLen) {
@@ -116,7 +112,7 @@ internal object HevcHdr10PlusStripper {
                         filtered.isNotEmpty() -> {
                             changed = true
                             out.write(sample, startCode, scLen)
-                            out.write(filtered)
+                            out.write(filtered, 0, filtered.size)
                         }
                         else -> changed = true // entire NAL was HDR10+; drop it
                     }
@@ -126,7 +122,7 @@ internal object HevcHdr10PlusStripper {
             }
             scan = nalEnd
         }
-        return if (changed) out.toByteArray() else null
+        return changed
     }
 
     /**
@@ -137,6 +133,8 @@ internal object HevcHdr10PlusStripper {
      */
     private fun filterSeiNal(data: ByteArray, nalOffset: Int, nalSize: Int): ByteArray? {
         if (nalSize < 3) return null
+        // Escaping never splits the signature, so a NAL without it in its raw bytes has no HDR10+.
+        if (!containsSignature(data, nalOffset + 2, nalOffset + nalSize)) return null
 
         // 1. Un-escape the NAL unit payload to get raw RBSP bytes (remove 0x00 0x00 0x03)
         val rbsp = ByteArrayOutputStream(nalSize)
@@ -206,7 +204,7 @@ internal object HevcHdr10PlusStripper {
         }
 
         if (!hasHdr10Plus) return null
-        if (outRbsp.size() <= 2) return ByteArray(0) // only NAL header left → whole NAL was HDR10+
+        if (outRbsp.size() <= 2) return EMPTY // only NAL header left → whole NAL was HDR10+
 
         outRbsp.write(0x80) // RBSP stop bit
         val filteredRbsp = outRbsp.toByteArray()
@@ -239,6 +237,16 @@ internal object HevcHdr10PlusStripper {
         }
 
         return finalNal.toByteArray()
+    }
+
+    private fun containsSignature(data: ByteArray, from: Int, end: Int): Boolean {
+        val sig = HDR10_PLUS_T35_SIGNATURE
+        var i = from
+        while (i + sig.size <= end) {
+            if (data[i] == sig[0] && matchesSignature(data, i, sig)) return true
+            i++
+        }
+        return false
     }
 
     private fun findStartCode(data: ByteArray, from: Int, limit: Int): Int {

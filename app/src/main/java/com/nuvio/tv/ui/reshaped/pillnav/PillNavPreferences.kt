@@ -44,5 +44,6 @@ internal object PillNavPreferences {
 internal fun rememberPillNavEnabled(): Boolean {
     PillNavPreferences.ensureLoaded(LocalContext.current)
     val enabled by PillNavPreferences.enabled.collectAsState()
-    return enabled
+    // The Netflix-style Home is designed around the top menu, so it always brings it along.
+    return enabled || com.nuvio.tv.ui.reshaped.netflix.rememberNetflixUiEnabled()
 }

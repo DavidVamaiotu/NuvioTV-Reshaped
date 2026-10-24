@@ -480,6 +480,10 @@ class PlaybackSettingsViewModel @Inject constructor(
         playerSettingsDataStore.setStreamAutoPlaySelectedPlugins(plugins)
     }
 
+    suspend fun setStreamAutoPlayRankedRegex(patterns: List<String>) {
+        playerSettingsDataStore.setStreamAutoPlayRankedRegex(patterns)
+    }
+
     suspend fun setStreamAutoPlayRegex(regex: String) {
         playerSettingsDataStore.setStreamAutoPlayRegex(regex)
     }

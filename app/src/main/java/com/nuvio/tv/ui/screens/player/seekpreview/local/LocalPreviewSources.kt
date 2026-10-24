@@ -19,9 +19,11 @@ internal class LocalPreviewSource(
     val owner: Any,
     val sourceKey: String,
     val context: Context,
+    val headers: Map<String, String> = emptyMap(),
 ) {
     @Volatile var released = false
     @Volatile var track: LocalPreviewTrack? = null
+    @Volatile var keyframeSink: KeyframeSink? = null
 
     /**
      * The stream's index when it lists real keyframes: an MP4's sync-sample table, or the cue
@@ -61,25 +63,30 @@ internal object LocalPreviewSources {
      * Registers [sourceKey] as [owner]'s playing stream and returns [factory] wrapped so its
      * video keyframes reach that stream's preview track while playback demuxes them.
      */
-    fun register(owner: Any, context: Context, sourceKey: String, factory: ExtractorsFactory): ExtractorsFactory {
-        val source = LocalPreviewSource(owner, sourceKey, context.applicationContext)
+    fun register(owner: Any, context: Context, sourceKey: String, factory: ExtractorsFactory, headers: Map<String, String> = emptyMap()): ExtractorsFactory {
+        val source = LocalPreviewSource(owner, sourceKey, context.applicationContext, headers.toMap())
         current.value?.let { stale ->
             stale.released = true
             stale.track = null
+            stale.keyframeSink = null
         }
         current.value = source
         return VideoKeyframeExtractorsFactory(factory, object : KeyframeSink {
             private fun track() = source.takeIf { !it.released }?.track
 
-            override fun wantsKeyframes(): Boolean = track()?.wantsKeyframes() == true
+            override fun wantsKeyframes(): Boolean = source.keyframeSink?.wantsKeyframes() ?: (track()?.wantsKeyframes() == true)
 
-            override fun wantsKeyframe(timeUs: Long): Boolean = track()?.wantsKeyframe(timeUs) == true
+            override fun acceptsFormat(format: Format): Boolean = source.keyframeSink?.acceptsFormat(format) ?: (track()?.acceptsFormat(format) == true)
+
+            override fun wantsKeyframe(timeUs: Long): Boolean = source.keyframeSink?.wantsKeyframe(timeUs) ?: (track()?.wantsKeyframe(timeUs) == true)
 
             // No track yet: say yes, so the tap only stops copying once a track says nothing is due.
-            override fun mayWantKeyframesNear(timeUs: Long): Boolean = track()?.mayWantKeyframesNear(timeUs) ?: true
+            override fun mayWantKeyframesNear(timeUs: Long): Boolean = source.keyframeSink?.mayWantKeyframesNear(timeUs) ?: track()?.mayWantKeyframesNear(timeUs) ?: true
 
             override fun onKeyframe(format: Format, timeUs: Long, data: ByteArray, offset: Int, size: Int) {
-                track()?.onKeyframe(format, timeUs, data, offset, size)
+                val sink = source.takeIf { !it.released }?.keyframeSink
+                if (sink != null) sink.onKeyframe(format, timeUs, data, offset, size)
+                else track()?.onKeyframe(format, timeUs, data, offset, size)
             }
 
             override fun onSeekMap(seekMap: SeekMap) {
@@ -93,6 +100,7 @@ internal object LocalPreviewSources {
         val source = current.value?.takeIf { it.owner === owner } ?: return
         source.released = true
         source.track = null
+        source.keyframeSink = null
         current.compareAndSet(source, null)
     }
 
@@ -105,7 +113,7 @@ internal object LocalPreviewSources {
      * The caller closes it.
      */
     fun open(source: LocalPreviewSource, cacheKey: String, durationMs: Long): LocalPreviewTrack? {
-        if (source.released || durationMs <= 0L) return null
+        if (source.released || durationMs !in 1..172_800_000L) return null
         val track = LocalPreviewTrack(source.context, cacheKey, durationMs, source::keyframeNear)
         source.track = track
         track.start()
@@ -129,5 +137,5 @@ internal fun localSeekPreviewCacheKey(
     contentId.orEmpty(),
     season?.toString().orEmpty(),
     episode?.toString().orEmpty(),
-    (durationMs / 1000L).toString(),
+    durationMs.toString(),
 ).joinToString("|")

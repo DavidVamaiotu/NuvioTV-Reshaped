@@ -69,6 +69,9 @@ internal class AudioSyncFallback private constructor(
     private class Target(val url: String, val cues: List<CuesWithTiming>, val generation: Long)
 
     private val target = AtomicReference<Target?>(null)
+
+    /** The first confirmed sync of this run was announced; later refinements stay silent. */
+    private val syncAnnounced = AtomicBoolean(false)
     private var armed = false
     private var appliedModel: SubtitleSyncModel? = null
     private var ticker: Job? = null
@@ -106,13 +109,16 @@ internal class AudioSyncFallback private constructor(
     /** AutoSync started analysing a subtitle: listen meanwhile, so a takeover starts with audio. */
     fun arm() {
         stop()
+        syncAnnounced.set(false)
         if (!AudioSyncSettings.fallbackEnabled.value) return
         controller.enabled = true
         controller.samplingOnMobileData = AudioSyncSettings.samplingOnMobileData.value
         controller.listensBeforeSession = true
+        // Start an already-downloaded recognizer before subtitle discovery, downloads or
+        // AutoSync's analysis. Recognition can then begin immediately on a later takeover.
+        controller.prepareRecognizer()
         if (!armed) {
-            // Only now, so a stream AutoSync syncs on its own never loads the speech model or
-            // fetches references for the fallback.
+            // Only now, so streams that never arm the fallback do not fetch its references.
             armed = true
             val type = runtime.contentType
             val videoId = runtime.videoId
@@ -290,6 +296,13 @@ internal class AudioSyncFallback private constructor(
     }
 
     private fun toast(status: AudioSyncStatus) {
+        // Announce only the first confirmed sync. Estimates, re-syncs and later confirmations
+        // (another cut, recognition taking over) change the timing silently.
+        when (status) {
+            is AudioSyncStatus.Estimated, is AudioSyncStatus.Adjusted -> return
+            is AudioSyncStatus.Synced -> if (!syncAnnounced.compareAndSet(false, true)) return
+            else -> Unit
+        }
         val message = status.message(appContext) ?: return
         showAutoSyncMessage(appContext, status.bubbleKind(), message) // Nuvio RS hook: AutoSync bubble
     }

@@ -13,24 +13,19 @@ import android.view.Display
  * where there's a concrete fix; everything else falls through to default ExoPlayer behavior.
  *
  * Convert DV7 to DV8.1 when:
- *  - the display is DV-capable and a Profile-8 decoder is present (Fire TV, Chromecast
- *    with Google TV, etc.);
- *  - the display is DV-capable but the DV decoder is hidden and doesn't advertise Profile 8
- *    (some Amlogic boxes) — convert and let DolbyVisionCodecFallback find the decoder;
+ *  - the display is DV-capable (any device, whatever DV profiles its decoder lists);
  *  - the display is HDR10-only but a DV8.1 decoder exists — convert and let it emit HDR10.
  *
- * A true DV7 decoder (e.g. Shield) stays NATIVE_DV7; HDR10-only displays elsewhere strip
- * to the HEVC base layer.
+ * Other HDR10-only displays strip to the HEVC base layer. This policy never passes DV7
+ * through untouched; only the Off (native) and Amlogic native FEL settings do.
  */
 object DolbyVisionBaseLayerPolicy {
 
     enum class Decision {
-        /** Display supports DV. Either a native DV7 decoder is present, or we have no
-         *  useful intervention - pass the stream through and let the device handle it. */
+        /** Pass DV7 through untouched. Not chosen by [resolveFromCapabilities]. */
         NATIVE_DV7,
         /** Convert DV7 RPU to DV8.1 with libdovi, then feed to a DV-aware decoder.
-         *  Used on Fire TV (profile-8-only Mediatek decoder), Xiaomi boxes (hidden
-         *  Amlogic DV decoder), and Samsung HDR10 (no DV display but DV81 decoder). */
+         *  Used on every DV display, and on Samsung / Fire TV / Xiaomi with HDR10 displays. */
         CONVERT_TO_DV81,
         /** Display supports HDR10/HDR10+. Strip DV, play HEVC base layer. */
         STRIP_TO_HDR10,
@@ -59,6 +54,15 @@ object DolbyVisionBaseLayerPolicy {
         /** True when DV7 streams should be diverted away from the native DV7 decoder path. */
         val divertsFromNativeDv7: Boolean
             get() = decision != Decision.NATIVE_DV7
+
+        /**
+         * True when a DV display converts on a device whose decoder does not list Profile 8
+         * alone (Xiaomi without Profile 7 excepted). These convert the way manual Convert to
+         * DV8.1 does (mode 2 with fallback to mode 1); the rest keep Auto's mode 1.
+         */
+        val usesManualConversion: Boolean
+            get() = decision == Decision.CONVERT_TO_DV81 && displayDv &&
+                (codecSupportsDvheDtb || (!codecSupportsDvheSt && !isXiaomi))
 
         /** True when DV7 should be mapped to its HEVC base layer at the codec selector. */
         val mapToHevc: Boolean
@@ -90,36 +94,13 @@ object DolbyVisionBaseLayerPolicy {
         val decision = when {
             !hdrCapsKnown -> Decision.STRIP_BEST_EFFORT
 
-            // Display does DV, device has native DV7 decoder: best case, do nothing.
-            // Shield TV and similar with real DvheDtb decoder.
-            displayDv && codecSupportsDvheDtb -> Decision.NATIVE_DV7
+            // No Android decoder plays both DV7 layers, and a decoder that lists Profile 7
+            // can still stall on a single-track DV7 file, so a DV display always converts.
+            // A DV decoder that does not list Profile 8 is ranked after the HEVC decoder
+            // for the converted stream, which then plays as HDR10.
+            displayDv && bridgeReady -> Decision.CONVERT_TO_DV81
 
-            // General DV-display convert path: any DV-capable display whose device has a
-            // Profile-8 decoder (DVHE.ST/STH) and a ready bridge. libdovi rewrites the DV7
-            // RPU to DV8.1 (mode 1 / ToMel by default) and the chip decodes 8.1 and emits
-            // DV. This was previously gated to Amazon Fire TV only, on May-2026 data that
-            // showed conversion degraded to HDR10 on Amlogic (Chromecast). Later testing
-            // showed the mode-1 app-level conversion produces real DV on Chromecast, LG
-            // panels, etc., so the manufacturer gate is removed. Devices with a true DV7
-            // decoder (DvheDtb, e.g. Shield) are handled by the NATIVE_DV7 branch above and
-            // never reach here; DV displays without a P8 decoder fall through to NATIVE_DV7
-            // below.
-            displayDv && bridgeReady && codecSupportsDvheSt ->
-                Decision.CONVERT_TO_DV81
-
-            // Xiaomi box path: Amlogic DV decoder exists but does NOT advertise Profile 8
-            // via MediaCodecList API (codecSupportsDvheSt is false). The hardware can
-            // decode DV8.1 when fed directly. DolbyVisionCodecFallback handles finding
-            // the hidden decoder in the codec selector.
-            // No codecSupportsDvheSt requirement — that's the whole point of this branch.
-            displayDv && isXiaomi && bridgeReady -> Decision.CONVERT_TO_DV81
-
-            // DV-capable display, non-intervened device. Pass through and let the device's
-            // media stack handle it. Chromecast with Google TV (older Amlogic) decodes
-            // DV7 natively. Google TV Streamer / Onn / MeCool etc. fall back to HEVC
-            // base layer via ExoPlayer's decoder fallback path, producing HDR10. Either
-            // way, no intervention from us improves things.
-            displayDv -> Decision.NATIVE_DV7
+            displayDv -> Decision.STRIP_TO_HDR10
 
             // Samsung HDR10 fallback (User 3): no DV display but a DV81 decoder is
             // available. Convert DV7 to DV81 so the decoder emits HDR10. Without this

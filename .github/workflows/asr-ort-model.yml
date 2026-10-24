@@ -1,0 +1,76 @@
+name: Prepare ORT Speech Model
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [subtitle-autosync-tester]
+    paths: [".github/workflows/asr-ort-model.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: asr-ort-model-v1
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event_name != 'push' || github.event.head_commit.message == 'Prepare portable ORT speech model v1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the pinned converter and matching native recognizer
+        run: python -m pip install onnxruntime==1.28.0 sherpa-onnx==1.13.8 numpy
+
+      - name: Fetch pinned public source model and test speech
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.request import urlretrieve
+          root = Path("asr-source")
+          root.mkdir()
+          base = "https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-gigaspeech-2023-12-12/resolve/f7515a672ffb69232794aaaa44a0a360f7f25cd1/"
+          files = {
+              "encoder-epoch-30-avg-1.int8.onnx": "encoder.int8.onnx",
+              "decoder-epoch-30-avg-1.int8.onnx": "decoder.int8.onnx",
+              "joiner-epoch-30-avg-1.int8.onnx": "joiner.int8.onnx",
+              "tokens.txt": "tokens.txt",
+              "test_wavs/1089-134686-0001.wav": "test1.wav",
+              "test_wavs/1221-135766-0001.wav": "test2.wav",
+              "test_wavs/1221-135766-0002.wav": "test3.wav",
+          }
+          for remote, local in files.items():
+              urlretrieve(base + remote, root / local)
+          PY
+
+      - name: Convert and validate metadata and native recognition
+        run: |
+          python .github/scripts/asr-ort.py prepare asr-source asr-model
+          python .github/scripts/asr-ort.py benchmark asr-source asr-model asr-source/test1.wav asr-source/test2.wav asr-source/test3.wav --repeats 5 > asr-model/host-benchmark.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("asr-model/host-benchmark.json").read_text())
+          assert result["tokens_match"], "Converted model changed sampled tokens"
+          assert result["maximum_token_timestamp_delta_seconds"] <= 0.0801, "Sampled timestamps changed by more than 80 ms"
+          print(json.dumps({key: value for key, value in result.items() if key != "runs"}, indent=2))
+          PY
+          cp .github/asr-ort-model.md asr-model/README.md
+          curl --fail --location --retry 3 https://www.apache.org/licenses/LICENSE-2.0.txt --output asr-model/LICENSE.txt
+
+      - name: Publish immutable model assets without changing the latest app release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create asr-models-ort-v1 \
+            asr-model/encoder.int8.ort asr-model/decoder.int8.ort asr-model/joiner.int8.ort \
+            asr-model/tokens.txt asr-model/manifest.json asr-model/host-benchmark.json \
+            asr-model/README.md asr-model/LICENSE.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "GigaSpeech INT8 ORT model v1 (audio sync assets)" \
+            --notes-file .github/asr-ort-model.md --prerelease --latest=false

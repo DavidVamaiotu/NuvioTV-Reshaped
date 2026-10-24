@@ -1,6 +1,7 @@
 package com.nuvio.tv.ui.screens.player.seekpreview.local
 
 import android.graphics.Bitmap
+import com.nuvio.tv.ui.screens.player.seekpreview.engine.NativeTapDecoder
 import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -44,6 +45,21 @@ internal class KeyframeThumbnailDecoder(
     @Synchronized
     fun decode(format: MediaFormat, data: ByteArray, offset: Int, size: Int, timeUs: Long): Frame? {
         if (released) return null
+        return decodeWithPermit(format, data, offset, size, timeUs)
+    }
+
+    private fun decodeWithPermit(format: MediaFormat, data: ByteArray, offset: Int, size: Int, timeUs: Long): Frame? {
+        val native = NativeTapDecoder.decode(format, if (offset == 0 && size == data.size) data else data.copyOfRange(offset, offset + size))
+        if (native != null) {
+            try {
+                val bytes = ByteArrayOutputStream()
+                native.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, bytes)
+                return Frame(bytes.toByteArray(), native.width, native.height, dark = false)
+            } finally { native.recycle() }
+        }
+        // MediaCodec's fallback converter assumes SDR BT.709. Never apply it to HDR or Dolby Vision.
+        val transfer = if (format.containsKey(MediaFormat.KEY_COLOR_TRANSFER)) format.getInteger(MediaFormat.KEY_COLOR_TRANSFER) else 0
+        if (transfer == 6 || transfer == 7 || format.getString(MediaFormat.KEY_MIME) == MediaFormat.MIMETYPE_VIDEO_DOLBY_VISION) return null
         for (attempt in 0 until 2) {
             val active = ensureCodec(format, size) ?: return null
             try {
@@ -61,6 +77,8 @@ internal class KeyframeThumbnailDecoder(
         released = true
         releaseCodec()
     }
+
+    @Synchronized fun trim() = releaseCodec()
 
     private fun ensureCodec(format: MediaFormat, sampleSize: Int): MediaCodec? {
         val key = formatKey(format)

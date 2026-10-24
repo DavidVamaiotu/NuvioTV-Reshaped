@@ -174,6 +174,9 @@ class PlayerRuntimeController(
     )
 
     internal val navigationArgs = PlayerNavigationArgs.from(savedStateHandle)
+    internal var autoSourceRecovery: PlayerAutoSourceRecovery? = null
+    internal var sourceRecoveryPickerError: String? = null
+    internal var playerInitializationJob: Job? = null
     internal val initialStreamUrl: String = navigationArgs.streamUrl
     internal val title: String = navigationArgs.title
     internal val streamName: String? = navigationArgs.streamName
@@ -413,6 +416,37 @@ class PlayerRuntimeController(
     @Volatile var exoPlayerView: androidx.media3.ui.PlayerView? = null
     internal var _loadControl: DefaultLoadControl? = null
     internal var playbackSpeedAwareAudioSink: PlaybackSpeedAwareAudioSink? = null
+    // Nuvio RS hook: Arc sound/picture format handling state (see PlayerFormatsHooks.kt).
+    internal var formatsActiveForCurrentPlayback: Boolean = false
+    internal val playbackRecoveryGate = PlaybackRecoveryGate()
+    internal var playbackRecoveryJob: Job? = null
+    internal var formatsRecoveryBudgetUrl: String = ""
+    internal var formatsRecoveryCountForCurrentStream: Int = 0
+    internal var currentAudioPassthroughPolicy: com.nuvio.tv.core.player.AudioPassthroughPolicy? = null
+    internal var surroundResolveInputs: SurroundResolveInputs? = null
+    internal var lastAppliedSurroundResolve: SurroundResolveResult? = null
+    internal var lastAppliedSurroundHdmi: AudioChainProbe.HdmiPlugSnapshot? = null
+    internal val preferFfmpegAudioStreamUrls: MutableSet<String> = mutableSetOf()
+    internal val iecFailureStrikes: MutableMap<String, Int> = mutableMapOf()
+    internal val iecOffStreamUrls: MutableSet<String> = mutableSetOf()
+    internal var lastBitstreamOutputReading: Pair<androidx.media3.common.PlaybackException, BitstreamOutputReading?>? = null
+    internal var knownAudioOutputDeviceIds: Set<Int> = emptySet()
+    internal var passthroughReturnCheckJob: Job? = null
+    internal val passthroughReturnRebuilds: MutableMap<String, Int> = mutableMapOf()
+    internal var busyOutputCheckJob: Job? = null
+    internal var busyOutputCheckStreamUrl: String? = null
+    internal val busyOutputReturnRebuilds: MutableMap<String, Int> = mutableMapOf()
+    internal var tunnelDeadClockSignature: String? = null
+    internal val tunnelingDisabledStreamUrls: MutableSet<String> = mutableSetOf()
+    internal var tunnelStallStrike: PlayerTunnelAvSyncPolicy.StallStrike? = null
+    internal var isTunnelingActiveForCurrentPlayback: Boolean = false
+    internal var tunnelAvSyncWatchdogJob: Job? = null
+    internal var lastOutputChangeForTunnelMs: Long = 0L
+    internal var formatsVideoDecoderName: String? = null
+    internal var currentAudioPathDescription: String? = null
+    internal var isAudioOutputBypassing: Boolean = false
+    internal var losslessAudioDefaultAppliedForStream: Boolean = false
+    internal var persistedAudioPreferenceSeenForStream: Boolean = false
 
     internal var progressJob: Job? = null
     internal var vodTelemetryJob: Job? = null
@@ -775,6 +809,8 @@ class PlayerRuntimeController(
     }
 
     fun onCleared() {
+        autoSourceRecovery?.cancel()
+        playerInitializationJob?.cancel()
         playerSession.close()
         stopServerPlayback()
         releasePlayer()

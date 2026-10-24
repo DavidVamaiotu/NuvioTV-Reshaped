@@ -24,6 +24,8 @@ import org.xmlpull.v1.XmlPullParser
 internal typealias LiveTvSchedule = Map<String, List<LiveTvProgramme>>
 
 private const val CANCEL_CHECK_EVENTS = 4096
+/** The length given to a channel's last programme when the guide names no stop for it. */
+private const val LAST_PROGRAMME_MS = 60L * 60 * 1000
 private const val RELAXED_FEATURE = "http://xmlpull.org/v1/doc/features.html#relaxed"
 
 /**
@@ -35,7 +37,10 @@ internal class LiveTvGuideWindow(
     val maxPast: Int,
     val aheadMs: Long,
     val maxAhead: Int,
-    /** How far back channels with catch-up keep programmes, so past ones can be played again. */
+    /**
+     * How far back channels with catch-up keep programmes in memory, so past ones can be played
+     * again (their days, at most this); older days are in [LiveTvArchive], read when looked at.
+     */
     val catchupPastMs: Long = pastMs,
     val maxCatchupPast: Int = maxPast,
     /**
@@ -53,23 +58,34 @@ internal class LiveTvGuideWindow(
      * (whole Xtream panels), each keeps fewer, never fewer than [maxPast].
      */
     val maxCatchupProgrammes: Int = Int.MAX_VALUE,
+    /**
+     * Channels of short programmes (news, music, shopping) keep up to [maxShortAhead] programmes
+     * ahead instead of [maxAhead], so they last the [aheadMs] too, while [maxAheadProgrammes] over
+     * all channels allows: big lists keep [maxAhead] each, as before.
+     */
+    val maxShortAhead: Int = maxAhead,
+    val maxAheadProgrammes: Int = 0,
 ) {
-    /** How far back [key]'s programmes are kept, given the request's catch-up channels. */
-    fun pastMsFor(catchup: Boolean): Long = if (catchup) catchupPastMs else pastMs
+    /** How far back a channel's programmes are kept: [catchupDays] is its catch-up's, null without. */
+    fun pastMsFor(catchupDays: Int?): Long =
+        if (catchupDays == null) pastMs else maxOf(pastMs, minOf(catchupPastMs, catchupDays * DAY))
 
     companion object {
         private const val HOUR = 60L * 60 * 1000
+        private const val DAY = 24 * HOUR
         val Regular = LiveTvGuideWindow(
             pastMs = 3 * HOUR, maxPast = 6, aheadMs = 12 * HOUR, maxAhead = 18,
-            catchupPastMs = 24 * HOUR, maxCatchupPast = 48,
+            catchupPastMs = DAY, maxCatchupPast = 48,
             detailsMs = 6 * HOUR, maxDescription = 320, detailsPerChannel = 4, detailsBudgetChars = 6_000_000,
             maxCatchupProgrammes = 300_000,
+            maxShortAhead = 48, maxAheadProgrammes = 60_000,
         )
         val LowMemory = LiveTvGuideWindow(
             pastMs = 2 * HOUR, maxPast = 4, aheadMs = 8 * HOUR, maxAhead = 10,
             catchupPastMs = 12 * HOUR, maxCatchupPast = 24,
             detailsMs = 3 * HOUR, maxDescription = 200, detailsPerChannel = 2, detailsBudgetChars = 1_500_000,
             maxCatchupProgrammes = 100_000,
+            maxShortAhead = 32, maxAheadProgrammes = 20_000,
         )
     }
 }
@@ -82,26 +98,31 @@ internal class LiveTvGuideRequest(
     val keysByName: Map<String, List<String>>,
     /** Keys of channels the playlist gives no logo: the guide's own logo is used for them. */
     val keysWithoutLogo: Set<String>,
-    /** Keys of channels with catch-up: they keep more past programmes. */
-    val catchupKeys: Set<String> = emptySet(),
+    /** Keys of channels with catch-up to how many days back they replay: they keep more past programmes. */
+    val catchupKeys: Map<String, Int> = emptyMap(),
     /** XMLTV ids to playlist-scoped keys; two sources may use the same XMLTV id. */
     val keysById: Map<String, List<String>> = emptyMap(),
     /** The country tag ([liveTvNameTag]) of channels whose name has one. */
     val tagsByKey: Map<String, String> = emptyMap(),
+    /** How far each channel's guide times are moved (the playlist's `tvg-shift`); most have none. */
+    val shiftMsByKey: Map<String, Long> = emptyMap(),
 ) {
     companion object {
         fun from(channels: List<LiveTvChannel>): LiveTvGuideRequest {
             val keys = HashSet<String>(channels.size * 2)
             val byName = HashMap<String, MutableList<String>>(channels.size * 2)
             val withoutLogo = HashSet<String>()
-            val catchup = HashSet<String>()
+            val catchup = HashMap<String, Int>()
             val byId = HashMap<String, MutableList<String>>()
             val tags = HashMap<String, String>()
             // A few tags shared by thousands of channels: each kept once.
             val tagPool = HashMap<String, String>()
+            val shifts = HashMap<String, Long>()
             channels.forEach { channel ->
-                if (channel.catchup != null) catchup += channel.guideKey
+                // A key two channels share keeps the longer catch-up.
+                channel.catchup?.let { catchup[channel.guideKey] = maxOf(it.days, catchup[channel.guideKey] ?: 0) }
                 if (!keys.add(channel.guideKey)) return@forEach
+                if (channel.guideShiftMinutes != 0) shifts[channel.guideKey] = channel.guideShiftMinutes * 60_000L
                 channel.tvgId?.let(::liveTvGuideId)?.takeIf(String::isNotEmpty)?.let { id ->
                     byId.getOrPut(id) { ArrayList(1) } += channel.guideKey
                 }
@@ -114,7 +135,7 @@ internal class LiveTvGuideRequest(
                 if (channel.logoUrl.isNullOrBlank()) withoutLogo += channel.guideKey
                 liveTvNameTag(channel.name)?.let { tags[channel.guideKey] = tagPool.getOrPut(it) { it } }
             }
-            return LiveTvGuideRequest(keys, byName, withoutLogo, catchup, byId, tags)
+            return LiveTvGuideRequest(keys, byName, withoutLogo, catchup, byId, tags, shifts)
         }
     }
 }
@@ -127,7 +148,8 @@ internal fun liveTvGuideMatchingKey(channels: List<LiveTvChannel>): Long {
         matching = matching * 31 + channel.name.hashCode()
         matching = matching * 31 + (channel.tvgName?.hashCode() ?: 0)
         matching = matching * 31 + if (channel.logoUrl.isNullOrBlank()) 1 else 0
-        matching = matching * 31 + if (channel.catchup != null) 1 else 0
+        matching = matching * 31 + (channel.catchup?.days ?: 0)
+        matching = matching * 31 + channel.guideShiftMinutes
     }
     return matching
 }
@@ -152,7 +174,11 @@ internal class LiveTvGuide(
     fun hasAhead(nowEpochMs: Long): Boolean =
         schedule.values.any { programmes -> programmes.isNotEmpty() && programmes.last().stopEpochMs > nowEpochMs }
 
-    fun afterFailedRefresh(): LiveTvGuide = LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true, nameMatched = nameMatched)
+    /** The past days of catch-up channels this read met, for [LiveTvArchive]; null when not kept. */
+    var spill: LiveTvArchiveSpill? = null
+
+    fun afterFailedRefresh(): LiveTvGuide =
+        LiveTvGuide(schedule, logos, truncated, complete, elements, refreshFailed = true, nameMatched = nameMatched).also { it.spill = spill }
 }
 
 /** Imports finish independently; neither a slow source nor completion order changes EPG priority. */
@@ -188,8 +214,9 @@ internal suspend fun readXmlTvGuide(
     request: LiveTvGuideRequest,
     nowEpochMs: Long,
     window: LiveTvGuideWindow,
+    spills: LiveTvArchive.Spills? = null,
 ): LiveTvGuide =
-    LiveTvHttp.readFile(file) { input -> readXmlTvGuide(input, request, nowEpochMs, window) }
+    LiveTvHttp.readFile(file) { input -> readXmlTvGuide(input, request, nowEpochMs, window, spills = spills) }
 
 /** [readXmlTvGuide] from a stream (blocking): a saved file, or a download as it arrives. */
 internal fun readXmlTvGuide(
@@ -198,8 +225,11 @@ internal fun readXmlTvGuide(
     nowEpochMs: Long,
     window: LiveTvGuideWindow,
     parserFactory: () -> XmlPullParser = Xml::newPullParser,
+    /** Where past days of catch-up channels go ([LiveTvArchive]); null when they are not kept. */
+    spills: LiveTvArchive.Spills? = null,
 ): LiveTvGuide {
-    val builder = LiveTvScheduleBuilder(request, nowEpochMs, window)
+    val spill = if (request.catchupKeys.isEmpty()) null else spills?.create()
+    val builder = LiveTvScheduleBuilder(request, nowEpochMs, window, spill)
     // A malformed tail (unknown entity, cut download) keeps what was read before it.
     val complete = try {
         readGuide(LiveTvHttp.gunzipIfNeeded(input), builder, parserFactory)
@@ -208,8 +238,10 @@ internal fun readXmlTvGuide(
         throw cancel
     } catch (_: Exception) {
         false
+    } finally {
+        spill?.finish()
     }
-    return builder.build(complete)
+    return builder.build(complete).also { it.spill = spill }
 }
 
 private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parserFactory: () -> XmlPullParser) {
@@ -257,7 +289,7 @@ private fun readGuide(input: InputStream, builder: LiveTvScheduleBuilder, parser
                         if (start == null || (stop != null && !builder.mayKeep(keys, start, stop))) {
                             parser.skipElement()
                         } else {
-                            val programme = parser.readProgramme(builder.wantsDetails(start, stop ?: start + 60_000L))
+                            val programme = parser.readProgramme(builder.wantsDetails(keys, start, stop ?: start + LAST_PROGRAMME_MS))
                             val title = programme.title
                             if (title != null) {
                                 builder.programme(channelId, start, stop, title, programme.description, programme.image)
@@ -391,13 +423,58 @@ private fun XmlPullParser.readProgramme(details: Boolean): ProgrammeText {
     return text
 }
 
+/**
+ * One channel's programmes while a guide is read, with how many have ended and how many have not
+ * at the read's now, and the latest start: kept as they change, so adding one costs no full pass.
+ */
+private class KeptProgrammes : ArrayList<LiveTvProgramme>(4) {
+    var past = 0
+        private set
+    var ahead = 0
+        private set
+    var latestStart = Long.MIN_VALUE
+        private set
+
+    fun addKept(past: Boolean, programme: LiveTvProgramme) {
+        add(programme)
+        if (past) this.past++ else ahead++
+        if (programme.startEpochMs > latestStart) latestStart = programme.startEpochMs
+    }
+
+    fun removeKept(index: Int, nowEpochMs: Long) {
+        val removed = removeAt(index)
+        if (removed.stopEpochMs <= nowEpochMs) past-- else ahead--
+        if (removed.startEpochMs == latestStart) {
+            latestStart = Long.MIN_VALUE
+            forEach { if (it.startEpochMs > latestStart) latestStart = it.startEpochMs }
+        }
+    }
+
+    /** The index of the earliest or [latest] programme that has ended ([past]) or not; one must exist. */
+    fun extreme(past: Boolean, latest: Boolean, nowEpochMs: Long): Int {
+        var found = -1
+        var foundStart = 0L
+        for (index in indices) {
+            val programme = this[index]
+            if ((programme.stopEpochMs <= nowEpochMs) != past) continue
+            if (found < 0 || (if (latest) programme.startEpochMs > foundStart else programme.startEpochMs < foundStart)) {
+                found = index
+                foundStart = programme.startEpochMs
+            }
+        }
+        return found
+    }
+}
+
 /** Collects programmes for the requested channels while a guide is read. */
 internal class LiveTvScheduleBuilder(
     private val request: LiveTvGuideRequest,
     private val nowEpochMs: Long,
     private val window: LiveTvGuideWindow,
+    /** Where the past days of catch-up channels go, beyond what memory keeps; null to skip them. */
+    private val spill: LiveTvArchiveSpill? = null,
 ) {
-    private val entries = HashMap<String, MutableList<LiveTvProgramme>>()
+    private val entries = HashMap<String, KeptProgrammes>()
     private val truncated = HashSet<String>()
     /** Guide channels and programmes met, kept or not. */
     var elements = 0
@@ -522,6 +599,7 @@ internal class LiveTvScheduleBuilder(
                     if (direct) nameFed -= key
                     if (direct) sameTagFed -= key else sameTagFed += key
                     entries.remove(key)
+                    spill?.drop(key)
                     truncated -= key
                 }
                 else -> all = false
@@ -535,6 +613,17 @@ internal class LiveTvScheduleBuilder(
         request.keysById[channelId] ?: if (channelId in request.keys) listOf(channelId) else null
 
     /** Whether a programme from [startEpochMs] to [stopEpochMs] has its description and picture read. */
+    /** [wantsDetails] for guide channel [keys], each at its own time ([LiveTvGuideRequest.shiftMsByKey]). */
+    fun wantsDetails(keys: List<String>, startEpochMs: Long, stopEpochMs: Long): Boolean =
+        if (request.shiftMsByKey.isEmpty()) {
+            wantsDetails(startEpochMs, stopEpochMs)
+        } else {
+            keys.any { key ->
+                val shift = request.shiftMsByKey[key] ?: 0L
+                wantsDetails(startEpochMs + shift, stopEpochMs + shift)
+            }
+        }
+
     fun wantsDetails(startEpochMs: Long, stopEpochMs: Long): Boolean =
         window.detailsPerChannel > 0 && stopEpochMs > nowEpochMs && startEpochMs < nowEpochMs + window.detailsMs
 
@@ -544,19 +633,38 @@ internal class LiveTvScheduleBuilder(
         (window.maxCatchupProgrammes / channels).coerceIn(window.maxPast, window.maxCatchupPast)
     }
 
+    /** Programmes ahead each channel keeps, within [LiveTvGuideWindow.maxAheadProgrammes] over all. */
+    private val aheadCount: Int = run {
+        val channels = request.keys.size.coerceAtLeast(1)
+        (window.maxAheadProgrammes / channels).coerceIn(window.maxAhead, maxOf(window.maxAhead, window.maxShortAhead))
+    }
+
     /**
      * Whether a programme from [startEpochMs] to [stopEpochMs] of channels [keys] can be kept at
      * all; one starting too late marks them cut short, as [add] would.
      */
     fun mayKeep(keys: List<String>, startEpochMs: Long, stopEpochMs: Long): Boolean {
         if (stopEpochMs <= startEpochMs) return false
+        if (request.shiftMsByKey.isEmpty()) return mayKeepAt(keys, startEpochMs, stopEpochMs)
+        // Channels whose guide is moved (tvg-shift) are judged at their own times.
+        return keys.any { key ->
+            val shift = request.shiftMsByKey[key] ?: 0L
+            mayKeepAt(listOf(key), startEpochMs + shift, stopEpochMs + shift)
+        }
+    }
+
+    private fun mayKeepAt(keys: List<String>, startEpochMs: Long, stopEpochMs: Long): Boolean {
         if (startEpochMs >= nowEpochMs + window.aheadMs) {
             keys.forEach { truncated += it }
             return false
         }
         return stopEpochMs > nowEpochMs - window.pastMs ||
-            (stopEpochMs > nowEpochMs - window.catchupPastMs && keys.any { it in request.catchupKeys })
+            keys.any { key -> request.catchupKeys[key]?.let { stopEpochMs > nowEpochMs - pastFor(it) } == true }
     }
+
+    /** How far back a catch-up channel's programmes are read: its archive's days, or what memory keeps. */
+    private fun pastFor(catchupDays: Int): Long =
+        if (spill != null) maxOf(window.pastMsFor(catchupDays), LiveTvArchive.pastMsFor(catchupDays)) else window.pastMsFor(catchupDays)
 
     fun add(
         keys: List<String>,
@@ -566,7 +674,14 @@ internal class LiveTvScheduleBuilder(
         description: String? = null,
         image: String? = null,
     ) {
-        keys.forEach { add(it, title, startEpochMs, stopEpochMs, description, image) }
+        if (request.shiftMsByKey.isEmpty()) {
+            keys.forEach { add(it, title, startEpochMs, stopEpochMs, description, image) }
+        } else {
+            keys.forEach { key ->
+                val shift = request.shiftMsByKey[key] ?: 0L
+                add(key, title, startEpochMs + shift, stopEpochMs + shift, description, image)
+            }
+        }
     }
 
     /** [key] must be one of the request's keys. */
@@ -578,41 +693,46 @@ internal class LiveTvScheduleBuilder(
         description: String? = null,
         image: String? = null,
     ) {
-        val catchup = key in request.catchupKeys
-        if (stopEpochMs <= startEpochMs || stopEpochMs <= nowEpochMs - window.pastMsFor(catchup)) return
+        val catchupDays = request.catchupKeys[key]
+        val catchup = catchupDays != null
+        if (stopEpochMs <= startEpochMs) return
+        // Past days of a catch-up channel go to the archive as they come; memory keeps the last of them.
+        if (spill != null && catchupDays != null && stopEpochMs <= nowEpochMs &&
+            stopEpochMs > nowEpochMs - LiveTvArchive.pastMsFor(catchupDays)
+        ) {
+            spill.write(key, startEpochMs, stopEpochMs, title)
+        }
+        if (stopEpochMs <= nowEpochMs - window.pastMsFor(catchupDays)) return
         if (startEpochMs >= nowEpochMs + window.aheadMs) {
             truncated += key
             return
         }
-        val list = entries.getOrPut(key) { ArrayList(4) }
+        val list = entries.getOrPut(key) { KeptProgrammes() }
         val past = stopEpochMs <= nowEpochMs
-        var kept = 0
-        for (programme in list) {
-            // The same slot twice (a guide channel matched by id and by name): keep one.
-            if (programme.startEpochMs == startEpochMs) return
-            if ((programme.stopEpochMs <= nowEpochMs) == past) kept++
-        }
-        if (past && kept >= (if (catchup) catchupPastCount else window.maxPast)) {
+        // The same slot twice (a guide channel matched by id and by name): keep one. Guides list a
+        // channel's programmes in time order, so a start after every kept one needs no search.
+        if (startEpochMs <= list.latestStart && list.any { it.startEpochMs == startEpochMs }) return
+        if (past && list.past >= (if (catchup) catchupPastCount else window.maxPast)) {
             // Keep the latest programmes that have ended.
-            val earliest = list.filter { it.stopEpochMs <= nowEpochMs }.minBy { it.startEpochMs }
-            if (earliest.startEpochMs >= startEpochMs) return
-            list.remove(earliest)
-        } else if (!past && kept >= window.maxAhead) {
+            val earliest = list.extreme(past = true, latest = false, nowEpochMs)
+            if (list[earliest].startEpochMs >= startEpochMs) return
+            list.removeKept(earliest, nowEpochMs)
+        } else if (!past && list.ahead >= aheadCount) {
             // Guides are usually in time order; if not, keep the earliest programmes.
             truncated += key
-            val latest = list.filter { it.stopEpochMs > nowEpochMs }.maxBy { it.startEpochMs }
-            if (latest.startEpochMs <= startEpochMs) return
-            list.remove(latest)
+            val latest = list.extreme(past = false, latest = true, nowEpochMs)
+            if (list[latest].startEpochMs <= startEpochMs) return
+            list.removeKept(latest, nowEpochMs)
         }
         val details = wantsDetails(startEpochMs, stopEpochMs)
-        list += LiveTvProgramme(
+        list.addKept(past, LiveTvProgramme(
             title = titles.getOrPut(title) { title },
             startEpochMs = startEpochMs,
             stopEpochMs = stopEpochMs,
             // Repeats share one copy, as titles do.
             description = description?.takeIf { details }?.let(::shortDescription)?.let { titles.getOrPut(it) { it } },
             image = image?.takeIf { details }?.let { titles.getOrPut(it) { it } },
-        )
+        ))
     }
 
     /** Cut at a word near [LiveTvGuideWindow.maxDescription], with an ellipsis. */
@@ -626,6 +746,16 @@ internal class LiveTvScheduleBuilder(
     fun build(complete: Boolean = true): LiveTvGuide {
         // Name matches settle here too when the guide had no programme for them (their logos still count).
         if (!channelsDone) finishChannels()
+        // A channel's last programme without a stop (none follows to end it) is given a usual length
+        // rather than dropped: with a guide listing only what is on now, that would be everything.
+        if (complete) {
+            pending.forEach { (channelId, last) ->
+                val keys = keysFor(channelId) ?: return@forEach
+                val stop = last.start + LAST_PROGRAMME_MS
+                if (mayKeep(keys, last.start, stop)) add(keys, last.title, last.start, stop, last.description, last.image)
+            }
+        }
+        pending.clear()
         val nameMatched = HashSet<String>(nameFed)
         aliases.values.forEach { keys -> keys.forEach { if (it !in idMatched) nameMatched += it } }
         val schedule = HashMap<String, List<LiveTvProgramme>>(entries.size * 2)
@@ -754,6 +884,20 @@ internal fun nextScheduleReadAt(
 }
 
 /**
+ * The index of the first programme ending after [epochMs] (size when none), found by halving: a
+ * schedule is in time order without overlaps, and catch-up channels keep days of past programmes.
+ */
+internal fun List<LiveTvProgramme>.firstEndingAfter(epochMs: Long): Int {
+    var low = 0
+    var high = size
+    while (low < high) {
+        val middle = (low + high) ushr 1
+        if (this[middle].stopEpochMs > epochMs) high = middle else low = middle + 1
+    }
+    return low
+}
+
+/**
  * When the programme on air next changes for any of [keys] (one ends, or one starts where nothing
  * was on): until then [currentProgrammes] gives the same answer. Long.MAX_VALUE when it never does.
  */
@@ -765,7 +909,8 @@ internal fun nextProgrammeChange(
     var next = Long.MAX_VALUE
     if (schedule.isEmpty()) return next
     for (key in keys) {
-        val programme = schedule[key]?.firstOrNull { it.stopEpochMs > nowEpochMs } ?: continue
+        val programmes = schedule[key] ?: continue
+        val programme = programmes.getOrNull(programmes.firstEndingAfter(nowEpochMs)) ?: continue
         val change = if (programme.startEpochMs <= nowEpochMs) programme.stopEpochMs else programme.startEpochMs
         if (change < next) next = change
     }
@@ -781,10 +926,9 @@ internal fun currentProgrammes(
     if (schedule.isEmpty()) return emptyMap()
     val current = HashMap<String, LiveTvProgramme>()
     for (key in keys) {
-        val programme = schedule[key]
-            ?.firstOrNull { nowEpochMs >= it.startEpochMs && nowEpochMs < it.stopEpochMs }
-            ?: continue
-        current[key] = programme
+        val programmes = schedule[key] ?: continue
+        val programme = programmes.getOrNull(programmes.firstEndingAfter(nowEpochMs)) ?: continue
+        if (nowEpochMs >= programme.startEpochMs) current[key] = programme
     }
     return current
 }
@@ -792,7 +936,10 @@ internal fun currentProgrammes(
 /** Quality and format words that differ between a playlist's and a guide's name of one channel. */
 private val NAME_NOISE = hashSetOf(
     "hd", "fhd", "uhd", "sd", "hq", "4k", "8k", "hevc", "h265", "h264", "1080p", "1080i", "720p", "576p", "50fps", "60fps",
+    "1080", "720", "2160", "hd+",
 )
+/** Of [NAME_NOISE], the words a channel's guide key ([liveTvGuideKey]) keeps, as it did before they were matched. */
+private val NAME_NOISE_IN_KEYS = hashSetOf("1080", "720", "2160", "hd+")
 
 /** The leading country tag of [name] in lower case ("uk" for "UK: BBC One"), or null. */
 internal fun liveTvNameTag(name: String): String? {
@@ -801,24 +948,46 @@ internal fun liveTvNameTag(name: String): String? {
     return tag.filter(Char::isLetter).lowercase()
 }
 
-/** A leading country tag: "UK:", "UK |", "|UK|", "[UK]", "(UK)". */
-private val NAME_TAG = Regex("""^\s*(?:[\[(|]\s*[A-Za-z]{2,3}\s*[\])|]|[A-Za-z]{2,3}\s*[:|])\s*""")
-private val NAME_TAG_ENDS = charArrayOf(':', '|', ']', ')')
+/** A leading country tag: "UK:", "UK |", "|UK|", "[UK]", "(UK)", "UK - ". */
+private val NAME_TAG = Regex("""^\s*(?:[\[(|]\s*[A-Za-z]{2,3}\s*[\])|]|[A-Za-z]{2,3}\s*[:|]|[A-Z]{2}\s+-\s+)\s*""")
+private val NAME_TAG_ENDS = charArrayOf(':', '|', ']', ')', '-')
+/** [NAME_TAG] without "UK - ", for guide keys: see [liveTvGuideKey]. */
+private val KEY_NAME_TAG = Regex("""^\s*(?:[\[(|]\s*[A-Za-z]{2,3}\s*[\])|]|[A-Za-z]{2,3}\s*[:|])\s*""")
+/**
+ * A country code or audio note in brackets after the name ("BBC One (UK)", "RTL [Multi-Audio]"). Not
+ * a region ("BBC One (East)") nor "(+1)": those are other channels, with guides of their own.
+ */
+private val NAME_BRACKETED = Regex("""\s*[\[(]\s*(?:[A-Za-z]{2,3}|multi[\s\-]?(?:audio|sub|lang)|backup|vip)\s*[\])]""", RegexOption.IGNORE_CASE)
 
 /**
  * A channel name reduced for matching a playlist's name with a guide's: lower case, no country
  * tag, no quality words, letters and digits only ("UK: BBC One HD" and "BBC One" are both "bbcone").
  */
-internal fun liveTvNameKey(raw: String): String {
-    val name = raw.composed()
+internal fun liveTvNameKey(raw: String): String = nameKey(raw, forGuideKey = false)
+
+/**
+ * [liveTvNameKey], or with [forGuideKey] the form a channel's guide key has always had: keys are
+ * saved (the catch-up archive), so finding more guides by name must not change them.
+ */
+private fun nameKey(raw: String, forGuideKey: Boolean): String {
+    val name = if (forGuideKey) raw.composed() else raw.folded()
     // Every tag ends in one of these: most names have none and skip the pattern (it runs per channel and per guide name).
-    val untagged = if (name.indexOfAny(NAME_TAG_ENDS) < 0) name else NAME_TAG.replaceFirst(name, "")
+    val tagless = when {
+        name.indexOfAny(NAME_TAG_ENDS) < 0 -> name
+        forGuideKey -> KEY_NAME_TAG.replaceFirst(name, "")
+        else -> NAME_TAG.replaceFirst(name, "")
+    }
+    val untagged = if (forGuideKey || (tagless.indexOf('(') < 0 && tagless.indexOf('[') < 0)) {
+        tagless
+    } else {
+        NAME_BRACKETED.replace(tagless, " ").ifBlank { tagless }
+    }
     val out = StringBuilder(untagged.length)
     var word = StringBuilder()
     fun flush() {
         if (word.isNotEmpty()) {
             val token = word.toString()
-            if (token !in NAME_NOISE) out.append(token)
+            if (token !in NAME_NOISE || (forGuideKey && token in NAME_NOISE_IN_KEYS)) out.append(token)
             word = StringBuilder()
         }
     }
@@ -840,13 +1009,22 @@ internal fun liveTvNameKey(raw: String): String {
  */
 internal fun liveTvGuideId(id: String): String = id.trim().composed().lowercase()
 
+/**
+ * [this] without accents and in plain forms ("Télé" as "Tele", "ᴴᴰ" as "HD"), for names written by
+ * different tools; plain ASCII, nearly every name, is returned as is.
+ */
+private fun String.folded(): String =
+    if (all { it < '\u0080' }) this else COMBINING_MARKS.replace(java.text.Normalizer.normalize(this, java.text.Normalizer.Form.NFKD), "")
+
+private val COMBINING_MARKS = Regex("""\p{Mn}+""")
+
 /** [this] in Unicode's composed form (NFC); plain ASCII, nearly every id and name, is returned as is. */
 private fun String.composed(): String =
     if (all { it < '\u0080' }) this else java.text.Normalizer.normalize(this, java.text.Normalizer.Form.NFC)
 
 /** The key a channel's guide is kept under: its guide id in lower case, else its name. */
 internal fun liveTvGuideKey(tvgId: String?, name: String, sourceId: String = ""): String {
-    val key = tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase() ?: (NAME_KEY_PREFIX + liveTvNameKey(name))
+    val key = tvgId?.trim()?.takeIf(String::isNotEmpty)?.lowercase() ?: (NAME_KEY_PREFIX + nameKey(name, forGuideKey = true))
     return if (sourceId.isEmpty()) key else "$sourceId/$key"
 }
 

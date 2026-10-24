@@ -1,6 +1,7 @@
 package com.nuvio.tv.ui.screens.player
 
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import androidx.media3.common.C
 import androidx.media3.common.Format
@@ -23,7 +24,9 @@ internal class PlaybackSpeedAwareAudioRenderer(
     enableDecoderFallback: Boolean,
     eventHandler: Handler?,
     eventListener: AudioRendererEventListener?,
-    private val playbackSpeedAwareAudioSink: PlaybackSpeedAwareAudioSink
+    private val playbackSpeedAwareAudioSink: PlaybackSpeedAwareAudioSink,
+    // Nuvio RS: the sink the renderer writes to when the speed-aware sink is wrapped (AutoSync audio tap).
+    outputSink: AudioSink = playbackSpeedAwareAudioSink
 ) : MediaCodecAudioRenderer(
     rendererContext,
     codecAdapterFactory,
@@ -31,7 +34,7 @@ internal class PlaybackSpeedAwareAudioRenderer(
     enableDecoderFallback,
     eventHandler,
     eventListener,
-    playbackSpeedAwareAudioSink
+    outputSink
 ) {
 
     override fun supportsFormat(mediaCodecSelector: MediaCodecSelector, format: Format): Int {
@@ -107,6 +110,15 @@ internal class PlaybackSpeedAwareAudioRenderer(
         format: Format,
         requiresSecureDecoder: Boolean
     ): List<MediaCodecInfo> {
+        // Returning no MediaCodec decoder for a policy-denied format makes
+        // supportsFormat() above report FORMAT_UNSUPPORTED_SUBTYPE (it consults this
+        // list), so track selection falls through to FfmpegAudioRenderer. That cannot
+        // strand the track: AudioPassthroughPolicy only denies the five formats the
+        // bundled FFmpeg decoder handles, and only while softwareDecodersAvailable is
+        // true, which already requires the FFmpeg renderer to be in the renderer list.
+        if (playbackSpeedAwareAudioSink.isPolicyDeniedPassthrough(format)) {
+            return emptyList()
+        }
         val decoderInfos = if (!playbackSpeedAwareAudioSink.shouldForcePcmForFormat(format) && playbackSpeedAwareAudioSink.supportsFormat(format)) {
             MediaCodecUtil.getDecryptOnlyDecoderInfo()?.let(::listOf)
                 ?: MediaCodecUtil.getDecoderInfosSoftMatch(
@@ -124,6 +136,16 @@ internal class PlaybackSpeedAwareAudioRenderer(
             )
         }
         return MediaCodecUtil.getDecoderInfosSortedByFormatSupport(decoderInfos, format)
+    }
+
+    override fun getCodecNeedsEosPropagation(): Boolean {
+        return super.getCodecNeedsEosPropagation() ||
+            needsAmazonAc3EosWorkaround(
+                Build.VERSION.SDK_INT,
+                Build.MANUFACTURER,
+                Build.MODEL,
+                codecInfo?.name
+            )
     }
 
     override fun shouldUseBypass(format: Format): Boolean {
@@ -149,5 +171,20 @@ internal class PlaybackSpeedAwareAudioRenderer(
             audioOffloadSupport = audioOffloadSupport or AUDIO_OFFLOAD_SPEED_CHANGE_SUPPORTED
         }
         return audioOffloadSupport
+    }
+
+    companion object {
+        // The Dolby AC-3 decoder on Fire TV with Android 10 or older can freeze when it is sent end of stream.
+        fun needsAmazonAc3EosWorkaround(
+            sdkInt: Int,
+            manufacturer: String?,
+            model: String?,
+            codecName: String?
+        ): Boolean {
+            return sdkInt <= 29 &&
+                manufacturer == "Amazon" &&
+                model?.startsWith("AFT") == true &&
+                codecName == "OMX.dolby.ac3.decoder"
+        }
     }
 }

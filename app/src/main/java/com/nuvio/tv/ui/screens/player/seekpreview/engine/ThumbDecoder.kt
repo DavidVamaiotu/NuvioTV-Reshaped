@@ -1,0 +1,273 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Adapted from ysosrs123/NuvioTV-Fork (Nuvio Arc), commit ae6212ef58d25df819a716f2a38314732e719a2c.
+// Original container/keyframe/colour implementation by ysosrs123; see NOTICE.md in this package.
+package com.nuvio.tv.ui.screens.player.seekpreview.engine
+
+import android.graphics.Bitmap
+import android.util.Log
+import java.io.Closeable
+import java.nio.ByteBuffer
+import kotlin.math.roundToInt
+
+/** JNI bridge to libnuviothumb (app/src/main/cpp/thumb_shim.cpp). */
+@androidx.annotation.Keep
+internal object ThumbNative {
+    const val INFO_WIDTH = 0
+    const val INFO_HEIGHT = 1
+    const val INFO_BIT_DEPTH = 2
+    const val INFO_SAR_NUM = 3
+    const val INFO_SAR_DEN = 4
+    const val INFO_TRC = 5
+    const val INFO_PRIMARIES = 6
+    const val INFO_MATRIX = 7
+    const val INFO_RANGE = 8
+    const val INFO_MAX_CLL = 9
+    const val INFO_MASTERING_MAX_NITS = 10
+    const val INFO_DOVI_IPT = 11
+    const val INFO_COUNT = 12
+
+    private val retry = NativeLoadBackoff()
+    @Volatile private var libraryLoaded = false
+    @Volatile private var ready = false
+    val available: Boolean get() = load()
+    fun load(): Boolean {
+        if (ready) return true
+        synchronized(this) {
+            if (ready) return true
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!retry.mayTry(now)) return false
+            try {
+                if (!libraryLoaded) { System.loadLibrary("reshaped_preview"); libraryLoaded = true }
+                if (nativeInit()) { ready = true; return true }
+            } catch (error: LinkageError) { PreviewDiagnostics.note("native load failed: ${error.message}") }
+            retry.failed(now)
+            return false
+        }
+    }
+    fun state(): String = if (ready) "ok" else "unavailable (${retry.failures} attempts)"
+
+    @JvmStatic external fun nativeInit(): Boolean
+    @JvmStatic external fun nativeBackend(): String
+    /** [decoder]: FFmpeg decoder name. width/height: coded size. */
+    @JvmStatic external fun nativeOpen(decoder: String, extradata: ByteArray?, width: Int, height: Int, threads: Int): Long
+    @JvmStatic external fun nativeDecode(handle: Long, data: ByteArray, len: Int, info: IntArray): Int
+    /** As [nativeDecode], from a direct buffer: the native side copies from its address, no Java array. */
+    @JvmStatic external fun nativeDecodeDirect(handle: Long, data: ByteBuffer, len: Int, info: IntArray): Int
+    @JvmStatic external fun nativeRender(
+        handle: Long, bitmap: Bitmap, transfer: Int, bt2020: Boolean, fullRange: Boolean,
+        peakNits: Float, rowSkip: Boolean,
+    ): Int
+    @JvmStatic external fun nativeTrim(handle: Long)
+    @JvmStatic external fun nativeRelease(handle: Long)
+    /** Returns freed allocator pages to the system (mallopt M_PURGE). */
+    @JvmStatic external fun nativePurge()
+}
+
+internal class DecodedFrame(
+    val width: Int,
+    val height: Int,
+    val sarNum: Int,
+    val sarDen: Int,
+    val colour: FrameColour,
+)
+
+internal object ThumbGeometry {
+    const val MAX_WIDTH = 480
+
+    /** Output size from the display aspect (container first, then the bitstream's SAR). Never upscaled, even height. */
+    fun outputSize(frameW: Int, frameH: Int, sarNum: Int, sarDen: Int, containerAspect: Double,
+                   maxWidth: Int = MAX_WIDTH): IntArray {
+        val limit = maxWidth.coerceIn(2, MAX_WIDTH) and 1.inv()
+        val dar = when {
+            containerAspect > 0.0 -> containerAspect
+            sarNum > 0 && sarDen > 0 -> frameW.toDouble() * sarNum / (frameH.toDouble() * sarDen)
+            else -> frameW.toDouble() / frameH
+        }.takeIf { it.isFinite() && it > 0.1 && it < 10.0 } ?: (frameW.toDouble() / frameH)
+        val displayW = (frameH * dar).roundToInt().coerceAtLeast(2)
+        val w = minOf(limit, displayW, (limit * dar).toInt().coerceAtLeast(2)) and 1.inv()
+        val h = ((w / dar).roundToInt() and 1.inv()).coerceIn(2, limit)
+        return intArrayOf(w.coerceAtLeast(2), h)
+    }
+
+    /** Smaller render/encode working set on low-RAM TVs; this does not reduce the video decoder's memory charge. */
+    fun outputSizeForDevice(frameW: Int, frameH: Int, sarNum: Int, sarDen: Int, containerAspect: Double): IntArray =
+        outputSize(frameW, frameH, sarNum, sarDen, containerAspect, if (MemoryGovernor.isLowRam) 384 else MAX_WIDTH)
+}
+
+/**
+ * Software keyframe decoder over the in-APK FFmpeg. One context, reused across a title's keyframes.
+ * Not thread-safe: each decode lane owns one.
+ */
+internal class FfmpegThumbDecoder : Closeable {
+    private var handle = 0L
+    private var handleTrack: VideoTrack? = null
+    private var handleThreads = 0
+    private val info = IntArray(ThumbNative.INFO_COUNT)
+    private var decodedSinceTrim = false
+    @Volatile private var directDecode = true
+
+    /** The working set is allocated and already missing from MemAvailable, so the governor must not charge it again. */
+    val warm: Boolean get() = handle != 0L && decodedSinceTrim
+
+    /** [annexB]: one keyframe access unit, Annex-B for H.264/HEVC, the raw sample otherwise. */
+    fun decode(annexB: ByteArray, track: VideoTrack, threads: Int): DecodedFrame? {
+        if (!open(track, threads)) return null
+        return frame(ThumbNative.nativeDecode(handle, annexB, annexB.size, info))
+    }
+
+    /** As above, from a buffer; a direct one reaches FFmpeg without a copy on the Java heap. */
+    fun decode(au: ThumbAu, track: VideoTrack, threads: Int): DecodedFrame? {
+        if (!open(track, threads)) return null
+        val d = au.data
+        val r = when {
+            d.isDirect && directDecode -> try {
+                ThumbNative.nativeDecodeDirect(handle, d, au.length, info)
+            } catch (e: UnsatisfiedLinkError) {
+                directDecode = false
+                ThumbNative.nativeDecode(handle, au.toByteArray(), au.length, info)
+            }
+            d.hasArray() && d.arrayOffset() == 0 -> ThumbNative.nativeDecode(handle, d.array(), au.length, info)
+            else -> ThumbNative.nativeDecode(handle, au.toByteArray(), au.length, info)
+        }
+        return frame(r)
+    }
+
+    private fun open(track: VideoTrack, threads: Int): Boolean {
+        if (!PreviewLimits.supportedSize(track.width, track.height)) return false
+        if (!ThumbNative.available) return false
+        if (handle == 0L || handleTrack !== track || handleThreads != threads) {
+            close()
+            handle = ThumbNative.nativeOpen(
+                track.codec.ffmpegName, track.extradata.takeIf { it.isNotEmpty() }, track.width, track.height, threads,
+            )
+            if (handle == 0L) {
+                PreviewDiagnostics.note("decoder unavailable: ${track.codec.ffmpegName}")
+                Log.w("ThumbDecode", "no ${track.codec.ffmpegName} decoder in this FFmpeg")
+                return false
+            }
+            handleTrack = track
+            handleThreads = threads
+        }
+        return true
+    }
+
+    private fun frame(r: Int): DecodedFrame? {
+        if (r < 0) {
+            PreviewDiagnostics.note("decode failed: $r")
+            Log.w("ThumbDecode", "decode failed: $r")
+            return null
+        }
+        if (!PreviewLimits.supportedSize(info[ThumbNative.INFO_WIDTH], info[ThumbNative.INFO_HEIGHT])) return null
+        decodedSinceTrim = true
+        return DecodedFrame(
+            width = info[ThumbNative.INFO_WIDTH],
+            height = info[ThumbNative.INFO_HEIGHT],
+            sarNum = info[ThumbNative.INFO_SAR_NUM],
+            sarDen = info[ThumbNative.INFO_SAR_DEN],
+            colour = FrameColour(
+                bitDepth = info[ThumbNative.INFO_BIT_DEPTH],
+                transfer = info[ThumbNative.INFO_TRC],
+                primaries = info[ThumbNative.INFO_PRIMARIES],
+                matrix = info[ThumbNative.INFO_MATRIX],
+                range = info[ThumbNative.INFO_RANGE],
+                maxCll = info[ThumbNative.INFO_MAX_CLL],
+                masteringMaxNits = info[ThumbNative.INFO_MASTERING_MAX_NITS],
+                doviIpt = info[ThumbNative.INFO_DOVI_IPT] != 0,
+            ),
+        )
+    }
+
+    /**
+     * Renders the last decoded frame into a new full-colour bitmap (stored as WebP from full colour, so no banding is
+     * saved). Every other source row is skipped only for 4K-sized sources.
+     */
+    fun render(frame: DecodedFrame, decision: ColourDecision, outW: Int, outH: Int): Bitmap? {
+        if (handle == 0L) return null
+        val bmp = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        val rowSkip = frame.height >= 6 * outH
+        val r = ThumbNative.nativeRender(
+            handle, bmp, decision.transfer.nativeCode, decision.bt2020, decision.fullRange,
+            decision.peakNits, rowSkip,
+        )
+        if (r < 0) {
+            PreviewDiagnostics.note("render failed: $r")
+            Log.w("ThumbDecode", "render failed: $r")
+            bmp.recycle()
+            return null
+        }
+        return bmp
+    }
+
+    fun trim() {
+        if (handle != 0L) ThumbNative.nativeTrim(handle)
+        decodedSinceTrim = false
+    }
+
+    override fun close() {
+        decodedSinceTrim = false
+        if (handle != 0L) {
+            ThumbNative.nativeRelease(handle)
+            handle = 0L
+            handleTrack = null
+        }
+    }
+}
+
+/** One decode lane and its decoder. Close and trim asked for during a decode are done once it ends. */
+internal class DecoderLane {
+    val decoder = FfmpegThumbDecoder()
+    private var busy = false
+    private var closeWhenFree = false
+    private var trimWhenFree = false
+
+    val inUse: Boolean get() = synchronized(this) { busy }
+    val closePending: Boolean get() = synchronized(this) { closeWhenFree }
+
+    fun acquire() {
+        synchronized(this) { busy = true }
+    }
+
+    fun release() {
+        synchronized(this) {
+            busy = false
+            if (closeWhenFree) decoder.close() else if (trimWhenFree) decoder.trim()
+            closeWhenFree = false
+            trimWhenFree = false
+        }
+    }
+
+    fun close() {
+        synchronized(this) {
+            if (!busy) decoder.close()
+            closeWhenFree = busy
+        }
+    }
+
+    fun trim() {
+        synchronized(this) {
+            if (!busy) decoder.trim()
+            trimWhenFree = busy
+        }
+    }
+}
+
+/** When a failed native load may be tried again: [FIRST_WAIT_MS] after the first failure, doubling, at most [MAX_WAIT_MS]. */
+internal class NativeLoadBackoff {
+    companion object {
+        const val FIRST_WAIT_MS = 60_000L
+        const val MAX_WAIT_MS = 15 * 60_000L
+    }
+
+    @Volatile var failures = 0
+        private set
+    private var nextTryAtMs = Long.MIN_VALUE
+
+    fun mayTry(nowMs: Long): Boolean = nowMs >= nextTryAtMs
+
+    fun failed(nowMs: Long) {
+        failures++
+        nextTryAtMs = nowMs + (FIRST_WAIT_MS shl (failures - 1).coerceAtMost(10)).coerceAtMost(MAX_WAIT_MS)
+    }
+
+    fun waitMs(nowMs: Long): Long = if (failures == 0) 0L else (nextTryAtMs - nowMs).coerceAtLeast(0L)
+}

@@ -1,6 +1,5 @@
-- Live TV guide: a channel whose EPG id is listed without programmes, or whose name the EPG lists twice ("VRT 1" and "VRT 1 HD"), now shows the entry that has programmes instead of "No guide".
-- Live TV guide: EPG ids and names with accents match whichever way the playlist and the EPG write them.
-- Live TV guide: EPG files that list each channel next to its own programmes (or several guides joined together) now match every channel by name, not just the first.
-- Live TV guide: a guide download that was cut off part way no longer replaces the last good guide.
-- Live TV guide: when two sources list the same stream link (for example your provider and an edited copy of its playlist), a copy without a guide shows the other copy's programmes, in My playlists too.
-- Live TV guide: names with a country tag ("UK: Discovery") prefer the EPG entry of the same country over another country's.
+- Now built on Nuvio TV 1.1.0-beta.7 (everything in Beta 1.1.0-beta.7-autosync.2 is in this build).
+- Nuvio Arc's sound format handling: TrueHD and DTS-HD (including Atmos and DTS:X) are sent lossless to your receiver through Arc's own IEC path, surround is matched to what your TV, soundbar or receiver reports, and a format the receiver refuses is learned and decoded instead, then tried again when the output changes. Tunnelled playback that freezes is rebuilt without the tunnel.
+- Nuvio Arc's Dolby Vision handling: Profile 7 is converted to 8.1 on every Dolby Vision TV, Dolby Vision decoders that fail to start fall back step by step instead of erroring, and HDR10 metadata can be added when Dolby Vision is stripped. The Dolby Vision converter (libdovi) is now part of the app.
+- New section Settings > Nuvio Reshaped > Sound and picture formats. One switch turns Arc's sound handling off and plays sound exactly as Nuvio does.
+- The stats overlay shows the audio path (passthrough, IEC, decoded or transcoded) and what happens to Dolby Vision.

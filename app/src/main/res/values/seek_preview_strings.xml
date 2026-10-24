@@ -7,5 +7,19 @@
     <string name="player_seek_preview_sync_suggested">Suggested: %1$s (duration gap vs. the preview source)</string>
     <string name="cd_seek_preview_sync">Preview sync</string>
     <string name="settings_seek_preview_local">Generate previews on device</string>
-    <string name="settings_seek_preview_local_description">Makes seek thumbnails from what playback already downloaded, so they always line up and cost no extra data. Seekr fills in the parts you have not watched yet.</string>
+    <string name="settings_seek_preview_local_description">Builds seek previews in the background while you watch, using cached playback data or small downloads when resources allow. Playback starts immediately. Seekr is also used when available.</string>
+    <string name="settings_seek_preview_prepare">Prepare previews before playing</string>
+    <string name="settings_seek_preview_prepare_description">Build previews across the title first. You can start watching at any time.</string>
+    <string name="settings_seek_preview_coverage">Preview preparation coverage</string>
+    <string name="settings_seek_preview_full">Full · more previews before playing</string>
+    <string name="settings_seek_preview_faster">Faster · balanced coverage</string>
+    <string name="settings_seek_preview_fastest">Fastest · sparse coverage first</string>
+    <string name="settings_seek_preview_copies">Use a smaller copy for previews</string>
+    <string name="settings_seek_preview_copies_description">Use an available smaller file after checking that its pictures and timing match.</string>
+    <string name="settings_seek_preview_next">Prepare next episode previews</string>
+    <string name="settings_seek_preview_next_description">Prepare previews from preloaded episode sources when playback has resources to spare.</string>
+    <string name="seek_preview_preparing">Preparing seek previews</string>
+    <string name="seek_preview_preparing_progress">%1$d of %2$d previews ready</string>
+    <string name="seek_preview_preparing_ready">Previews ready</string>
+    <string name="seek_preview_start_now">Start watching now</string>
 </resources>

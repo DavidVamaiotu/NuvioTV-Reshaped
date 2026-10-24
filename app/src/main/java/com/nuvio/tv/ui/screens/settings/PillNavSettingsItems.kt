@@ -20,14 +20,21 @@ internal fun LazyListScope.pillNavSettingsItems(
         val context = LocalContext.current
         PillNavPreferences.ensureLoaded(context)
         val checked by PillNavPreferences.enabled.collectAsStateWithLifecycle()
+        com.nuvio.tv.ui.reshaped.netflix.NetflixUiPreferences.ensureLoaded(context)
+        val forcedByNetflixUi by com.nuvio.tv.ui.reshaped.netflix.NetflixUiPreferences.enabled.collectAsStateWithLifecycle()
 
         ToggleSettingsItem(
             icon = Icons.Default.Menu,
             title = stringResource(R.string.settings_pill_nav_title),
-            subtitle = stringResource(R.string.settings_pill_nav_description),
-            isChecked = checked,
+            subtitle = if (forcedByNetflixUi) {
+                stringResource(R.string.settings_pill_nav_forced_by_netflix_ui)
+            } else {
+                stringResource(R.string.settings_pill_nav_description)
+            },
+            isChecked = checked || forcedByNetflixUi,
             onCheckedChange = { PillNavPreferences.setEnabled(context, it) },
             onFocused = onItemFocused,
+            enabled = !forcedByNetflixUi,
         )
     }
 }

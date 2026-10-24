@@ -919,6 +919,7 @@ internal fun PlayerRuntimeController.handleVc1PlaybackFailure(errorMessage: Stri
     val displayMessage = errorMessage?.takeIf { it.isNotBlank() }
         ?: _exoPlayer?.playerError?.toDisplayMessage(context)
         ?: return
+    if (autoSourceRecovery?.failDefinitively(displayMessage) == true) return
     cancelFirstFrameWatchdog()
     cancelStallWatchdog()
     cancelStableProgressReset()
@@ -948,6 +949,7 @@ internal fun PlayerRuntimeController.scheduleDeferredPlayerReinitialize(
     clearResumeProgress: Boolean = false
 ) {
     cancelFirstFrameWatchdog()
+    cancelTunnelAvSyncWatchdog() // Nuvio RS hook: Arc formats
     cancelStallWatchdog()
     if (clearResumeProgress) {
         pendingResumeProgress = null
@@ -965,9 +967,11 @@ internal fun PlayerRuntimeController.scheduleDeferredPlayerReinitialize(
             releasePlayer(flushPlaybackState = true, keepTorrentStream = true)
             initializePlayer(currentStreamUrl, currentHeaders)
         }.onFailure { e ->
+            val message = e.toDisplayMessage(context)
+            if (autoSourceRecovery?.failDefinitively(message) == true) return@onFailure
             _uiState.update {
                 it.copy(
-                    error = e.toDisplayMessage(context),
+                    error = message,
                     showLoadingOverlay = false,
                     showPauseOverlay = false
                 )

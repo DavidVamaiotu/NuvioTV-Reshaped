@@ -31,6 +31,8 @@ internal fun parseM3uPlaylist(lines: Sequence<String>, baseUrl: String? = null):
     var isHlsStream = false
     // Catch-up the playlist header gives every channel, and one shared instance per kind.
     var defaultCatchup: Map<String, String> = emptyMap()
+    // The header's `tvg-shift`: every channel's, unless it gives its own.
+    var defaultShift = 0
     val catchups = HashMap<LiveTvCatchup, LiveTvCatchup>()
 
     for (rawLine in lines) {
@@ -42,6 +44,7 @@ internal fun parseM3uPlaylist(lines: Sequence<String>, baseUrl: String? = null):
                 sawPlaylistTag = true
                 val attributes = parseM3uAttributes(line)
                 defaultCatchup = attributes.filterKeys { it in CATCHUP_ATTRIBUTES }
+                defaultShift = m3uGuideShiftMinutes(attributes["tvg-shift"]) ?: 0
                 listOfNotNull(attributes["url-tvg"], attributes["x-tvg-url"], attributes["tvg-url"])
                     .flatMap { it.split(',', ';') }
                     .map(String::trim)
@@ -99,6 +102,7 @@ internal fun parseM3uPlaylist(lines: Sequence<String>, baseUrl: String? = null):
                     logoUrl = current?.logoUrl,
                     tvgName = current?.tvgName?.takeIf { it != name },
                     catchup = m3uCatchup(current?.catchup.orEmpty(), defaultCatchup)?.let { catchups.getOrPut(it) { it } },
+                    guideShiftMinutes = current?.guideShiftMinutes ?: defaultShift,
                     group = groups.getOrPut(group) { group },
                     headers = if (extraHeaders.isEmpty()) {
                         defaults
@@ -125,7 +129,19 @@ private class M3uMetadata(
     val group: String,
     /** The entry's catch-up attributes, usually none. */
     val catchup: Map<String, String>,
+    /** The entry's own `tvg-shift`, when it gives one. */
+    val guideShiftMinutes: Int? = null,
 )
+
+/**
+ * `tvg-shift` in minutes: hours, decimals allowed ("-4.5"), as IPTV players read it; a value
+ * beyond a day is not a time zone and is ignored.
+ */
+internal fun m3uGuideShiftMinutes(value: String?): Int? {
+    val hours = value?.trim()?.replace(',', '.')?.toDoubleOrNull() ?: return null
+    if (hours.isNaN() || hours < -24.0 || hours > 24.0) return null
+    return Math.round(hours * 60).toInt()
+}
 
 private val CATCHUP_ATTRIBUTES = setOf("catchup", "catchup-type", "catchup-days", "catchup-source", "tvg-rec", "timeshift")
 
@@ -166,6 +182,7 @@ private fun parseExtInf(line: String): M3uMetadata {
         tvgId = attributes["tvg-id"]?.takeIf(String::isNotBlank),
         tvgName = attributes["tvg-name"]?.takeIf(String::isNotBlank),
         catchup = if (attributes.keys.any(CATCHUP_ATTRIBUTES::contains)) attributes.filterKeys(CATCHUP_ATTRIBUTES::contains) else emptyMap(),
+        guideShiftMinutes = m3uGuideShiftMinutes(attributes["tvg-shift"]),
         logoUrl = attributes["tvg-logo"]?.takeIf(String::isNotBlank),
         group = attributes["group-title"].orEmpty(),
     )

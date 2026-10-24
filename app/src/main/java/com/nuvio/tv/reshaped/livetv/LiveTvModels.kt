@@ -24,6 +24,8 @@ data class LiveTvChannel(
     val tvgName: String? = null,
     /** How past programmes of this channel can be played again; null when the provider keeps none. */
     val catchup: LiveTvCatchup? = null,
+    /** The playlist's `tvg-shift`: minutes its guide's times are moved by (a guide in another time zone). */
+    val guideShiftMinutes: Int = 0,
 )
 
 /**
@@ -216,7 +218,8 @@ data class LiveTvUiState(
 
 /** How a source's guide did: none offered, loading, read for [channels] channels, or failed. */
 @Immutable
-data class LiveTvSourceGuide(val state: State, val channels: Int = 0) {
+/** How a source's guide did; [retrying] when what shows is from an older or incomplete read. */
+data class LiveTvSourceGuide(val state: State, val channels: Int = 0, val retrying: Boolean = false) {
     enum class State { None, Loading, Loaded, Failed }
 
     companion object {

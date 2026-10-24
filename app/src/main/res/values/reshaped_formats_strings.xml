@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nuvio RS: sound and picture format handling ported from Nuvio Arc. Labels follow Arc's wording. -->
+<resources>
+    <string name="reshaped_formats_output_changed">Audio output changed during recovery. Start playback again.</string>
+
+    <string name="reshaped_formats_header">Sound and picture formats</string>
+    <string name="reshaped_formats_header_description">Nuvio Arc\'s handling of TrueHD, DTS-HD, Atmos, surround and Dolby Vision. Built-in player only.</string>
+    <string name="reshaped_formats_enabled">Arc format handling</string>
+    <string name="reshaped_formats_enabled_sub">Lossless passthrough for TrueHD and DTS-HD, surround matched to your audio system, and Arc\'s recovery when a receiver refuses a format. Off plays sound exactly as Nuvio does.</string>
+
+    <string name="reshaped_formats_use_system_passthrough">System passthrough</string>
+    <string name="reshaped_formats_use_system_passthrough_sub">Sends TrueHD and DTS-HD to your receiver through Android instead of the app\'s IEC path. Use this if lossless formats produce noise, drift or no audio.</string>
+    <string name="reshaped_formats_surround_mode">Surround format</string>
+    <string name="reshaped_formats_surround_mode_auto">Auto (recommended)</string>
+    <string name="reshaped_formats_surround_mode_auto_desc">Passes through the formats your audio system reports it can decode, and decodes the rest in the app.</string>
+    <string name="reshaped_formats_surround_mode_manual">Manual</string>
+    <string name="reshaped_formats_surround_mode_manual_desc">Choose per format whether your audio system can decode it. Use this when the automatic report is wrong.</string>
+    <string name="reshaped_formats_tv_arc_soundbar">Sound goes through the TV to a soundbar (ARC)</string>
+    <string name="reshaped_formats_tv_arc_soundbar_sub">Converts formats the soundbar cannot take to Dolby Digital 5.1 and sends other decoded sound as stereo. Dolby Digital and Dolby Digital Plus pass through untouched.</string>
+    <string name="reshaped_formats_allow_ac3">Dolby Digital (AC-3) capable receiver</string>
+    <string name="reshaped_formats_allow_ac3_sub">Off decodes AC-3 to PCM in the app. Turn off only if your receiver or TV cannot decode AC-3.</string>
+    <string name="reshaped_formats_allow_eac3">Dolby Digital Plus (E-AC-3) capable receiver</string>
+    <string name="reshaped_formats_allow_eac3_sub">Covers DD+ and DD+ Atmos. Off decodes to PCM. Turn off only if your receiver cannot decode Dolby Digital Plus.</string>
+    <string name="reshaped_formats_allow_truehd">Dolby TrueHD capable receiver</string>
+    <string name="reshaped_formats_allow_truehd_sub">Covers TrueHD and TrueHD Atmos. Off decodes to PCM and loses Atmos. Turn off only if your receiver cannot decode TrueHD.</string>
+    <string name="reshaped_formats_allow_dts">DTS capable receiver</string>
+    <string name="reshaped_formats_allow_dts_sub">Off decodes DTS to PCM. Turn off if your receiver or TV cannot decode DTS; some TVs no longer license it.</string>
+    <string name="reshaped_formats_allow_dtshd">DTS-HD capable receiver</string>
+    <string name="reshaped_formats_allow_dtshd_sub">Covers DTS-HD MA, HRA and DTS:X. Off decodes to PCM and loses DTS:X. Turn off if your receiver handles DTS but not DTS-HD.</string>
+    <string name="reshaped_formats_transcode_denied">Transcode switched-off formats to AC-3</string>
+    <string name="reshaped_formats_transcode_denied_sub">Re-encodes the formats switched off above to Dolby Digital 5.1 instead of PCM. For receivers limited to 2-channel PCM; leave off if yours takes multichannel PCM.</string>
+    <string name="reshaped_formats_channel_target">Decode channel target</string>
+    <string name="reshaped_formats_channel_target_sub">Channel layout for audio the app decodes. Auto follows what your audio system reports.</string>
+    <string name="reshaped_formats_channel_auto">Auto</string>
+    <string name="reshaped_formats_channel_2_0">2.0 Stereo</string>
+    <string name="reshaped_formats_channel_5_1">5.1</string>
+    <string name="reshaped_formats_channel_7_1">7.1</string>
+    <string name="reshaped_formats_device_only_note">Your audio decoder is set to device only in Playback settings, so the app cannot decode or convert formats.</string>
+
+    <string name="reshaped_formats_reset_iec_probe">Test lossless passthrough again</string>
+    <string name="reshaped_formats_reset_iec_probe_sub">Tests IEC 61937 output again. Use this if TrueHD or DTS-HD fall back to PCM after changing receiver or input.</string>
+    <string name="reshaped_formats_iec_probe_checking">Checking lossless passthrough</string>
+    <string name="reshaped_formats_iec_probe_available">Lossless passthrough opened. TrueHD and DTS-HD will be sent on this connection.</string>
+    <string name="reshaped_formats_iec_probe_unavailable">Lossless passthrough is not available on this connection. TrueHD and DTS-HD use your device default instead.</string>
+    <string name="reshaped_formats_forget_rejections">Forget learned audio refusals</string>
+    <string name="reshaped_formats_forget_rejections_sub">Formats your receiver refused to open are not sent to it as passthrough. This lets them be tried again.</string>
+    <string name="reshaped_formats_forget_rejections_none">Nothing learned</string>
+    <string name="reshaped_formats_forget_rejections_done">Learned audio refusals cleared</string>
+    <string name="reshaped_formats_forget_tunnel_stalls">Forget tunnel stalls</string>
+    <string name="reshaped_formats_forget_tunnel_stalls_sub">Tunnel off for: %1$s. Lets the next video try tunnelling again.</string>
+    <string name="reshaped_formats_forget_tunnel_stalls_none">Nothing remembered</string>
+    <string name="reshaped_formats_forget_tunnel_stalls_done">Tunnel stalls forgotten</string>
+
+    <string name="reshaped_formats_inject_hdr10">Add HDR10 metadata when Dolby Vision is stripped</string>
+    <string name="reshaped_formats_inject_hdr10_sub">For Dolby Vision Profile 8 played as its HDR10 base layer, adds the source\'s mastering metadata (MaxCLL, MaxFALL and peak brightness) so HDR10 TVs tone-map correctly. Only active when DV handling in Playback settings is Strip DV or HDR10 base layer.</string>
+</resources>
