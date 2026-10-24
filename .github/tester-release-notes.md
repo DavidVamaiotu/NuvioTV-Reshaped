@@ -1,3 +1,4 @@
-- TorBox movie sprite sheets now preload in the background from the current playback position, with two downloads and priority for requested seek positions.
-- Added an 8 MiB compressed-sheet RAM cache, a separate 3 MiB decoded-tile cache, and a bounded 128 MiB disk cache. Reopening a movie reuses verified sheets, and only requested tiles are decoded.
-- Retained request pacing and Retry-After handling. Prefetch stops when leaving the movie, and concurrent requests for the same sheet share one download.
+- Updated to upstream Nuvio TV 1.1.0-beta.8, including chapter controls, HDR subtitle styles, the new libass subtitle renderer, stream audio-delay hints, and Nuvio engine 0.1.6.
+- Kept Reshaped settings, AutoSync/AudioSync, seek previews, source recovery, Arc sound and picture controls, and pill navigation. Chapter controls work alongside seek previews.
+- Background update downloads and optional automatic installs follow Reshaped's Beta and Tester channels, including safe moves between them.
+- Fixed the ARM32-only tester build. TorBox sprite prefetching and its bounded memory/disk caches remain available.

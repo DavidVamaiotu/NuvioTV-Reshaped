@@ -12,12 +12,23 @@
         <package android:name="com.nuvioreshaped.tv" />
     </queries>
 
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+
     <application>
         <provider
             android:name="com.nuvio.tv.reshaped.ReshapedMigrationProvider"
             android:authorities="${applicationId}.reshaped.migration"
             android:exported="true"
             android:permission="com.nuvio.reshaped.tv.permission.MIGRATE" />
-    </application>
+
+        <service
+            android:name=".updater.UpdateJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <receiver
+            android:name=".updater.UpdateInstallResultReceiver"
+            android:exported="false" />
+        </application>
 
 </manifest>

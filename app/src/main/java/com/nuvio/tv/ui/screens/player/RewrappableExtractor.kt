@@ -5,9 +5,9 @@ package com.nuvio.tv.ui.screens.player
 import androidx.media3.extractor.Extractor
 
 /**
- * Nuvio RS: an extractor wrapper (AutoSync, audio sync, seek previews) that forwards everything
- * to [wrappedExtractor] and can be rebuilt around a different inner extractor. Lets Nuvio swap in
- * the libass Matroska extractor underneath the wrappers, where it would otherwise not see it.
+ * An extractor wrapper that forwards everything to [wrappedExtractor] and can be rebuilt around a
+ * different inner extractor. Lets the libass Matroska swap replace the innermost extractor while
+ * keeping the wrappers around it (e.g. AutoSync's embedded subtitle observer).
  */
 internal interface RewrappableExtractor : Extractor {
     val wrappedExtractor: Extractor
@@ -15,7 +15,7 @@ internal interface RewrappableExtractor : Extractor {
     fun rewrap(inner: Extractor): Extractor
 }
 
-/** Returns this extractor's wrappers rebuilt around [replacement] in place of the innermost extractor. */
+/** This extractor's wrappers rebuilt around [replacement] in place of the innermost extractor. */
 internal fun Extractor.replaceInnermostExtractor(replacement: Extractor): Extractor =
     if (this is RewrappableExtractor) {
         rewrap(wrappedExtractor.replaceInnermostExtractor(replacement))

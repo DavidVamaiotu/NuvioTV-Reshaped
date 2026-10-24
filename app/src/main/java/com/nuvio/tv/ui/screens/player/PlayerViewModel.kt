@@ -296,6 +296,8 @@ class PlayerViewModel @Inject constructor(
         controller.onEvent(seekPreview.intercept(event))
     }
 
+    fun playerMediaInfo(): PlayerMediaInfo = controller.playerMediaInfo()
+
     fun bindExoSubtitleView(subtitleView: androidx.media3.ui.SubtitleView?) {
         controller.bindExoSubtitleView(subtitleView)
     }
