@@ -315,6 +315,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/test_seek_preview_native.py
+          # Includes cancellation and Reshaped networking regressions.
           ./gradlew :app:testFullReleaseUnitTest --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$TESTER_TAG"
 
