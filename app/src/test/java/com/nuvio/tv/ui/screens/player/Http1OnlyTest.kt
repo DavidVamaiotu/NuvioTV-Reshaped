@@ -16,8 +16,8 @@ class Http1OnlyTest {
     }
 
     @Test
-    fun `base playback clients and the tls fallback speak http 1_1 only`() {
-        assertEquals(listOf(Protocol.HTTP_1_1), PlayerPlaybackNetworking.playbackHttpClient.protocols)
-        assertEquals(listOf(Protocol.HTTP_1_1), PlayerPlaybackNetworking.trustAllPlaybackHttpClient.protocols)
+    fun `base playback clients and the tls fallback retain http2 capability`() {
+        assertEquals(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1), PlayerPlaybackNetworking.playbackHttpClient.protocols)
+        assertEquals(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1), PlayerPlaybackNetworking.trustAllPlaybackHttpClient.protocols)
     }
 }
