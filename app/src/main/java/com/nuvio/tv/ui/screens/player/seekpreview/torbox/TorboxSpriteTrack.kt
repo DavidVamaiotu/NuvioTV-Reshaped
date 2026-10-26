@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
 import android.graphics.Rect
+import com.nuvio.tv.ui.screens.player.seekpreview.colourmatch.PreviewColourAdjustment
+import com.nuvio.tv.ui.screens.player.seekpreview.colourmatch.PreviewColourTarget
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewThumbnail
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewTrack
 import kotlinx.coroutines.CancellationException
@@ -43,7 +45,7 @@ import kotlin.math.roundToLong
 
 /**
  * Reads an already-added preview torrent using the viewer's own TorBox account.
- * Compressed sheets are prefetched and cached; only requested tiles are region-decoded.
+ * Compressed sheets are prefetched and cached; nearby requested tiles share a bounded decode.
  */
 internal class TorboxSpriteTrack private constructor(
     private val http: PreviewTorboxHttp,
@@ -53,6 +55,30 @@ internal class TorboxSpriteTrack private constructor(
     cacheDirectory: File
 ) : SeekPreviewTrack {
     override var offsetMs: Long = 0L
+    private val colourRevision = MutableStateFlow(0)
+    override val revision: StateFlow<Int> get() = colourRevision
+    @Volatile private var colourAdjustment: PreviewColourAdjustment? = null
+
+    fun acceptColourAdjustment(adjustment: PreviewColourAdjustment) {
+        if (closed || adjustment.isIdentity) return
+        colourAdjustment = adjustment
+        colourRevision.value++
+    }
+
+    fun nextColourTarget(positionMs: Long): PreviewColourTarget? {
+        if (closed || offsetMs != 0L) return null
+        return timeline.frames.firstOrNull { it.actualMs >= positionMs }
+            ?.let { PreviewColourTarget(it.startMs, it.actualMs) }
+    }
+
+    suspend fun colourReference(target: PreviewColourTarget): Bitmap? =
+        rawThumbnail(target.lookupMs, markUnavailable = false)?.bitmap
+
+    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
+        rawThumbnail(positionMs, markUnavailable = true)?.let { thumbnail ->
+            colourAdjustment?.let { thumbnail.copy(colourAdjustment = it) } ?: thumbnail
+        }
+
     private val mutex = Mutex()
     private val bytes = TorboxSpriteByteCache(TorboxSpriteDiskCache(cacheDirectory))
     private val warming = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -87,7 +113,7 @@ internal class TorboxSpriteTrack private constructor(
         http.file(batch, "$directory/${sheet.path}", sheet.bytes)
     }
 
-    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? = withContext(Dispatchers.IO) {
+    private suspend fun rawThumbnail(positionMs: Long, markUnavailable: Boolean): SeekPreviewThumbnail? = withContext(Dispatchers.IO) {
         if (closed || !healthy.value) return@withContext null
         val frame = timeline.frameAt(positionMs + offsetMs) ?: return@withContext null
         mutex.withLock { tiles[frame.startMs] }?.let { return@withContext it }
@@ -99,33 +125,59 @@ internal class TorboxSpriteTrack private constructor(
             mutex.withLock {
                 if (closed || !healthy.value) return@withLock null
                 tiles[frame.startMs]?.let { return@withLock it }
-                @Suppress("DEPRECATION")
-                val decoder = BitmapRegionDecoder.newInstance(data, 0, data.size, false)
-                    ?: throw IOException("No sprite decoder")
-                val bitmap: Bitmap
-                try {
-                    require(decoder.width == sheet.width && decoder.height == sheet.height)
-                    bitmap = decoder.decodeRegion(Rect(frame.x, frame.y, frame.x + frame.width, frame.y + frame.height),
-                        BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 })
-                        ?: throw IOException("No sprite tile")
-                } finally { decoder.recycle() }
-                coroutineContext.ensureActive()
-                if (closed) { bitmap.recycle(); return@withLock null }
-                val picture = SeekPreviewThumbnail(bitmap, frame.startMs, frame.endMs,
-                    approximate = !match.exactSource, origin = "TORBOX",
-                    actualFrameMs = if (match.exactSource) frame.actualMs else null)
-                tiles[frame.startMs] = picture
-                bitmapBytes += bitmap.byteCount
-                while (bitmapBytes > 3 * 1024 * 1024 && tiles.size > 1) {
-                    val first = tiles.entries.iterator()
-                    bitmapBytes -= first.next().value.bitmap.byteCount
-                    first.remove() // Compose may still reference a tile: never recycle a displayed bitmap.
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+                require(bounds.outWidth == sheet.width && bounds.outHeight == sheet.height)
+                val center = timeline.frames.binarySearchBy(frame.startMs) { it.startMs }
+                val nearby = (center - 2..center + 2).mapNotNull { timeline.frames.getOrNull(it) }
+                    .filter { it.sheet == sheet.path && tiles[it.startMs] == null }
+                    .sortedByDescending { kotlin.math.abs(it.startMs - frame.startMs) } // Keep the center most recent in the LRU.
+
+                fun keep(tile: com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxSpriteFrame, bitmap: Bitmap) {
+                    val picture = SeekPreviewThumbnail(bitmap, tile.startMs, tile.endMs,
+                        approximate = !match.exactSource, origin = "TORBOX",
+                        actualFrameMs = if (match.exactSource) tile.actualMs else null)
+                    tiles[tile.startMs] = picture
+                    bitmapBytes += bitmap.byteCount
+                    while (bitmapBytes > 3 * 1024 * 1024 && tiles.size > 1) {
+                        val first = tiles.entries.iterator()
+                        bitmapBytes -= first.next().value.bitmap.byteCount
+                        first.remove() // A displayed tile may still be referenced by Compose.
+                    }
                 }
-                picture
+                if (sheet.width.toLong() * sheet.height <= 2_000_000L) {
+                    // A small 5x5 WebP is cheaper to decode once than to decode the same
+                    // compressed image again for every neighboring region. The full image
+                    // is transient (at most 8 MiB), never retained in the tile cache.
+                    val full = BitmapFactory.decodeByteArray(data, 0, data.size,
+                        BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 })
+                        ?: throw IOException("No sprite decoder")
+                    try {
+                        for (tile in nearby) {
+                            coroutineContext.ensureActive()
+                            if (closed) break
+                            val extracted = Bitmap.createBitmap(full, tile.x, tile.y, tile.width, tile.height)
+                            val independent = if (extracted === full)
+                                full.copy(Bitmap.Config.ARGB_8888, false) ?: throw IOException("No sprite tile") else extracted
+                            keep(tile, independent)
+                        }
+                    } finally { full.recycle() }
+                } else {
+                    @Suppress("DEPRECATION")
+                    val decoder = BitmapRegionDecoder.newInstance(data, 0, data.size, false)
+                        ?: throw IOException("No sprite decoder")
+                    try {
+                        val bitmap = decoder.decodeRegion(Rect(frame.x, frame.y, frame.x + frame.width, frame.y + frame.height),
+                            BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 })
+                            ?: throw IOException("No sprite tile")
+                        if (closed) bitmap.recycle() else keep(frame, bitmap)
+                    } finally { decoder.recycle() }
+                }
+                if (closed) null else tiles[frame.startMs]
             }
         } catch (cancel: CancellationException) { throw cancel }
-        catch (_: Exception) { healthy.value = false; null }
-        catch (_: OutOfMemoryError) { healthy.value = false; null }
+        catch (_: Exception) { if (markUnavailable) healthy.value = false; null }
+        catch (_: OutOfMemoryError) { if (markUnavailable) healthy.value = false; null }
     }
 
     override fun close() {

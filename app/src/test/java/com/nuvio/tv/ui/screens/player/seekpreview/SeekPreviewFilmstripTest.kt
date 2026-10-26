@@ -26,7 +26,7 @@ class SeekPreviewFilmstripTest {
         }
         val strip = track.fillFilmstrip(Filmstrip.around(frame(24_000), null, null, 1, 0), true)
         assertEquals(times, strip.frames.map { it?.thumbnail?.cueStartMs })
-        assertEquals(listOf(24_000L to true, 36_000L to true, 24_000L to false, 16_000L to false), calls)
+        assertEquals(listOf(24_000L to true, 24_000L to false, 36_000L to true, 16_000L to false), calls)
     }
 
     @Test fun `a disk miss is retried when new frames arrive`() = runBlocking {
@@ -58,5 +58,37 @@ class SeekPreviewFilmstripTest {
         assertEquals(2_000L, track.neighborThumbnailFor(center, false)?.cueStartMs)
         assertEquals(22_000L, track.neighborThumbnailFor(center, true)?.cueStartMs)
         assertEquals(listOf(9_999L, 20_000L), probes)
+    }
+
+    @Test fun `neighbors publish before the complete strip finishes`() = runBlocking {
+        val snapshots=mutableListOf<List<Long?>>()
+        val track=object:SeekPreviewTrack {
+            override var offsetMs=0L
+            override suspend fun thumbnailFor(positionMs:Long):SeekPreviewThumbnail?=null
+            override suspend fun neighborThumbnailFor(frame:SeekPreviewThumbnail,forward:Boolean)=
+                this@SeekPreviewFilmstripTest.frame(frame.cueStartMs+if(forward) 10_000 else -10_000)
+        }
+        track.fillFilmstrip(Filmstrip.around(frame(30_000),null,null,1,0),false,
+            onProgress={snapshots+=it.frames.map {f->f?.thumbnail?.cueStartMs}})
+        assertEquals(4,snapshots.size)
+        assertEquals(listOf(null,null,30_000L,40_000L,null),snapshots.first())
+        assertEquals(listOf(10_000L,20_000L,30_000L,40_000L,50_000L),snapshots.last())
+    }
+    @Test fun `new center stops remaining work without publishing obsolete neighbors`() = runBlocking {
+        var current=true
+        var calls=0
+        var published=0
+        val track=object:SeekPreviewTrack {
+            override var offsetMs=0L
+            override suspend fun thumbnailFor(positionMs:Long):SeekPreviewThumbnail?=null
+            override suspend fun neighborThumbnailFor(frame:SeekPreviewThumbnail,forward:Boolean):SeekPreviewThumbnail? {
+                calls++;current=false
+                return this@SeekPreviewFilmstripTest.frame(40_000)
+            }
+        }
+        track.fillFilmstrip(Filmstrip.around(frame(30_000),null,null,1,0),false,
+            stillCurrent={current},onProgress={published++})
+        assertEquals(1,calls)
+        assertEquals(0,published)
     }
 }

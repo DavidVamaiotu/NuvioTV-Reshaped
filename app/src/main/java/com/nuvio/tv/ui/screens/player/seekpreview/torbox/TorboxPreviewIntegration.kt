@@ -1,6 +1,19 @@
 package com.nuvio.tv.ui.screens.player.seekpreview.torbox
 
 import android.content.Context
+import com.nuvio.tv.data.local.InternalPlayerEngine
+import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
+import com.nuvio.tv.ui.screens.player.currentPlaybackPositionMs
+import com.nuvio.tv.ui.screens.player.seekpreview.colourmatch.PreviewColourPlayback
+import com.nuvio.tv.ui.screens.player.seekpreview.colourmatch.calibratePreviewColour
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import com.nuvio.tv.data.local.DebridSettingsDataStore
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewThumbnail
 import com.nuvio.tv.ui.screens.player.seekpreview.SeekPreviewTrack
@@ -32,9 +45,38 @@ internal class TorboxFirstPreviewTrack(
     override var offsetMs: Long
         get() = torbox.offsetMs
         set(value) { torbox.offsetMs = value; fallback?.offsetMs = value }
-    override val revision get() = fallback?.revision ?: torbox.revision
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val changes = MutableStateFlow(0)
+    override val revision get() = changes
+    init {
+        scope.launch {
+            combine(torbox.revision, fallback?.revision ?: MutableStateFlow(0)) { a, b -> a to b }
+                .collect { changes.value++ }
+        }
+    }
+    override fun close() = scope.cancel()
     override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
         torbox.thumbnailFor(positionMs) ?: fallback?.thumbnailFor(positionMs)
     override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
         torbox.sideThumbnailFor(positionMs) ?: fallback?.sideThumbnailFor(positionMs)
+}
+
+/** Only this adapter knows the Nuvio player. The calibrator never controls or rebuilds playback. */
+internal suspend fun calibrateTorboxPreview(controller: PlayerRuntimeController, streamUrl: String?, track: TorboxSpriteTrack) {
+    calibratePreviewColour(
+        playback = {
+            withContext(Dispatchers.Main.immediate) {
+                val state = controller.uiState.value
+                if (controller.currentStreamUrl != streamUrl || !state.isPlaying || state.isBuffering ||
+                    state.pendingPreviewSeekPosition != null || state.showSeekOverlay) return@withContext null
+                val view = if (controller.currentInternalPlayerEngine == InternalPlayerEngine.MVP_PLAYER)
+                    controller.mpvView else controller.exoPlayerView?.videoSurfaceView
+                val position = controller.currentPlaybackPositionMs() ?: return@withContext null
+                view?.takeIf { it.isShown }?.let { PreviewColourPlayback(it, position, controller.currentStreamUrl) }
+            }
+        },
+        nextTarget = track::nextColourTarget,
+        thumbnail = track::colourReference,
+        accept = track::acceptColourAdjustment,
+    )
 }

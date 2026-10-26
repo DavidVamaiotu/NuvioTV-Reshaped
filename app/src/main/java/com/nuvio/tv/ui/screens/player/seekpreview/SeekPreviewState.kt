@@ -4,6 +4,7 @@ import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxFirstPreviewTrack
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxMovieRequest
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxSpriteTrack
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.torboxPreviewKeys
+import com.nuvio.tv.ui.screens.player.seekpreview.torbox.calibrateTorboxPreview
 import kotlinx.coroutines.flow.first
 import com.nuvio.tv.ui.screens.player.PlayerEvent
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
@@ -141,20 +142,23 @@ class SeekPreviewState internal constructor(
             Triple(key, stream.first, TorboxMovieRequest(controller.contentId, controller.contentType,
                 duration, stream.second, stream.third))
         }.distinctUntilChanged()
-            .transformLatest<Triple<String, String?, TorboxMovieRequest>, TorboxSpriteTrack?> { (key, _, request) ->
+            .transformLatest<Triple<String, String?, TorboxMovieRequest>, TorboxSpriteTrack?> { (key, streamUrl, request) ->
                 setOffset(0)
                 _previewCue.value = null
                 val owned = TorboxSpriteTrack.open(key, request, controller.context.cacheDir.resolve("torbox-sprites-v1"))
+                var calibration: Job? = null
                 try {
+                    if (owned != null) calibration = scope.launch { calibrateTorboxPreview(controller, streamUrl, owned) }
                     owned?.prefetch(runCatching { controller.currentPlaybackPositionMs() }.getOrNull() ?: 0L)
                     emit(owned)
                     if (owned != null) {
                         owned.available.first { !it }
+                        calibration?.cancel()
                         owned.close()
                         emit(null) // Resume existing providers if the TorBox track becomes unavailable.
                     }
                     awaitCancellation()
-                } finally { owned?.close() }
+                } finally { calibration?.cancel(); owned?.close() }
             }.stateIn(scope, SharingStarted.Eagerly, null)
 
     /**
@@ -236,10 +240,12 @@ class SeekPreviewState internal constructor(
         .transformLatest<Triple<SeekPreviewTrack?, BoundedSeekrTrack?, TorboxSpriteTrack?>, SeekPreviewTrack?> { (local, seekr, torbox) ->
             val hybrid = if (local != null && seekr != null) HybridSeekPreviewTrack(local, SeekrPreviewTrack(seekr)) else null
             val fallback = hybrid ?: local ?: seekr?.let(::SeekrPreviewTrack)
+            val decorated = torbox?.let { TorboxFirstPreviewTrack(it, fallback) }
             try {
-                emit(if (torbox != null) TorboxFirstPreviewTrack(torbox, fallback) else fallback)
+                emit(decorated ?: fallback)
                 awaitCancellation()
             } finally {
+                decorated?.close()
                 hybrid?.close()
             }
         }.stateIn(scope, SharingStarted.Eagerly, null)

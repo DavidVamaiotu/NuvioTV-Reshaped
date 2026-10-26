@@ -19,6 +19,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.graphics.asImageBitmap
@@ -86,31 +88,31 @@ internal class Filmstrip(
 }
 
 /**
- * Looks up the neighbours [strip] lacks — every neighbour when [refreshAll] — walking outwards
+ * Looks up the neighbours [strip] lacks - every neighbour when [refreshAll] - walking outwards
  * from the centre one cue at a time. Side lookups use [SeekPreviewTrack.sideThumbnailFor], so
  * they never pull on-device decoding away from the frame being scrubbed to.
  */
-internal suspend fun SeekPreviewTrack.fillFilmstrip(strip: Filmstrip, refreshAll: Boolean): Filmstrip {
+internal suspend fun SeekPreviewTrack.fillFilmstrip(
+    strip: Filmstrip,
+    refreshAll: Boolean,
+    stillCurrent: () -> Boolean = { true },
+    onProgress: (Filmstrip) -> Unit = {},
+): Filmstrip {
     val frames = strip.frames.toMutableList()
-    for (direction in intArrayOf(1, -1)) {
-        var from: SeekPreviewThumbnail? = strip.center ?: break
-        for (distance in 1..FilmstripSideFrames) {
-            val index = FilmstripSideFrames + direction * distance
-            val edge = from
-            if (edge == null) {
-                // Past the title's start or end there is nothing more on this side.
-                frames[index] = FilmstripFrame(null)
-                continue
-            }
-            val known = frames[index]
-            val frame = if (known != null && !refreshAll) {
-                known
-            } else {
-                FilmstripFrame(neighborThumbnailFor(edge, forward = direction > 0))
-            }
-            frames[index] = frame
-            from = frame.thumbnail
+    // Nearest frame on each side first; don't wait for all four before publishing.
+    for (distance in 1..FilmstripSideFrames) for (direction in intArrayOf(1, -1)) {
+        if (!stillCurrent()) return Filmstrip(frames, strip.revision, strip.offsetMs)
+        val index = FilmstripSideFrames + direction * distance
+        val from = frames[FilmstripSideFrames + direction * (distance - 1)]?.thumbnail
+        val known = frames[index]
+        val next = when {
+            from == null -> FilmstripFrame(null)
+            known != null && !refreshAll -> known
+            else -> FilmstripFrame(neighborThumbnailFor(from, forward = direction > 0))
         }
+        frames[index] = next
+        if (!stillCurrent()) return Filmstrip(frames, strip.revision, strip.offsetMs)
+        if (next !== known) onProgress(Filmstrip(frames.toList(), strip.revision, strip.offsetMs))
     }
     return Filmstrip(frames, strip.revision, strip.offsetMs)
 }
@@ -160,10 +162,16 @@ internal fun SeekPreviewFilmstripRow(
                                 if (crop == null) BitmapPainter(image) else BitmapPainter(image,
                                     srcOffset = IntOffset(crop.left, crop.top), srcSize = IntSize(crop.width(), crop.height()))
                             }
+                            val colourFilter = remember(thumbnail.colourAdjustment) {
+                                thumbnail.colourAdjustment?.takeUnless { it.isIdentity }?.let {
+                                    ColorFilter.colorMatrix(ColorMatrix(it.matrixValues()))
+                                }
+                            }
                             Image(
                                 painter = painter,
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
+                                colorFilter = colourFilter,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
