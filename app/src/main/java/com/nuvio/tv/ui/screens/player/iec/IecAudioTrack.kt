@@ -16,6 +16,12 @@ internal enum class HbrPayload {
     MAT
 }
 
+internal fun iecPathName(payload: HbrPayload?): String = when (payload) {
+    HbrPayload.IEC_BURST -> "IEC 61937"
+    HbrPayload.MAT -> "Dolby MAT"
+    null -> "IEC"
+}
+
 internal interface IecAudioTrack {
     val sampleRate: Int
     val frameSizeBytes: Int
@@ -80,12 +86,11 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
     }
 
     override fun canOpen(sampleRate: Int, channelCount: Int): Boolean {
-        val mask = channelMaskFor(channelCount)
-        val mat = dolbyMatEncoding()
-        if (mat != null && AudioTrack.getMinBufferSize(sampleRate, mask, mat) > 0) {
-            return true
-        }
-        return if (sampleRate == 176_400) iec176400Usable else iec61937Usable
+        return hbrCanOpen(
+            iecUsable = iecUsableAt(sampleRate),
+            iecSettled = iecSettledAt(sampleRate),
+            matSupported = dolbyMatSupported(sampleRate, channelMaskFor(channelCount))
+        )
     }
 
     override fun iec61937Ready(): Boolean = iec61937Usable
@@ -103,7 +108,9 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
     override fun markIecUnusable() {
         iec61937Usable = false
         iec176400Usable = false
+        iec176400Probed = true
         iec61937ProbeExhausted = true
+        iec61937KnownUnusable = true
     }
 
     override fun open(
@@ -121,48 +128,68 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
         trueHd: Boolean
     ): IecAudioTrack? {
         val mask = channelMaskFor(channelCount)
-        if (trueHd) {
-            val mat = dolbyMatEncoding()
-            if (mat != null) {
-                val track = createTrack(sampleRate, mask, mat, bufferSizeBytes, sessionId)
-                if (track != null) {
-                    Log.i(TAG, "opened DOLBY_MAT $sampleRate/$channelCount")
-                    return PlatformIecAudioTrack(
-                        track.first,
-                        sampleRate,
-                        channelCount * 2,
-                        HbrPayload.MAT,
-                        track.second
-                    )
+        val iecSettled = iecSettledAt(sampleRate)
+        val steps = hbrOpenSteps(
+            trueHd = trueHd,
+            iecUsable = iecUsableAt(sampleRate),
+            iecSettled = iecSettled,
+            matSupported = trueHd && dolbyMatSupported(sampleRate, mask)
+        )
+        if (trueHd && steps.isEmpty()) {
+            Log.i(
+                TAG,
+                if (iecSettled) {
+                    "TrueHD output: no IEC61937 or Dolby MAT at $sampleRate"
+                } else {
+                    "TrueHD output: IEC61937 $sampleRate not probed yet, waiting"
                 }
-                Log.w(TAG, "DOLBY_MAT refused")
-            }
-        }
-        val iecProbed = if (sampleRate == 176_400) iec176400Usable else iec61937Usable
-        if (iecProbed) {
-            val track = createTrack(
-                sampleRate,
-                mask,
-                AudioFormat.ENCODING_IEC61937,
-                bufferSizeBytes,
-                sessionId
             )
-            if (track != null) {
-                Log.i(TAG, "opened IEC61937 $sampleRate/$channelCount")
-                return PlatformIecAudioTrack(
-                    track.first,
-                    sampleRate,
-                    channelCount * 2,
-                    HbrPayload.IEC_BURST,
-                    track.second
-                )
-            }
-            if (sampleRate == 176_400) {
-                iec176400Usable = false
-                Log.w(TAG, "IEC61937 176.4 kHz open failed after probe")
-            } else {
-                iec61937Usable = false
-                Log.w(TAG, "IEC61937 open failed after probe")
+        }
+        for (step in steps) {
+            when (step) {
+                HbrOpenStep.IEC61937 -> {
+                    val track = createTrack(
+                        sampleRate,
+                        mask,
+                        AudioFormat.ENCODING_IEC61937,
+                        bufferSizeBytes,
+                        sessionId
+                    )
+                    if (track != null) {
+                        Log.i(TAG, "opened IEC61937 $sampleRate/$channelCount")
+                        if (trueHd) Log.i(TAG, "TrueHD output: IEC61937 (MAT in IEC 61937 bursts)")
+                        return PlatformIecAudioTrack(
+                            track.first,
+                            sampleRate,
+                            channelCount * 2,
+                            HbrPayload.IEC_BURST,
+                            track.second
+                        )
+                    }
+                    if (sampleRate == 176_400) {
+                        iec176400Usable = false
+                        Log.w(TAG, "IEC61937 176.4 kHz open failed after probe")
+                    } else {
+                        iec61937Usable = false
+                        Log.w(TAG, "IEC61937 open failed after probe")
+                    }
+                }
+                HbrOpenStep.DOLBY_MAT -> {
+                    val mat = dolbyMatEncoding() ?: continue
+                    val track = createTrack(sampleRate, mask, mat, bufferSizeBytes, sessionId)
+                    if (track != null) {
+                        Log.i(TAG, "opened DOLBY_MAT $sampleRate/$channelCount")
+                        Log.i(TAG, "TrueHD output: Dolby MAT (IEC61937 not available)")
+                        return PlatformIecAudioTrack(
+                            track.first,
+                            sampleRate,
+                            channelCount * 2,
+                            HbrPayload.MAT,
+                            track.second
+                        )
+                    }
+                    Log.w(TAG, "DOLBY_MAT refused")
+                }
             }
         }
         return null
@@ -238,8 +265,15 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
         @Volatile
         private var iec61937ProbeExhausted: Boolean = false
 
+        /** IEC 61937 failed on this output: a new player's probe does not hold Dolby MAT back again. */
+        @Volatile
+        private var iec61937KnownUnusable: Boolean = false
+
         @Volatile
         private var iec176400Usable: Boolean = false
+
+        @Volatile
+        private var iec176400Probed: Boolean = false
 
         private val iec61937ProbeRunning = AtomicBoolean(false)
 
@@ -255,7 +289,9 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
         fun resetIec61937Probe(onResult: ((Boolean) -> Unit)? = null) {
             iec61937Usable = false
             iec176400Usable = false
+            iec176400Probed = false
             iec61937ProbeExhausted = false
+            iec61937KnownUnusable = false
             iec61937ProbeRealFailures = 0
             iec61937ProbeResultListener = onResult
             startIec61937Probe(ignoreLivePassthrough = true)
@@ -267,9 +303,10 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
             listener(usable)
         }
 
-        fun invalidateIec61937ProbeMemo() {
+        fun invalidateIec61937ProbeMemo(routeChanged: Boolean = false) {
             iec61937ProbeExhausted = false
             iec61937ProbeRealFailures = 0
+            if (routeChanged) iec61937KnownUnusable = false
         }
 
         fun startIec61937Probe(ignoreLivePassthrough: Boolean = false) {
@@ -287,6 +324,8 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
                     if (min <= 0) {
                         Log.i(TAG, "IEC61937 probe: minBufferSize=$min")
                         iec61937ProbeExhausted = true
+                        iec61937KnownUnusable = true
+                        onIecExhausted(mask)
                         reportProbeResult(false)
                         return@Thread
                     }
@@ -337,10 +376,12 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
                         }
                         if (opened) {
                             iec61937Usable = true
+                            iec61937KnownUnusable = false
                             iec61937ProbeRealFailures = 0
                             Log.i(TAG, "IEC61937 probe: usable on attempt ${attempt + 1}")
-                            iec61937ReadyListener?.invoke()
+                            // 176.4 kHz is settled first, so a 44.1 kHz TrueHD selection made on this call finds its route.
                             probe176400(mask)
+                            iec61937ReadyListener?.invoke()
                             reportProbeResult(true)
                             return@Thread
                         }
@@ -352,11 +393,35 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
                         )
                     }
                     iec61937ProbeExhausted = true
+                    iec61937KnownUnusable = true
+                    onIecExhausted(mask)
                     reportProbeResult(false)
                 } finally {
                     iec61937ProbeRunning.set(false)
                 }
             }, "iec61937-probe").apply { isDaemon = true }.start()
+        }
+
+        // A TrueHD selection made while the probe ran was told there was no route. With
+        // IEC 61937 out, Dolby MAT can carry it, so the player is asked to select again.
+        private fun onIecExhausted(mask: Int) {
+            if (!dolbyMatSupported(192_000, mask)) return
+            Log.i(TAG, "TrueHD output: IEC61937 not usable, Dolby MAT available")
+            iec61937ReadyListener?.invoke()
+        }
+
+        private fun iecUsableAt(sampleRate: Int): Boolean =
+            if (sampleRate == 176_400) iec176400Usable else iec61937Usable
+
+        internal fun iecSettledAt(sampleRate: Int): Boolean {
+            if (iecUsableAt(sampleRate)) return true
+            if (iec61937ProbeExhausted || iec61937KnownUnusable) return true
+            return sampleRate == 176_400 && iec61937Usable && iec176400Probed
+        }
+
+        private fun dolbyMatSupported(sampleRate: Int, mask: Int): Boolean {
+            val mat = dolbyMatEncoding() ?: return false
+            return AudioTrack.getMinBufferSize(sampleRate, mask, mat) > 0
         }
 
         private fun ensurePassthroughLiveClearedHook() {
@@ -373,6 +438,7 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
             )
             if (min <= 0) {
                 Log.i(TAG, "IEC61937 176.4 probe: minBufferSize=$min")
+                iec176400Probed = true
                 return
             }
             val opened = synchronized(DirectOpenProbeLock) {
@@ -385,6 +451,7 @@ internal class PlatformIecAudioTrackFactory : IecAudioTrackFactory {
                 track != null
             }
             iec176400Usable = opened
+            iec176400Probed = true
             Log.i(TAG, "IEC61937 176.4 probe: ${if (opened) "usable" else "not usable"}")
         }
 
@@ -549,3 +616,18 @@ internal fun iecProbeAttemptAction(
     if (passthroughLive && !ignoreLivePassthrough) return IecProbeAttemptAction.DEFER
     return IecProbeAttemptAction.OPEN
 }
+
+internal enum class HbrOpenStep { IEC61937, DOLBY_MAT }
+
+internal fun hbrOpenSteps(
+    trueHd: Boolean,
+    iecUsable: Boolean,
+    iecSettled: Boolean,
+    matSupported: Boolean
+): List<HbrOpenStep> = buildList {
+    if (iecUsable) add(HbrOpenStep.IEC61937)
+    if (trueHd && matSupported && (iecUsable || iecSettled)) add(HbrOpenStep.DOLBY_MAT)
+}
+
+internal fun hbrCanOpen(iecUsable: Boolean, iecSettled: Boolean, matSupported: Boolean): Boolean =
+    iecUsable || (iecSettled && matSupported)

@@ -1135,7 +1135,7 @@ internal suspend fun PlayerRuntimeController.onFormatsOutputRouteChanged(reason:
     AudioRejectionReverifier.ledger.invalidate()
     saveAudioRefusalEvidence()
     AudioChainProbe.invalidate()
-    PlatformIecAudioTrackFactory.invalidateIec61937ProbeMemo()
+    PlatformIecAudioTrackFactory.invalidateIec61937ProbeMemo(routeChanged = true)
     applySurroundResolutionInPlace(reason)
 }
 

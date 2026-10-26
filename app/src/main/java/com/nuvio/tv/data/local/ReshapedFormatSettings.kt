@@ -134,7 +134,7 @@ object ReshapedFormatSettingsStore {
         return _settings.value
     }
 
-    private fun read(p: SharedPreferences): ReshapedFormatSettings {
+    internal fun read(p: SharedPreferences): ReshapedFormatSettings {
         val tunnelExpired = tunnelClassesExpired(p)
         return ReshapedFormatSettings(
             enabled = p.getBoolean(KEY_ENABLED, false),

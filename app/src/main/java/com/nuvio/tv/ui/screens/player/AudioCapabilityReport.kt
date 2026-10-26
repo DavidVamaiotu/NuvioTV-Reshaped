@@ -27,16 +27,34 @@ import android.os.Build
  */
 object AudioCapabilityReport {
 
+    private class Probe(
+        val label: String,
+        val encoding: Int,
+        val sampleRate: Int = 48_000,
+        val channelMask: Int = AudioFormat.CHANNEL_OUT_5POINT1
+    )
+
     /** Label to AudioFormat encoding, in the order they appear in the report. */
-    private val PROBES: List<Pair<String, Int>> = buildList {
-        add("AC3" to AudioFormat.ENCODING_AC3)
-        add("EAC3" to AudioFormat.ENCODING_E_AC3)
+    @SuppressLint("InlinedApi")
+    private val PROBES: List<Probe> = buildList {
+        add(Probe("AC3", AudioFormat.ENCODING_AC3))
+        add(Probe("EAC3", AudioFormat.ENCODING_E_AC3))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            add("EAC3-JOC" to AudioFormat.ENCODING_E_AC3_JOC)
+            add(Probe("EAC3-JOC", AudioFormat.ENCODING_E_AC3_JOC))
         }
-        add("TrueHD" to AudioFormat.ENCODING_DOLBY_TRUEHD)
-        add("DTS" to AudioFormat.ENCODING_DTS)
-        add("DTS-HD" to AudioFormat.ENCODING_DTS_HD)
+        add(Probe("TrueHD", AudioFormat.ENCODING_DOLBY_TRUEHD))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            add(
+                Probe(
+                    "MAT",
+                    AudioFormat.ENCODING_DOLBY_MAT,
+                    sampleRate = 192_000,
+                    channelMask = AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
+                )
+            )
+        }
+        add(Probe("DTS", AudioFormat.ENCODING_DTS))
+        add(Probe("DTS-HD", AudioFormat.ENCODING_DTS_HD))
     }
 
     @Volatile
@@ -119,18 +137,18 @@ object AudioCapabilityReport {
         }.getOrNull()
     }
 
-    /** One isDirectPlaybackSupported call per [PROBES] entry, 48 kHz / 5.1, in order. */
+    /** One isDirectPlaybackSupported call per [PROBES] entry, 48 kHz / 5.1 (MAT 192 kHz / 7.1), in order. */
     private fun probeDirectLabels(attributes: AudioAttributes): List<Pair<String, Boolean>> =
-        PROBES.map { (label, encoding) ->
-            val format = AudioFormat.Builder()
-                .setEncoding(encoding)
-                .setSampleRate(48_000)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_5POINT1)
-                .build()
+        PROBES.map { probe ->
             val ok = runCatching {
+                val format = AudioFormat.Builder()
+                    .setEncoding(probe.encoding)
+                    .setSampleRate(probe.sampleRate)
+                    .setChannelMask(probe.channelMask)
+                    .build()
                 AudioTrack.isDirectPlaybackSupported(format, attributes)
             }.getOrDefault(false)
-            label to ok
+            probe.label to ok
         }
 
     /** Pure formatter, split out so the wording is unit-testable without a device. */
@@ -242,6 +260,7 @@ object AudioCapabilityReport {
         AudioFormat.ENCODING_E_AC3 -> "EAC3"
         AudioFormat.ENCODING_E_AC3_JOC -> "EAC3-JOC"
         AudioFormat.ENCODING_DOLBY_TRUEHD -> "TrueHD"
+        AudioFormat.ENCODING_DOLBY_MAT -> "MAT"
         AudioFormat.ENCODING_DTS -> "DTS"
         AudioFormat.ENCODING_DTS_HD -> "DTS-HD"
         else -> null

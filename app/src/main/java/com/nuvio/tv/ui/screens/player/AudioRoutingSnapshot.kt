@@ -1,6 +1,7 @@
 package com.nuvio.tv.ui.screens.player
 
 import androidx.media3.common.MimeTypes
+import com.nuvio.tv.ui.screens.player.iec.HbrPayload
 
 internal enum class AudioRoutingMode {
     PASSTHROUGH_IEC,
@@ -39,7 +40,8 @@ internal fun resolveAudioRoutingSnapshot(
     isAudioPathActive: Boolean,
     sinkMime: String?,
     sinkChannelCount: Int,
-    isTunnelled: Boolean = false
+    isTunnelled: Boolean = false,
+    iecPayload: HbrPayload? = null
 ): AudioRoutingSnapshot? {
     if (sourceMime == null) return null
     val isSourceSurroundOrHbr = isSurroundOrHbrMime(sourceMime, sourceChannelCount)
@@ -48,7 +50,11 @@ internal fun resolveAudioRoutingSnapshot(
         isIecActive -> {
             AudioRoutingSnapshot(
                 mode = AudioRoutingMode.PASSTHROUGH_IEC,
-                outputFormat = "passthrough (IEC)",
+                outputFormat = when (iecPayload) {
+                    HbrPayload.IEC_BURST -> "passthrough · IEC"
+                    HbrPayload.MAT -> "passthrough · MAT"
+                    null -> "passthrough (IEC)"
+                },
                 isFallback = false
             )
         }
@@ -118,6 +124,7 @@ internal fun PlayerRuntimeController.getAudioRoutingSnapshot(isTunnelled: Boolea
         isAudioPathActive = ffmpeg?.isAudioPathActive() == true,
         sinkMime = sinkFormat?.sampleMimeType,
         sinkChannelCount = sinkFormat?.channelCount ?: -1,
-        isTunnelled = isTunnelled
+        isTunnelled = isTunnelled,
+        iecPayload = sink?.iecHbrPayload()
     )
 }

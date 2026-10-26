@@ -118,6 +118,8 @@ internal class IecPassthroughAudioSink(
 
     fun iecTrackIdentity(): Int? = iecTrack?.let { System.identityHashCode(it) }
 
+    fun iecPayload(): HbrPayload? = if (isIecActive) iecTrack?.payload else null
+
     fun iecRoutedDevice(): android.media.AudioDeviceInfo? =
         runCatching { iecTrack?.routedDevice() }.getOrNull()
 
@@ -178,7 +180,8 @@ internal class IecPassthroughAudioSink(
                 dtsDuration.clockSampleRate = clockSampleRateFor(iecOutputSampleRate)
                 android.util.Log.i(
                     "IecPassthrough",
-                    "HBR active payload=${iecTrack?.payload} mime=${inputFormat.sampleMimeType}"
+                    "HBR active payload=${iecTrack?.payload} mime=${inputFormat.sampleMimeType} " +
+                        "path=${iecPathName(iecTrack?.payload)} rate=$iecOutputSampleRate"
                 )
                 onDiagnosticEvent?.invoke(
                     "iec_hbr_active payload=${iecTrack?.payload} mime=${inputFormat.sampleMimeType}"

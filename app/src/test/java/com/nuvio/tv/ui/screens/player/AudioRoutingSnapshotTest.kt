@@ -162,4 +162,20 @@ class AudioRoutingSnapshotTest {
             tunnelled(MimeTypes.AUDIO_TRUEHD, 8, sourceMime = MimeTypes.AUDIO_TRUEHD, sourceChannelCount = 8, isIecActive = true)
         )
     }
+
+    @Test
+    fun iecPassthrough_namesTheWayTrueHdGoesOut() {
+        fun label(payload: com.nuvio.tv.ui.screens.player.iec.HbrPayload) = resolveAudioRoutingSnapshot(
+            sourceMime = MimeTypes.AUDIO_TRUEHD,
+            sourceChannelCount = 8,
+            isIecActive = true,
+            isTranscodingAc3 = false,
+            isAudioPathActive = false,
+            sinkMime = MimeTypes.AUDIO_TRUEHD,
+            sinkChannelCount = 8,
+            iecPayload = payload
+        )?.outputFormat
+        assertEquals("passthrough · IEC", label(com.nuvio.tv.ui.screens.player.iec.HbrPayload.IEC_BURST))
+        assertEquals("passthrough · MAT", label(com.nuvio.tv.ui.screens.player.iec.HbrPayload.MAT))
+    }
 }

@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.ForwardingAudioSink
 import androidx.media3.extractor.Ac3Util
 import com.nuvio.tv.core.player.AudioPassthroughPolicy
+import com.nuvio.tv.ui.screens.player.iec.HbrPayload
 import com.nuvio.tv.ui.screens.player.iec.IecPassthroughAudioSink
 import java.nio.ByteBuffer
 
@@ -121,6 +122,8 @@ internal class PlaybackSpeedAwareAudioSink(
     }
 
     fun isIecHbrActive(): Boolean = iecSink?.isIecActive == true
+
+    fun iecHbrPayload(): HbrPayload? = iecSink?.iecPayload()
 
     fun iecInvolved(): Boolean = iecSink?.iecInvolved == true
 
