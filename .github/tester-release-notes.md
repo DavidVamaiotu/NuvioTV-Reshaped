@@ -1,4 +1,1 @@
-- Switched TorBox previews to the shared 1,085-movie library.
-- Removed the Add preview library button. Enabling preview thumbnails or opening a movie with previews enabled automatically adds the library to the connected TorBox account, with duplicate checks and retry throttling.
-- Previews appear without waiting for matching. Included visual fingerprints refine timing for different releases in the background, alongside lightweight colour matching.
-- Large library listings stream through a bounded parser, retaining the current movie's files.
+- Added Connect TorBox beside seek previews in Nuvio Reshaped settings. Scan the existing TorBox login QR code on your phone; the connection is shared with Integrated Services and can be managed from either screen.

@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="torbox_preview_connect_title">Connect TorBox</string>
+    <string name="torbox_preview_connect_description">Scan a QR code with your phone to connect TorBox for shared movie thumbnails.</string>
+    <string name="torbox_preview_connected_title">TorBox connected</string>
+    <string name="torbox_preview_connected_description">Manage the TorBox account used for shared movie thumbnails and Integrated Services.</string>
     <string name="torbox_preview_title">Seek preview thumbnails</string>
     <string name="torbox_preview_description">Use shared movie thumbnails from TorBox when available, otherwise generate them on this device. Enabling this automatically adds the shared preview library to your connected TorBox account.</string>
 </resources>

@@ -4,15 +4,21 @@ package com.nuvio.tv.ui.screens.settings
 
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxPreviewLibrary
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.torboxPreviewKeys
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nuvio.tv.core.debrid.DebridProviders
 import com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewPreferences
 import com.nuvio.tv.R
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalSeekPreviewSettings
@@ -21,6 +27,9 @@ import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalSeekPreviewSettings
 internal fun LazyListScope.seekPreviewSettingsItems(
     onItemFocused: () -> Unit = {},
 ) {
+    item(key = "seek_preview_torbox_account") {
+        TorboxPreviewConnectionItem(onItemFocused)
+    }
     item(key = "seek_preview_local") {
         val context = LocalContext.current
         val checked by LocalSeekPreviewSettings.enabled(context).collectAsStateWithLifecycle()
@@ -54,4 +63,37 @@ internal fun LazyListScope.seekPreviewSettingsItems(
             onCheckedChange = { PreviewPreferences.set(context, options.copy(nextEpisode = it)) }, onFocused = onItemFocused)
     }
 
+}
+
+@Composable
+private fun TorboxPreviewConnectionItem(onFocused: () -> Unit) {
+    val context = LocalContext.current
+    val keys = remember(context) { torboxPreviewKeys(context) }
+    val key by keys.collectAsStateWithLifecycle(initialValue = "")
+    var showDialog by remember { mutableStateOf(false) }
+    val connected = key.isNotBlank()
+
+    NavigationSettingsItem(
+        icon = Icons.Default.AccountCircle,
+        title = stringResource(
+            if (connected) R.string.torbox_preview_connected_title else R.string.torbox_preview_connect_title
+        ),
+        subtitle = stringResource(
+            if (connected) R.string.torbox_preview_connected_description else R.string.torbox_preview_connect_description
+        ),
+        onClick = { showDialog = true },
+        onFocused = onFocused,
+    )
+
+    if (showDialog) {
+        val viewModel: DebridSettingsViewModel = hiltViewModel()
+        DebridDeviceAuthDialog(
+            provider = DebridProviders.Torbox,
+            currentValue = key,
+            viewModel = viewModel,
+            onConnected = { viewModel.saveProviderCredential(DebridProviders.TORBOX_ID, it) },
+            onDisconnect = { viewModel.saveProviderCredential(DebridProviders.TORBOX_ID, "") },
+            onDismiss = { showDialog = false },
+        )
+    }
 }

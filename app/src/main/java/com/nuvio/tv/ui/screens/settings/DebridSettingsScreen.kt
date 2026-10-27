@@ -1213,7 +1213,7 @@ private enum class DebridSortProfile {
 }
 
 @Composable
-private fun DebridDeviceAuthDialog(
+internal fun DebridDeviceAuthDialog(
     provider: DebridProvider,
     currentValue: String,
     viewModel: DebridSettingsViewModel,
