@@ -1,3 +1,4 @@
-- Added lightweight automatic colour matching for TorBox seek previews, using a few small playback-buffer captures and a display filter. Unreliable matches keep the original colours.
-- Fixed previews freezing while holding left or right: useful frames now appear during key repeats, with neighboring thumbnails filling progressively.
-- Nearby sprite tiles share one bounded decode to reduce repeated work. Existing cache limits and request pacing remain in place.
+- Switched TorBox previews to the shared 1,085-movie library.
+- Removed the Add preview library button. Enabling preview thumbnails or opening a movie with previews enabled automatically adds the library to the connected TorBox account, with duplicate checks and retry throttling.
+- Previews appear without waiting for matching. Included visual fingerprints refine timing for different releases in the background, alongside lightweight colour matching.
+- Large library listings stream through a bounded parser, retaining the current movie's files.

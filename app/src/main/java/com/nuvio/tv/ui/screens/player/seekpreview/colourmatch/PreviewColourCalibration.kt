@@ -54,7 +54,7 @@ internal suspend fun calibratePreviewColour(
             }
             val snapshot = before ?: continue
             captures++
-            val reference = copyVideoBuffer(snapshot.view) ?: continue
+            val reference = copyPreviewVideoBuffer(snapshot.view) ?: continue
             try {
                 val after = playback() ?: continue
                 if (!PreviewColourCapturePolicy.matches(target.actualMs, snapshot.positionMs, after.positionMs,
@@ -73,11 +73,11 @@ internal suspend fun calibratePreviewColour(
 }
 
 /** PixelCopy scales the already-rendered video buffer directly to 128x72. No second decoder. */
-private suspend fun copyVideoBuffer(view: View): Bitmap? = withContext(Dispatchers.Main.immediate) {
+internal suspend fun copyPreviewVideoBuffer(view: View, width: Int = 128, height: Int = 72): Bitmap? = withContext(Dispatchers.Main.immediate) {
     if (!view.isAttachedToWindow || !view.isShown || view.width <= 0 || view.height <= 0) return@withContext null
     withTimeoutOrNull(450L) {
         suspendCancellableCoroutine<Bitmap?> { continuation ->
-            val bitmap = Bitmap.createBitmap(128, 72, Bitmap.Config.ARGB_8888)
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             try {
                 when (view) {
                     is SurfaceView -> {

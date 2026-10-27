@@ -89,9 +89,11 @@ class SeekPreviewState internal constructor(
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     val track: StateFlow<BoundedSeekrTrack?> =
-        combine(controller.playbackTimeline, controller.uiState) { timeline, state -> timeline.duration to state.currentStreamUrl }
+        combine(controller.playbackTimeline, controller.uiState, LocalSeekPreviewSettings.enabled(controller.context)) {
+            timeline, state, enabled -> Triple(timeline.duration, state.currentStreamUrl, enabled)
+        }
             .distinctUntilChanged()
-            .mapLatest { (durationMs, _) ->
+            .mapLatest { (durationMs, _, enabled) ->
                 ownedSeekr?.close()
                 ownedSeekr = null
                 // A new track describes a different release, so any manual sync dialled in
@@ -100,7 +102,7 @@ class SeekPreviewState internal constructor(
                 _previewCue.value = null
                 _showSyncOverlay.value = false
                 val apiKey = SeekrKeyPreferences.effectiveKey(controller.context) // Seekr hook: user key, else built-in
-                if (apiKey.isBlank() || durationMs <= 0L) return@mapLatest null
+                if (!enabled || apiKey.isBlank() || durationMs <= 0L) return@mapLatest null
                 val content = seekrContentFor(
                     contentId = controller.contentId,
                     contentType = controller.contentType,
@@ -129,7 +131,7 @@ class SeekPreviewState internal constructor(
         }
     }
 
-    /** Experimental TorBox sprites: only batches already present in the connected account. */
+    /** Shared TorBox previews; account setup and visual verification stay outside the core player. */
     @OptIn(ExperimentalCoroutinesApi::class)
     private val torboxTrack: StateFlow<TorboxSpriteTrack?> =
         combine(
@@ -137,7 +139,9 @@ class SeekPreviewState internal constructor(
                 .distinctUntilChanged { a, b -> (a > 0L) == (b > 0L) && abs(a - b) <= 1_000L },
             controller.uiState.map { Triple(it.currentStreamUrl, it.currentStreamInfoHash, it.currentStreamFileIdx) }
                 .distinctUntilChanged(),
-            torboxPreviewKeys(controller.context)
+            combine(torboxPreviewKeys(controller.context), LocalSeekPreviewSettings.enabled(controller.context)) {
+                key, enabled -> if (enabled) key else ""
+            }
         ) { duration, stream, key ->
             Triple(key, stream.first, TorboxMovieRequest(controller.contentId, controller.contentType,
                 duration, stream.second, stream.third))
@@ -150,7 +154,7 @@ class SeekPreviewState internal constructor(
                 try {
                     if (owned != null) calibration = scope.launch { calibrateTorboxPreview(controller, streamUrl, owned) }
                     owned?.prefetch(runCatching { controller.currentPlaybackPositionMs() }.getOrNull() ?: 0L)
-                    emit(owned)
+                    emit(owned) // Fingerprint verification never blocks or hides initial previews.
                     if (owned != null) {
                         owned.available.first { !it }
                         calibration?.cancel()

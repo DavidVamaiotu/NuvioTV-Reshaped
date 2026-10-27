@@ -21,10 +21,11 @@ class TorboxPreviewModelsTest {
         assertNull(pack.match(request(type = "series")))
     }
 
-    @Test fun differentReleaseNeedsMovieIdAndCloseRuntimeAndRemainsApproximate() {
+    @Test fun differentReleaseIsOnlyACandidateAndNeedsVisualVerification() {
         assertFalse(pack.match(request(source = "c".repeat(40)))!!.exactSource)
         assertFalse(pack.match(request(id = "tmdb:27205", source = null, file = null))!!.exactSource)
-        assertNull(pack.match(request(duration = 103_000, source = null)))
+        assertFalse(pack.match(request(duration = 103_000, source = null))!!.exactSource)
+        assertNull(pack.match(request(duration = 400_000, source = null)))
         assertNull(pack.match(request(id = null, source = null)))
         assertNull(pack.match(request(file = 3)))
     }

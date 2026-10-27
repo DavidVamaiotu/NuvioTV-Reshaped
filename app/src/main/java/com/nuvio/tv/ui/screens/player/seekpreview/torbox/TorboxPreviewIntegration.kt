@@ -11,6 +11,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
@@ -62,9 +64,8 @@ internal class TorboxFirstPreviewTrack(
 }
 
 /** Only this adapter knows the Nuvio player. The calibrator never controls or rebuilds playback. */
-internal suspend fun calibrateTorboxPreview(controller: PlayerRuntimeController, streamUrl: String?, track: TorboxSpriteTrack) {
-    calibratePreviewColour(
-        playback = {
+internal suspend fun calibrateTorboxPreview(controller: PlayerRuntimeController, streamUrl: String?, track: TorboxSpriteTrack) = coroutineScope {
+    val playback: suspend () -> PreviewColourPlayback? = {
             withContext(Dispatchers.Main.immediate) {
                 val state = controller.uiState.value
                 if (controller.currentStreamUrl != streamUrl || !state.isPlaying || state.isBuffering ||
@@ -74,9 +75,16 @@ internal suspend fun calibrateTorboxPreview(controller: PlayerRuntimeController,
                 val position = controller.currentPlaybackPositionMs() ?: return@withContext null
                 view?.takeIf { it.isShown }?.let { PreviewColourPlayback(it, position, controller.currentStreamUrl) }
             }
-        },
+        }
+    suspend fun colours() = calibratePreviewColour(
+        playback = playback,
         nextTarget = track::nextColourTarget,
         thumbnail = track::colourReference,
         accept = track::acceptColourAdjustment,
     )
+    val colourJob = launch { colours() }
+    if (track.prepareFingerprintMatcher() && alignPreviewFingerprints(playback, track::observeFingerprint)) {
+        colourJob.cancelAndJoin()
+        colours() // A corrected timeline needs a matched colour reference on that timeline.
+    }
 }

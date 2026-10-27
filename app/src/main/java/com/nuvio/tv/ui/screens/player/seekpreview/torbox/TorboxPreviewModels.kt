@@ -25,7 +25,10 @@ internal data class TorboxPreviewPack(
         val exact = request.sourceHash?.equals(sourceHash, true) == true && request.sourceFileIndex == sourceFileIndex
         if (exact) return TorboxPackMatch(this, true)
         // Runtime is a compatibility filter, not proof that two cuts have identical timelines.
-        if (!movieMatches || abs(request.durationMs - durationMs) > 2_000L) return null
+        // Candidate selection only. Different files must pass visual fingerprint verification.
+        if (!movieMatches || listOf(1.0, 24.0 / 25, 25.0 / 24).minOf {
+                abs(request.durationMs * it - durationMs)
+            } > 120_000) return null
         return TorboxPackMatch(this, false)
     }
 }
