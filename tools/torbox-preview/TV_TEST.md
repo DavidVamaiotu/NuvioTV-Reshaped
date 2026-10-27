@@ -37,11 +37,15 @@ available on demand. All ten initial packs fit these budgets.
 Workers and outstanding HTTP calls stop when the player releases the track.
 
 Exact original torrent hash + file ID is preferred. Other releases require an
-IMDb/TMDB identity match and a duration difference of at most two seconds, and
-are marked approximate. Similar runtime is not proof of scene alignment.
+IMDb/TMDB identity match, with no runtime or file-index rejection for the same movie.
+The closest runtime wins before revision when several other releases are available.
+Their timestamps are scaled across playback's full duration, while exact files keep
+their original timestamps and retain the last image through a longer audio tail.
+All sprites display normally, without an approximate label or reduced image quality.
+Cross-release timing confidence remains internal and does not force playback onto
+unverified frame timestamps. Duration scaling cannot perfectly align different cuts.
 Live TV, series, and unrecognized identities do not get guessed movie previews.
-A longer audio tail is allowed for exact-file matches, with no invented frames
-after the source video ends.
+A longer audio tail uses the last available preview rather than inventing a new image.
 
 A TorBox track takes priority and suppresses on-device generation once loaded.
 Unavailable files, decoding failures or rate limits drop back to the existing

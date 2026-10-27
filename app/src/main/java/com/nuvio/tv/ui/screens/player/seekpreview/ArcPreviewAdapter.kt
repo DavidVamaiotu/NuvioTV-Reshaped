@@ -7,11 +7,15 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
+import com.nuvio.tv.ui.screens.player.SourceStreamsRequest
+import com.nuvio.tv.ui.screens.player.buildSourceRequestKey
+import com.nuvio.tv.ui.screens.player.currentSourceStreamsRequest
 import com.nuvio.tv.ui.screens.player.ParallelRangeDataSource
 import com.nuvio.tv.ui.screens.player.NuvioExoPlayerPerformanceHelper
 import com.nuvio.tv.ui.screens.player.seekpreview.engine.*
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSource
 import com.nuvio.tv.domain.model.Stream
+import com.nuvio.tv.domain.repository.StreamRepository
 import com.nuvio.tv.core.debrid.DirectDebridResolver
 import com.nuvio.tv.data.local.PlayerSettings
 import com.nuvio.tv.ui.screens.settings.MemoryBudget
@@ -55,31 +59,50 @@ internal class ArcPreviewAdapter(controller: PlayerRuntimeController, source: Lo
     }
     fun copySources(): CopySources = object : CopySources {
         private var links = emptyMap<String, Pair<String, Map<String, String>>>()
+        private var request: SourceStreamsRequest? = null
         override suspend fun offers(): CopyOffers? {
             val snapshot = withContext(Dispatchers.Main) {
                 val c = owner.get()?.takeIf { it.currentStreamUrl == sourceKey } ?: return@withContext null
+                val current = c.currentSourceStreamsRequest() ?: return@withContext null
+                val key = c.buildSourceRequestKey(current.type, current.videoId, current.season, current.episode)
                 val state = c.uiState.value
-                val streams = state.sourceAllStreams + state.episodeAllStreams
-                if (streams.isEmpty()) return@withContext null
-                CopySnapshot(streams, c.currentSeason, c.currentEpisode,
-                    listOfNotNull(state.currentStreamName, c.currentFilename, c.currentStreamDescription).joinToString(" "), c.directDebridResolver)
+                val streams = previewCopyPanelStreams(key,
+                    c.sourceStreamsCacheRequestKey, state.sourceAllStreams,
+                    c.episodeStreamsCacheRequestKey, state.episodeAllStreams)
+                CopySnapshot(streams, current,
+                    listOfNotNull(state.currentStreamName, c.currentFilename, c.currentStreamDescription).joinToString(" "),
+                    c.streamRepository, c.directDebridResolver)
             } ?: return null
-            // Classification and cached-link lookup stay off the playback/UI thread.
+            // Reuse the search that supplied playback even when neither player panel was opened.
+            // Cache reads and classification stay off the playback/UI thread; no new search is started.
             val available = withContext(Dispatchers.IO) {
-                snapshot.streams.mapNotNull { stream ->
-                    copyOffer(stream, sourceKey) ?: snapshot.resolver.cachedPlayableStream(stream, snapshot.season, snapshot.episode)
+                val streams = previewCopySourceStreams(snapshot.streams) {
+                    val current = snapshot.request
+                    snapshot.repository.getCachedStreamsFromAllAddons(current.type, current.videoId, current.season, current.episode)
+                        ?.flatMap { it.streams }
+                } ?: return@withContext null
+                streams.mapNotNull { stream ->
+                    copyOffer(stream, sourceKey) ?: snapshot.resolver.cachedPlayableStream(stream, snapshot.request.season, snapshot.request.episode)
                         ?.let { copyOffer(it, sourceKey, trustedResolved = true) }
                 }.distinctBy { it.first.id }
-            }
+            } ?: return null
+            if (!isCurrent(snapshot.request)) return null
             links = available.associate { (offer, link) -> offer.id to link }
+            request = snapshot.request
             return CopyOffers(snapshot.playingText, available.map { it.first })
         }
-        override suspend fun open(offer: CopyOffer): CopyLink? = links[offer.id]?.let { (url, headers) -> CopyLink(url, headers, "ready source") }
+        private suspend fun isCurrent(expected: SourceStreamsRequest): Boolean = withContext(Dispatchers.Main) {
+            owner.get()?.let { it.currentStreamUrl == sourceKey && it.currentSourceStreamsRequest() == expected } == true
+        }
+        override suspend fun open(offer: CopyOffer): CopyLink? {
+            if (!isCurrent(request ?: return null)) return null
+            return links[offer.id]?.let { (url, headers) -> CopyLink(url, headers, "ready source") }
+        }
     }
     fun detach(keepPlaybackObservation: Boolean = false) { if (!keepPlaybackObservation) owner.clear() }
 
-    private data class CopySnapshot(val streams: List<Stream>, val season: Int?, val episode: Int?,
-        val playingText: String, val resolver: DirectDebridResolver)
+    private data class CopySnapshot(val streams: List<Stream>, val request: SourceStreamsRequest,
+        val playingText: String, val repository: StreamRepository, val resolver: DirectDebridResolver)
 
     private class PlayerView(private val player: ExoPlayer, private val allowResume: () -> Boolean) : PreviewPlayer {
         override val videoFormat: Format? get() = player.videoFormat

@@ -165,14 +165,14 @@ internal fun PlayerRuntimeController.buildSourceRequestKey(type: String, videoId
     return "$type|$videoId|${season ?: -1}|${episode ?: -1}"
 }
 
-private data class SourceStreamsRequest(
+internal data class SourceStreamsRequest(
     val type: String,
     val videoId: String,
     val season: Int?,
     val episode: Int?
 )
 
-private fun PlayerRuntimeController.currentSourceStreamsRequest(): SourceStreamsRequest? =
+internal fun PlayerRuntimeController.currentSourceStreamsRequest(): SourceStreamsRequest? =
     if (contentType in listOf("series", "tv") && currentSeason != null && currentEpisode != null) {
         SourceStreamsRequest(
             type = contentType ?: return null,

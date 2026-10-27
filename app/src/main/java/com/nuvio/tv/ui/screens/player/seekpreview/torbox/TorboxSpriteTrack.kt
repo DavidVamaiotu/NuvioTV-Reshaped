@@ -58,12 +58,16 @@ internal class TorboxSpriteTrack private constructor(
     cacheDirectory: File,
     private val fingerprintsPath: String?,
     private val candidateScale: Double,
+    private val timing: TorboxPreviewTiming,
 ) : SeekPreviewTrack {
     override var offsetMs: Long = 0L
     private val visualReady = MutableStateFlow(match.exactSource)
     val displayReady: StateFlow<Boolean> get() = visualReady
     private var visualMatcher: TorboxVisualMatcher? = null
     @Volatile private var visualMapping = TorboxVisualMapping()
+
+    private fun verifiedMapping(): TorboxVisualMapping? = visualMapping.takeIf { visualReady.value }
+    private fun sourcePosition(positionMs: Long): Long = timing.sourcePosition(positionMs, verifiedMapping())
 
     fun observeFingerprint(positionMs: Long, hash: PreviewHash128): Boolean {
         if (closed || offsetMs != 0L) return visualReady.value
@@ -118,8 +122,8 @@ internal class TorboxSpriteTrack private constructor(
 
     fun nextColourTarget(positionMs: Long): PreviewColourTarget? {
         if (closed || offsetMs != 0L) return null
-        return timeline.frames.firstOrNull { it.actualMs >= visualMapping.reference(positionMs) }
-            ?.let { PreviewColourTarget(visualMapping.playback(it.startMs), visualMapping.playback(it.actualMs)) }
+        return timeline.frames.firstOrNull { it.actualMs >= sourcePosition(positionMs) }
+            ?.let { PreviewColourTarget(timing.playbackPosition(it.startMs, verifiedMapping()), timing.playbackPosition(it.actualMs, verifiedMapping())) }
     }
 
     suspend fun colourReference(target: PreviewColourTarget): Bitmap? =
@@ -127,9 +131,10 @@ internal class TorboxSpriteTrack private constructor(
 
     override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
         rawThumbnail(positionMs, markUnavailable = true)?.let { thumbnail ->
+            val mapping = verifiedMapping()
             thumbnail.copy(
-                cueStartMs = visualMapping.playback(thumbnail.cueStartMs),
-                cueEndMs = visualMapping.playback(thumbnail.cueEndMs),
+                cueStartMs = timing.cueStart(thumbnail.cueStartMs, mapping),
+                cueEndMs = timing.cueEnd(thumbnail.cueStartMs, thumbnail.cueEndMs, mapping),
                 colourAdjustment = colourAdjustment,
             )
         }
@@ -148,7 +153,7 @@ internal class TorboxSpriteTrack private constructor(
     /** Called after the player owns this track, so cancellation always closes the workers. */
     fun prefetch(positionMs: Long) {
         if (closed || !warmStarted.compareAndSet(false, true)) return
-        val queue = TorboxPrefetchQueue(timeline.frames, timeline.sheets, positionMs)
+        val queue = TorboxPrefetchQueue(timeline.frames, timeline.sheets, sourcePosition(positionMs))
         prefetchQueue = queue
         repeat(2) {
             warming.launch {
@@ -170,7 +175,7 @@ internal class TorboxSpriteTrack private constructor(
 
     private suspend fun rawThumbnail(positionMs: Long, markUnavailable: Boolean): SeekPreviewThumbnail? = withContext(Dispatchers.IO) {
         if (closed || !healthy.value) return@withContext null
-        val frame = timeline.frameAt(visualMapping.reference(positionMs + offsetMs)) ?: return@withContext null
+        val frame = timeline.frameAt(sourcePosition(positionMs + offsetMs)) ?: return@withContext null
         mutex.withLock { tiles[frame.startMs] }?.let { return@withContext it }
         try {
             val sheet = requireNotNull(timeline.sheets[frame.sheet])
@@ -278,11 +283,9 @@ internal class TorboxSpriteTrack private constructor(
                         pack.match(request)?.let { choices += batch to it }
                     }
                 }
-                val selected = choices.sortedWith(
-                    compareByDescending<Pair<PreviewBatch, TorboxPackMatch>> { it.second.exactSource }
-                        .thenByDescending { it.second.pack.revision }
-                        .thenBy { kotlin.math.abs(it.second.pack.durationMs - request.durationMs) }
-                ).firstOrNull() ?: return@withContext null
+                val order = torboxPreviewMatchOrder(request)
+                val selected = choices.minWithOrNull { a, b -> order.compare(a.second, b.second) }
+                    ?: return@withContext null
                 val (batch, match) = selected
                 val indexBytes = http.file(batch, match.pack.indexPath, 4 * 1024 * 1024, match.pack.indexSha256)
                 val index = JSONObject(String(indexBytes, Charsets.UTF_8))
@@ -319,7 +322,8 @@ internal class TorboxSpriteTrack private constructor(
                     index.optString("fingerprints").takeIf { it.isNotBlank() },
                     listOf(1.0, 24.0 / 25, 25.0 / 24).minBy {
                         kotlin.math.abs(request.durationMs * it - match.pack.durationMs)
-                    }.takeIf { kotlin.math.abs(request.durationMs * it - match.pack.durationMs) / match.pack.durationMs < .002 } ?: 1.0)
+                    }.takeIf { kotlin.math.abs(request.durationMs * it - match.pack.durationMs) / match.pack.durationMs < .002 } ?: 1.0,
+                    TorboxPreviewTiming(request.durationMs, timeline.frames.last().endMs, match.exactSource))
             } catch (cancel: CancellationException) { throw cancel }
             catch (_: Exception) { null }
             catch (_: OutOfMemoryError) { null }

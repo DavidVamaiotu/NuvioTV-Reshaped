@@ -1,6 +1,7 @@
 package com.nuvio.tv.ui.screens.player.seekpreview.torbox
 
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlinx.coroutines.CancellationException
 
 /** Pure matching and timestamp rules; no network, player, or Android dependencies. */
@@ -17,7 +18,7 @@ internal suspend fun resolveTorboxMovieRequest(
 ): TorboxMovieRequest {
     if (request.durationMs <= 0 || request.contentType?.lowercase() in setOf("series", "tv", "show", "channel", "live")) return request
     fun imdb(value: String?) = value?.trim()?.takeIf { it.matches(Regex("tt[0-9]{7,10}")) }
-    val base = request.contentId.orEmpty().trim().removePrefix("tmdb:").removePrefix("movie:")
+    val base = request.contentId.orEmpty().trim().removePrefix("movie:").removePrefix("tmdb:").removePrefix("imdb:")
         .substringBefore(':').substringBefore('/')
     imdb(base)?.let { return request.copy(contentId = it) }
     val resolved = try {
@@ -35,24 +36,61 @@ internal data class TorboxPreviewPack(
     fun match(request: TorboxMovieRequest): TorboxPackMatch? {
         if (request.durationMs <= 0 || request.contentType?.lowercase() in setOf("series", "tv", "show", "channel", "live")) return null
         val content = request.contentId.orEmpty().trim()
-            .removePrefix("tmdb:").removePrefix("movie:").substringBefore(':').substringBefore('/')
+            .removePrefix("movie:").removePrefix("tmdb:").removePrefix("imdb:")
+            .substringBefore(':').substringBefore('/')
         val knownId = content.matches(Regex("tt[0-9]{7,10}")) || content.toIntOrNull() != null
         val movieMatches = content == imdbId || (tmdbId != null && content.toIntOrNull() == tmdbId)
         if (knownId && !movieMatches) return null
-        if (request.sourceHash?.equals(sourceHash, true) == true &&
-            request.sourceFileIndex != null && request.sourceFileIndex != sourceFileIndex) return null
         val exact = request.sourceHash?.equals(sourceHash, true) == true && request.sourceFileIndex == sourceFileIndex
         if (exact) return TorboxPackMatch(this, true)
-        // Runtime is a compatibility filter, not proof that two cuts have identical timelines.
-        // Candidate selection only. Different files must pass visual fingerprint verification.
-        if (!movieMatches || listOf(1.0, 24.0 / 25, 25.0 / 24).minOf {
-                abs(request.durationMs * it - durationMs)
-            } > 120_000) return null
+        // Another release or cut of this movie is still useful as an approximate preview.
+        if (!movieMatches) return null
         return TorboxPackMatch(this, false)
     }
 }
 
 internal data class TorboxPackMatch(val pack: TorboxPreviewPack, val exactSource: Boolean)
+
+/** Prefer exact files, then the closest runtime; revision breaks ties between equally good releases. */
+internal fun torboxPreviewMatchOrder(request: TorboxMovieRequest): Comparator<TorboxPackMatch> =
+    compareByDescending<TorboxPackMatch> { it.exactSource }
+        .thenBy { abs(it.pack.durationMs - request.durationMs) }
+        .thenByDescending { it.pack.revision }
+        .thenBy { it.pack.id }
+
+/** Approximate releases span playback's full timeline; exact files retain their original timestamps. */
+internal class TorboxPreviewTiming(
+    private val playbackDurationMs: Long,
+    private val sourceDurationMs: Long,
+    private val exactSource: Boolean,
+) {
+    init { require(playbackDurationMs > 0L && sourceDurationMs > 0L) }
+
+    fun sourcePosition(playbackMs: Long, mapping: TorboxVisualMapping? = null): Long {
+        val position = playbackMs.coerceIn(0L, playbackDurationMs - 1L)
+        return (mapping?.reference(position) ?:
+            if (exactSource) position else (position.toDouble() / playbackDurationMs * sourceDurationMs).toLong())
+            .coerceIn(0L, sourceDurationMs - 1L)
+    }
+
+    fun playbackPosition(sourceMs: Long, mapping: TorboxVisualMapping? = null): Long =
+        mapping?.playback(sourceMs) ?:
+            if (exactSource) sourceMs else ceil(sourceMs.toDouble() / sourceDurationMs * playbackDurationMs).toLong()
+
+    fun cueStart(frame: TorboxSpriteFrame): Long = cueStart(frame.startMs)
+
+    fun cueStart(startMs: Long, mapping: TorboxVisualMapping? = null): Long =
+        playbackPosition(startMs, mapping).let { if (startMs == 0L) minOf(0L, it) else it }
+
+    fun cueEnd(frame: TorboxSpriteFrame): Long = cueEnd(frame.startMs, frame.endMs)
+
+    fun cueEnd(startMs: Long, endMs: Long, mapping: TorboxVisualMapping? = null): Long {
+        // A longer playback/audio tail keeps the last available image rather than losing previews.
+        val end = if (endMs == sourceDurationMs) maxOf(playbackDurationMs, playbackPosition(endMs, mapping))
+            else playbackPosition(endMs, mapping)
+        return end.coerceAtLeast(cueStart(startMs, mapping) + 1L)
+    }
+}
 
 internal data class TorboxSpriteSheet(val path: String, val width: Int, val height: Int, val bytes: Int, val sha256: String)
 
