@@ -333,7 +333,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                 setSubtitleParserFactory(parserFactory)
             }
         }
-        val forceDefaultFactory = customExtractorsFactory != null || customSubtitleParserFactory != null
+        val forceDefaultFactory = customSubtitleParserFactory != null
 
         // Sidecar subtitles are more reliable through DefaultMediaSourceFactory.
         if (subtitleConfigurations.isNotEmpty()) {
@@ -581,6 +581,7 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                 val value = (rawValue as? String)?.trim().orEmpty()
                 if (key.isEmpty() || value.isEmpty()) return@forEach
                 if (key.equals("Range", ignoreCase = true)) return@forEach
+                if (key.equals("Accept-Encoding", ignoreCase = true)) return@forEach
                 sanitized[key] = value
             }
             return sanitized
@@ -909,9 +910,23 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
             }
         }
 
+        private val mimeProbeCache = object : LinkedHashMap<String, String>(MIME_PROBE_CACHE_SIZE, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean {
+                return size > MIME_PROBE_CACHE_SIZE
+            }
+        }
+
+        fun evictMimeType(url: String, headers: Map<String, String>) {
+            val sanitizedHeaders = sanitizeHeaders(headers)
+            val cacheKey = buildMimeProbeCacheKey(url, sanitizedHeaders)
+            synchronized(mimeProbeCache) {
+                mimeProbeCache.remove(cacheKey)
+            }
+        }
+
         internal fun sniffManifestMimeType(snippet: String?): String? {
             val normalized = snippet
-                ?.trimStart()
+                ?.trimStart { it.isWhitespace() || it == '\uFEFF' }
                 ?.lowercase(Locale.US)
                 ?: return null
 
@@ -923,17 +938,57 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
             }
         }
 
+        internal fun sniffBinaryContainerMimeType(bytes: ByteArray?, length: Int): String? {
+            if (bytes == null || length < 4) return null
+            // Matroska / WebM EBML magic header: 0x1A 0x45 0xDF 0xA3
+            if (bytes[0] == 0x1A.toByte() &&
+                bytes[1] == 0x45.toByte() &&
+                bytes[2] == 0xDF.toByte() &&
+                bytes[3] == 0xA3.toByte()
+            ) {
+                return MimeTypes.VIDEO_MATROSKA
+            }
+            // MP4 / QuickTime 'ftyp' box at bytes 4..7
+            if (length >= 8 &&
+                bytes[4] == 'f'.code.toByte() &&
+                bytes[5] == 't'.code.toByte() &&
+                bytes[6] == 'y'.code.toByte() &&
+                bytes[7] == 'p'.code.toByte()
+            ) {
+                return MimeTypes.VIDEO_MP4
+            }
+            return null
+        }
+
         suspend fun probeMimeType(
             url: String,
             headers: Map<String, String>,
             filename: String? = null,
             responseHeaders: Map<String, String>? = null
         ): String? {
-            return inferMimeType(
+            inferMimeType(
                 url = url,
                 filename = filename,
                 responseHeaders = responseHeaders
-            )
+            )?.let { return it }
+
+            if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+                return null
+            }
+
+            val sanitizedHeaders = sanitizeHeaders(headers)
+            val cacheKey = buildMimeProbeCacheKey(url, sanitizedHeaders)
+            synchronized(mimeProbeCache) {
+                mimeProbeCache[cacheKey]
+            }?.let { return it }
+
+            val probed = probeNetworkMimeType(url, sanitizedHeaders)
+            if (probed != null) {
+                synchronized(mimeProbeCache) {
+                    mimeProbeCache[cacheKey] = probed
+                }
+            }
+            return probed
         }
 
         suspend fun probeNetworkMimeType(
@@ -944,15 +999,25 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                 return@withContext null
             }
             val sanitizedHeaders = sanitizeHeaders(headers)
-            val methods = listOf("HEAD", "GET")
-            for (method in methods) {
-                runCatching {
+            val attempts = listOf(
+                "GET" to "bytes=0-2047",
+                "GET" to null,
+                "HEAD" to null
+            )
+            for ((method, rangeHeader) in attempts) {
+                var gotSuccessfulResponse = false
+                val resolved = runCatching {
                     val requestBuilder = Request.Builder().url(url)
-                    if (method == "GET") {
-                        requestBuilder.header("Range", "bytes=0-2048")
+                    if (method == "HEAD") {
+                        requestBuilder.head()
+                    } else if (rangeHeader != null) {
+                        requestBuilder.header("Range", rangeHeader)
                     }
+                    requestBuilder.header("Connection", "close")
                     sanitizedHeaders.forEach { (key, value) ->
-                        if (!key.equals("Range", ignoreCase = true)) {
+                        if (!key.equals("Range", ignoreCase = true) &&
+                            !key.equals("Accept-Encoding", ignoreCase = true)
+                        ) {
                             requestBuilder.header(key, value)
                         }
                     }
@@ -961,31 +1026,60 @@ internal class PlayerMediaSourceFactory(private val context: Context) {
                     }
 
                     PlayerPlaybackNetworking.playbackHttpClient.newCall(requestBuilder.build()).execute().use { response ->
-                        if (!response.isSuccessful && response.code !in 200..308) {
+                        if (!response.isSuccessful) {
                             return@use null
                         }
+                        gotSuccessfulResponse = true
 
                         val finalUrl = response.request.url.toString()
-                        inferAdaptiveMimeTypeFromPath(finalUrl)?.let { return@withContext it }
+                        inferAdaptiveMimeTypeFromPath(finalUrl)?.let { return@use it }
 
-                        val contentType = response.header("Content-Type")
-                        normalizeMimeType(contentType)?.let { return@withContext it }
-
-                        val responseHeadersMap = response.headers.names().associateWith { response.header(it).orEmpty() }
-                        inferMimeTypeFromResponseHeaders(responseHeadersMap)?.let { return@withContext it }
-
+                        var snippetBytes: ByteArray? = null
+                        var snippetLen = 0
                         if (method == "GET") {
-                            val snippet = response.body?.byteStream()?.use { stream ->
-                                val bytes = ByteArray(512)
-                                val read = stream.read(bytes)
-                                if (read > 0) String(bytes, 0, read, Charsets.UTF_8) else null
+                            response.body?.byteStream()?.use { stream ->
+                                val buffer = ByteArray(512)
+                                var total = 0
+                                while (total < buffer.size) {
+                                    val count = stream.read(buffer, total, buffer.size - total)
+                                    if (count <= 0) break
+                                    total += count
+                                }
+                                if (total > 0) {
+                                    snippetBytes = buffer
+                                    snippetLen = total
+                                }
                             }
-                            sniffManifestMimeType(snippet)?.let { return@withContext it }
+                            val snippet = if (snippetBytes != null && snippetLen > 0) {
+                                String(snippetBytes!!, 0, snippetLen, Charsets.UTF_8)
+                            } else {
+                                null
+                            }
+                            sniffManifestMimeType(snippet)?.let { return@use it }
                         }
 
-                        inferMimeTypeFromPath(finalUrl)?.let { return@withContext it }
+                        val contentType = response.header("Content-Type")
+                        normalizeMimeType(contentType)?.let { return@use it }
+
+                        val responseHeadersMap = response.headers.names().associateWith { response.header(it).orEmpty() }
+                        inferMimeTypeFromResponseHeaders(responseHeadersMap)?.let { return@use it }
+
+                        sniffBinaryContainerMimeType(snippetBytes, snippetLen)?.let { return@use it }
+
+                        inferMimeTypeFromPath(finalUrl)?.let { return@use it }
                     }
-                }.getOrNull()?.let { return@withContext it }
+                }.getOrNull()
+
+                if (resolved != null) {
+                    val cacheKey = buildMimeProbeCacheKey(url, sanitizedHeaders)
+                    synchronized(mimeProbeCache) {
+                        mimeProbeCache[cacheKey] = resolved
+                    }
+                    return@withContext resolved
+                }
+                if (gotSuccessfulResponse && method == "GET") {
+                    break
+                }
             }
             null
         }

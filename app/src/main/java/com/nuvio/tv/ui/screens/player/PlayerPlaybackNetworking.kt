@@ -105,7 +105,12 @@ internal object PlayerPlaybackNetworking {
             builder.readTimeout(LOOPBACK_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         }
         val proxyHeaders = defaultHeaders.filterKeys { key ->
-            !key.equals("Range", ignoreCase = true)
+            !key.equals("Range", ignoreCase = true) &&
+                !key.equals("Host", ignoreCase = true) &&
+                !key.equals("Accept-Encoding", ignoreCase = true) &&
+                !key.equals("Content-Length", ignoreCase = true) &&
+                !key.equals("Transfer-Encoding", ignoreCase = true) &&
+                !key.equals("Connection", ignoreCase = true)
         }
         if (proxyHeaders.isNotEmpty()) {
             builder.addNetworkInterceptor { chain ->
@@ -130,7 +135,11 @@ internal object PlayerPlaybackNetworking {
         val requestHeaders = defaultHeaders.mapNotNull { (rawKey, rawValue) ->
             val key = rawKey.trim()
             val value = rawValue.trim()
-            if (key.isEmpty() || value.isEmpty() || key.equals("Range", ignoreCase = true)) {
+            if (key.isEmpty() ||
+                value.isEmpty() ||
+                key.equals("Range", ignoreCase = true) ||
+                key.equals("Accept-Encoding", ignoreCase = true)
+            ) {
                 null
             } else {
                 key to value
