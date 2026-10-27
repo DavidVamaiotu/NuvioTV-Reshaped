@@ -1,1 +1,3 @@
-- Added Connect TorBox beside seek previews in Nuvio Reshaped settings. Scan the existing TorBox login QR code on your phone; the connection is shared with Integrated Services and can be managed from either screen.
+- TorBox thumbnails now accept other releases and cuts of the same movie without rejecting them for runtime or file-index differences. The closest available runtime is preferred when the exact file is unavailable.
+- Previews cover the full playback timeline, retain the last image through longer audio tails, and display normally without added labels or blur. Background visual matching can refine alignment without withholding thumbnails.
+- Smaller-copy generation now reuses the current movie or episode's cached source results without requiring the Sources panel to be opened, and excludes results from other episodes.

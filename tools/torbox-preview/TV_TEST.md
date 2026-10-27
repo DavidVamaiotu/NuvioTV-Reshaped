@@ -44,6 +44,8 @@ their original timestamps and retain the last image through a longer audio tail.
 All sprites display normally, without an approximate label or reduced image quality.
 Cross-release timing confidence remains internal and does not force playback onto
 unverified frame timestamps. Duration scaling cannot perfectly align different cuts.
+Existing background visual matching can replace the duration estimate when it finds
+confident scene matches; it never withholds the initial thumbnails.
 Live TV, series, and unrecognized identities do not get guessed movie previews.
 A longer audio tail uses the last available preview rather than inventing a new image.
 
