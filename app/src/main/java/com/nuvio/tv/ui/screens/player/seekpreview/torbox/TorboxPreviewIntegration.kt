@@ -39,6 +39,14 @@ internal fun torboxPreviewKeys(context: Context): Flow<String> = try {
         .debridSettings().settings.map { it.torboxApiKey.trim() }.distinctUntilChanged()
 } catch (_: IllegalStateException) { flowOf("") }
 
+internal suspend fun torboxPreviewRequest(controller: PlayerRuntimeController, request: TorboxMovieRequest) =
+    resolveTorboxMovieRequest(request,
+        cachedImdb = {
+            val id = request.contentId.orEmpty()
+            controller.metaRepository.getCachedMeta(request.contentType ?: "movie", id)?.imdbId
+        },
+        tmdbToImdb = { controller.tmdbService.tmdbToImdb(it, "movie") })
+
 /** Neither provider is owned by this adapter; their session flows close them. */
 internal class TorboxFirstPreviewTrack(
     private val torbox: TorboxSpriteTrack,

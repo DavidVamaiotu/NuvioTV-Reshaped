@@ -253,19 +253,19 @@ internal class TorboxSpriteTrack private constructor(
             if (key.isBlank() || request.durationMs <= 0L ||
                 request.contentType?.lowercase() in setOf("series", "tv", "show", "channel", "live") ||
                 PreviewTorboxGate.blocked()) return@withContext null
-            val setupResult = TorboxPreviewLibrary.ensure(key)
-            val http = PreviewTorboxHttp(key)
+            val setupResult = TorboxPreviewLibrary.ensure(key, cacheDirectory)
+            val http = PreviewTorboxHttp(key, cacheDirectory)
             var transferred = false
             try {
                 val choices = mutableListOf<Pair<PreviewBatch, TorboxPackMatch>>()
                 val movieId = request.contentId?.removePrefix("movie:")?.substringBefore(':')
                     ?.takeIf { it.matches(Regex("tt[0-9]{7,10}")) }
-                var batches = http.batches(movieId)
+                var batches = http.batches(movieId, refresh = setupResult == TorboxLibrarySetup.Result.ADDED)
                 var polls = 0
                 while (batches.isEmpty() && !PreviewTorboxGate.blocked() && polls < 20 &&
                     (http.pendingBatch || setupResult == TorboxLibrarySetup.Result.ADDED)) {
                     delay(if (polls++ == 0) 2_000L else 15_000L)
-                    batches = http.batches(movieId)
+                    batches = http.batches(movieId, refresh = true)
                 }
                 for (batch in batches) {
                     val bytes = http.file(batch, "catalog.json", 2 * 1024 * 1024)
@@ -284,8 +284,7 @@ internal class TorboxSpriteTrack private constructor(
                         .thenBy { kotlin.math.abs(it.second.pack.durationMs - request.durationMs) }
                 ).firstOrNull() ?: return@withContext null
                 val (batch, match) = selected
-                val indexBytes = http.file(batch, match.pack.indexPath, 4 * 1024 * 1024)
-                require(sha256(indexBytes) == match.pack.indexSha256)
+                val indexBytes = http.file(batch, match.pack.indexPath, 4 * 1024 * 1024, match.pack.indexSha256)
                 val index = JSONObject(String(indexBytes, Charsets.UTF_8))
                 require(index.getInt("version") == 1 && index.getString("pack_id") == match.pack.id)
                 val source = index.getJSONObject("source_identity")
@@ -349,30 +348,40 @@ internal class TorboxSpriteTrack private constructor(
 }
 
 private data class PreviewFile(val id: String, val name: String, val size: Long)
-private data class PreviewBatch(val id: String, val name: String, val files: List<PreviewFile>)
+private data class PreviewBatch(val id: String, val name: String, val hash: String, val files: List<PreviewFile>)
 private data class PreviewListedTorrent(val id: String, val name: String, val hash: String,
     val finished: Boolean, val present: Boolean, val files: List<PreviewFile>)
 
 /** One isolated client: API authorization is never attached to CDN requests or logs. */
-private class PreviewTorboxHttp(private val key: String) : Closeable {
+private class PreviewTorboxHttp(
+    private val key: String,
+    cacheDirectory: File,
+    private val httpClient: OkHttpClient = client,
+) : Closeable {
     @Volatile private var closed = false
     private val calls = ConcurrentHashMap.newKeySet<Call>()
     private val links = ConcurrentHashMap<String, String>()
+    private val locations = ConcurrentHashMap<String, PreviewBatch>()
+    private val metadata = TorboxPreviewMetadataCache(File(cacheDirectory, "metadata-v1"))
+    private val account = sha256(key.toByteArray(Charsets.UTF_8))
 
     var pendingBatch: Boolean = false
         private set
 
-    suspend fun batches(imdbId: String?): List<PreviewBatch> {
+    suspend fun batches(imdbId: String?, refresh: Boolean = false): List<PreviewBatch> {
         pendingBatch = false
         val published = publishedBatches().toMap()
         val found = mutableListOf<PreviewBatch>()
         for (page in 0 until 20) {
-            val rows = listing(page, keepFiles = true, imdbId = imdbId)
+            val rows = listing(page, keepFiles = true, imdbId = imdbId, refresh = refresh)
             for (row in rows) {
                 if (row.hash !in published) continue
                 if (!row.finished || !row.present) { pendingBatch = true; continue }
-                val batch = PreviewBatch(row.id, published.getValue(row.hash), row.files)
-                if (row.files.count { previewFileMatches(it.name, "catalog.json", batch.name) } == 1) found += batch
+                val batch = PreviewBatch(row.id, published.getValue(row.hash), row.hash, row.files)
+                if (row.files.count { previewFileMatches(it.name, "catalog.json", batch.name) } == 1) {
+                    found += batch
+                    locations[batch.hash] = batch
+                }
             }
             if (found.size >= published.size || rows.size < 100) break
         }
@@ -381,12 +390,15 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
 
     // Parse the 40,000-file library without allocating a JSONObject for every file.
     // Retain only the requested movie's paths plus the catalog; never download an archive.
-    private suspend fun listing(page: Int, keepFiles: Boolean, imdbId: String? = null): List<PreviewListedTorrent> {
+    private suspend fun listing(page: Int, keepFiles: Boolean, imdbId: String? = null, refresh: Boolean = false): List<PreviewListedTorrent> {
         val url = "https://api.torbox.app/v1/api/torrents/mylist".toHttpUrl().newBuilder()
             .addQueryParameter("offset", (page * 100).toString()).addQueryParameter("limit", "100")
             .addQueryParameter("bypass_cache", "true").build()
-        return readPayload(Request.Builder().url(url).header("Authorization", "Bearer $key").build(),
-            32 * 1024 * 1024) { input ->
+        return metadata.get("account/$account/list/$page", 32 * 1024 * 1024, 600_000L,
+            refresh = refresh, fetch = { consume ->
+                readPayload(Request.Builder().url(url).header("Authorization", "Bearer $key").build(),
+                    32 * 1024 * 1024, consume)
+            }, decode = { input ->
             JsonReader(input.reader(Charsets.UTF_8)).use { reader ->
                 val rows = mutableListOf<PreviewListedTorrent>()
                 var success = false
@@ -440,28 +452,45 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
                 require(success)
                 rows
             }
-        }
+        })
     }
 
-    suspend fun file(batch: PreviewBatch, path: String, cap: Int): ByteArray {
+    suspend fun file(batch: PreviewBatch, path: String, cap: Int, expectedSha256: String? = null): ByteArray {
         require(safePreviewPath(path))
-        val file = batch.files.singleOrNull { previewFileMatches(it.name, path, batch.name) }
-            ?: throw IOException("Preview file unavailable")
+        if (!path.endsWith(".json")) return downloadFile(batch, path, cap)
+        return metadata.get("batch/${batch.hash}/$path", cap, Long.MAX_VALUE,
+            decode = { input -> input.readBytes().also {
+                require(JSONObject(String(it, Charsets.UTF_8)).getInt("version") == 1)
+                if (expectedSha256 != null) require(sha256(it) == expectedSha256)
+            } },
+            fetch = { consume -> consume(downloadFile(batch, path, cap).inputStream()) })
+    }
+
+    private suspend fun downloadFile(batch: PreviewBatch, path: String, cap: Int, refreshed: Boolean = false): ByteArray = try {
+        require(safePreviewPath(path))
+        val current = locations[batch.hash] ?: batch
+        val file = current.files.singleOrNull { previewFileMatches(it.name, path, current.name) }
+            ?: throw PreviewLocationUnavailable()
         require(file.size in 1..cap.toLong())
-        val cacheKey = batch.id + ":" + file.id
+        val cacheKey = current.id + ":" + file.id
         suspend fun resolve(): String {
-            val link = api("requestdl", mapOf("token" to key, "torrent_id" to batch.id,
+            val link = api("requestdl", mapOf("token" to key, "torrent_id" to current.id,
                 "file_id" to file.id, "redirect" to "false", "zip_link" to "false", "append_name" to "false")).getString("data")
             require(link.toHttpUrlOrNull()?.isHttps == true)
             links[cacheKey] = link
             return link
         }
         val link = links[cacheKey] ?: resolve()
-        return try { get(Request.Builder().url(link).build(), cap) }
+        try { get(Request.Builder().url(link).build(), cap) }
         catch (expired: PreviewLinkExpired) {
             links.remove(cacheKey)
             get(Request.Builder().url(resolve()).build(), cap) // Refresh one expired URL; no general retry loop.
         }
+    } catch (stale: PreviewLocationUnavailable) {
+        if (refreshed || PreviewTorboxGate.blocked()) throw stale
+        val movieId = path.split('/').getOrNull(1)?.takeIf { path.startsWith("movies/") }
+        val current = batches(movieId, refresh = true).firstOrNull { it.hash == batch.hash } ?: throw stale
+        downloadFile(current, path, cap, refreshed = true)
     }
 
 
@@ -470,17 +499,21 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
         publishedCache?.takeIf { now < publishedUntil }?.let { return@withLock it }
         val batches = try {
             val url = "https://raw.githubusercontent.com/DavidVamaiotu/NuvioTV-Reshaped/subtitle-autosync-tester/tools/torbox-preview/published-batches.json"
-            val root = JSONObject(String(get(Request.Builder().url(url).build(), 64 * 1024), Charsets.UTF_8))
-            require(root.getInt("version") == 1)
-            val values = root.getJSONArray("batches")
-            require(values.length() in 1..32)
-            (0 until values.length()).map { i ->
-                val b = values.getJSONObject(i)
-                val hash = b.getString("info_hash").lowercase(Locale.ROOT)
-                val name = b.getString("name")
-                require(hash.matches(Regex("[0-9a-f]{40}")) && name.startsWith("NuvioPreviews-") && name.length <= 100)
-                hash to name
-            }.distinctBy { it.first }
+            metadata.get("published-batches", 64 * 1024, 300_000L,
+                fetch = { consume -> consume(get(Request.Builder().url(url).build(), 64 * 1024).inputStream()) },
+                decode = { input ->
+                    val root = JSONObject(String(input.readBytes(), Charsets.UTF_8))
+                    require(root.getInt("version") == 1)
+                    val values = root.getJSONArray("batches")
+                    require(values.length() in 1..32)
+                    (0 until values.length()).map { i ->
+                        val b = values.getJSONObject(i)
+                        val hash = b.getString("info_hash").lowercase(Locale.ROOT)
+                        val name = b.getString("name")
+                        require(hash.matches(Regex("[0-9a-f]{40}")) && name.startsWith("NuvioPreviews-") && name.length <= 100)
+                        hash to name
+                    }.distinctBy { it.first }
+            })
         } catch (cancel: CancellationException) { throw cancel }
         catch (_: Exception) { listOf("82681a29c5ff6849dd168594acde29eaeb890c69" to "NuvioPreviews-comet-1085-20261027-v1") }
         publishedCache = batches
@@ -489,14 +522,20 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
     }
 
     suspend fun existingHashes(wanted: Set<String>): Set<String> {
-        val found = mutableSetOf<String>()
-        for (page in 0 until 100) {
-            val rows = listing(page, keepFiles = false)
-            found += rows.map { it.hash }
-            if (found.containsAll(wanted) || rows.size < 100) return found
+        suspend fun scan(refresh: Boolean): Set<String> {
+            val found = mutableSetOf<String>()
+            for (page in 0 until 100) {
+                val rows = listing(page, keepFiles = false, refresh = refresh)
+                found += rows.map { it.hash }
+                if (found.containsAll(wanted) || rows.size < 100) return found
+            }
+            // Do not create potential duplicates when discovery was truncated.
+            throw IOException("Preview account list exceeded discovery limit")
         }
-        // Do not create potential duplicates when discovery was truncated.
-        throw IOException("Preview account list exceeded discovery limit")
+        val snapshot = scan(refresh = false)
+        // Reuse a recent positive snapshot, including after restart. Missing hashes must be
+        // checked against a fresh listing before setup is allowed to add anything.
+        return if (snapshot.containsAll(wanted)) snapshot else scan(refresh = true)
     }
 
     suspend fun addLibrary(hash: String, name: String): Boolean {
@@ -516,7 +555,10 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
         params.forEach { (name, value) -> url.addQueryParameter(name, value) }
         val bytes = get(Request.Builder().url(url.build()).header("Authorization", "Bearer $key").build(), 8 * 1024 * 1024)
         val result = JSONObject(String(bytes, Charsets.UTF_8))
-        if (!result.optBoolean("success")) throw IOException("Preview API unavailable")
+        if (!result.optBoolean("success")) {
+            if (endpoint == "requestdl") throw PreviewLocationUnavailable()
+            throw IOException("Preview API unavailable")
+        }
         return result
     }
 
@@ -535,7 +577,7 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
         coroutineContext.ensureActive()
         PreviewTorboxGate.enter()
         if (closed) throw IOException("Preview closed")
-        val call = client.newCall(request)
+        val call = httpClient.newCall(request)
         calls.add(call)
         if (closed) call.cancel()
         try {
@@ -545,6 +587,7 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
                     throw IOException("Preview rate limited")
                 }
                 if (response.code == 401 || response.code == 403) throw PreviewLinkExpired()
+                if (response.code == 404) throw PreviewLocationUnavailable()
                 if (!response.isSuccessful) throw IOException("Preview HTTP unavailable")
                 val body = response.body ?: throw IOException("Empty preview")
                 if (body.contentLength() > cap) throw IOException("Preview above limit")
@@ -574,7 +617,7 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
         } finally { calls.remove(call) }
     }
 
-    override fun close() { closed = true; calls.forEach { it.cancel() }; links.clear() }
+    override fun close() { closed = true; calls.forEach { it.cancel() }; links.clear(); locations.clear() }
 
     companion object {
         private val publishedMutex = Mutex()
@@ -586,6 +629,7 @@ private class PreviewTorboxHttp(private val key: String) : Closeable {
 }
 
 private class PreviewLinkExpired : IOException()
+private class PreviewLocationUnavailable : IOException("Preview file unavailable")
 
 /** Shared pacing across tracks, with a Retry-After cooldown that survives switching movies. */
 private object PreviewTorboxGate {
@@ -617,9 +661,9 @@ private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-25
 /** Enabled only by the preview switch or a movie session with previews enabled. */
 internal object TorboxPreviewLibrary {
     private val setup = TorboxLibrarySetup { android.os.SystemClock.elapsedRealtime() }
-    suspend fun ensure(key: String): TorboxLibrarySetup.Result = withContext(Dispatchers.IO) {
+    suspend fun ensure(key: String, cacheDirectory: File): TorboxLibrarySetup.Result = withContext(Dispatchers.IO) {
         if (key.isBlank()) return@withContext TorboxLibrarySetup.Result.FAILED
-        val http = PreviewTorboxHttp(key)
+        val http = PreviewTorboxHttp(key, cacheDirectory)
         try {
             setup.ensure(sha256(key.toByteArray(Charsets.UTF_8)), PreviewTorboxGate::blocked,
                 http::publishedBatches, http::existingHashes, http::addLibrary)

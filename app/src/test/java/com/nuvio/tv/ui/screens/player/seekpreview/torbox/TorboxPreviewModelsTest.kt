@@ -2,6 +2,8 @@ package com.nuvio.tv.ui.screens.player.seekpreview.torbox
 
 import org.junit.Assert.*
 import org.junit.Test
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 
 class TorboxPreviewModelsTest {
     private val hash = "a".repeat(40)
@@ -28,6 +30,36 @@ class TorboxPreviewModelsTest {
         assertNull(pack.match(request(duration = 400_000, source = null)))
         assertNull(pack.match(request(id = null, source = null)))
         assertNull(pack.match(request(file = 3)))
+    }
+
+    @Test fun tmdbRequestsUseCachedImdbForCatalogsWithoutTmdbIds() = runBlocking {
+        val resolved = resolveTorboxMovieRequest(request(id = "tmdb:27205", source = null),
+            cachedImdb = { "tt1375666" }, tmdbToImdb = { error("Cache must win") })
+        assertNotNull(pack.copy(tmdbId = null).match(resolved))
+    }
+
+    @Test fun tmdbRequestsReuseExistingResolverWhenMetadataIsMissing() = runBlocking {
+        var calls = 0
+        val resolved = resolveTorboxMovieRequest(request(id = "tmdb:27205", source = null),
+            cachedImdb = { null }, tmdbToImdb = { assertEquals(27205, it); calls++; "tt1375666" })
+        assertEquals(1, calls)
+        assertNotNull(pack.copy(tmdbId = null).match(resolved))
+        val missing = resolveTorboxMovieRequest(request(id = "tmdb:27205", source = null),
+            cachedImdb = { "invalid" }, tmdbToImdb = { null })
+        assertNull(pack.copy(tmdbId = null).match(missing))
+    }
+
+    @Test fun imdbRequestsAndUnsupportedContentDoNotCallMetadataServices() = runBlocking {
+        for (r in listOf(request(), request(id = "tmdb:27205", type = "series"), request(duration = 0))) {
+            assertEquals(r, resolveTorboxMovieRequest(r, { error("Unexpected cache lookup") }, { error("Unexpected lookup") }))
+        }
+    }
+
+    @Test fun identifierResolutionPreservesCancellation() = runBlocking {
+        try {
+            resolveTorboxMovieRequest(request(id = "tmdb:27205"), { null }, { throw CancellationException() })
+            fail("Cancellation must propagate")
+        } catch (_: CancellationException) { }
     }
 
     private fun timeline(): TorboxSpriteTimeline {

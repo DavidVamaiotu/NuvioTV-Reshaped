@@ -4,6 +4,7 @@ import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxFirstPreviewTrack
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxMovieRequest
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.TorboxSpriteTrack
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.torboxPreviewKeys
+import com.nuvio.tv.ui.screens.player.seekpreview.torbox.torboxPreviewRequest
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.calibrateTorboxPreview
 import kotlinx.coroutines.flow.first
 import com.nuvio.tv.ui.screens.player.PlayerEvent
@@ -149,7 +150,8 @@ class SeekPreviewState internal constructor(
             .transformLatest<Triple<String, String?, TorboxMovieRequest>, TorboxSpriteTrack?> { (key, streamUrl, request) ->
                 setOffset(0)
                 _previewCue.value = null
-                val owned = TorboxSpriteTrack.open(key, request, controller.context.cacheDir.resolve("torbox-sprites-v1"))
+                val resolved = if (key.isBlank()) request else torboxPreviewRequest(controller, request)
+                val owned = TorboxSpriteTrack.open(key, resolved, controller.context.cacheDir.resolve("torbox-sprites-v1"))
                 var calibration: Job? = null
                 try {
                     if (owned != null) calibration = scope.launch { calibrateTorboxPreview(controller, streamUrl, owned) }

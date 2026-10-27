@@ -1,12 +1,31 @@
 package com.nuvio.tv.ui.screens.player.seekpreview.torbox
 
 import kotlin.math.abs
+import kotlinx.coroutines.CancellationException
 
 /** Pure matching and timestamp rules; no network, player, or Android dependencies. */
 internal data class TorboxMovieRequest(
     val contentId: String?, val contentType: String?, val durationMs: Long,
     val sourceHash: String?, val sourceFileIndex: Int?
 )
+
+/** Reuse player metadata before an existing TMDB lookup; never guess identity from runtime. */
+internal suspend fun resolveTorboxMovieRequest(
+    request: TorboxMovieRequest,
+    cachedImdb: () -> String?,
+    tmdbToImdb: suspend (Int) -> String?,
+): TorboxMovieRequest {
+    if (request.durationMs <= 0 || request.contentType?.lowercase() in setOf("series", "tv", "show", "channel", "live")) return request
+    fun imdb(value: String?) = value?.trim()?.takeIf { it.matches(Regex("tt[0-9]{7,10}")) }
+    val base = request.contentId.orEmpty().trim().removePrefix("tmdb:").removePrefix("movie:")
+        .substringBefore(':').substringBefore('/')
+    imdb(base)?.let { return request.copy(contentId = it) }
+    val resolved = try {
+        imdb(cachedImdb()) ?: base.toIntOrNull()?.takeIf { it > 0 }?.let { imdb(tmdbToImdb(it)) }
+    } catch (cancel: CancellationException) { throw cancel }
+    catch (_: Exception) { null }
+    return resolved?.let { request.copy(contentId = it) } ?: request
+}
 
 internal data class TorboxPreviewPack(
     val id: String, val imdbId: String, val tmdbId: Int?, val revision: Int,

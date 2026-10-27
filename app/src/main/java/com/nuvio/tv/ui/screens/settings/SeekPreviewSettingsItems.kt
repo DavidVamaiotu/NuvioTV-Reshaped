@@ -36,7 +36,7 @@ internal fun LazyListScope.seekPreviewSettingsItems(
         val keys = remember(context) { torboxPreviewKeys(context) }
         val key by keys.collectAsStateWithLifecycle(initialValue = "")
         LaunchedEffect(checked, key) {
-            if (checked && key.isNotBlank()) TorboxPreviewLibrary.ensure(key)
+            if (checked && key.isNotBlank()) TorboxPreviewLibrary.ensure(key, context.cacheDir.resolve("torbox-sprites-v1"))
         }
 
         ToggleSettingsItem(

@@ -19,6 +19,7 @@ class TorboxVisualFingerprintTest {
             matcher.observe(at, hash)
             previous = at
         }
+        matcher.observe(previous + 500, unusable) // Close the final observation window.
     }
     @Test fun matchesPillowCenterDhash128GoldenVectors() {
         val expected = listOf("3cf0800001071e7839f1232323677e62", "4a4ab54ab54ab54ab54ab54ab54ab54a",
@@ -93,8 +94,51 @@ class TorboxVisualFingerprintTest {
             while (tick < at) { matcher.observe(tick, unusable); tick += 500 }
             matcher.observe(at, hash); tick = at + 500
         }
+        matcher.observe(pairs.last().first + 500, unusable)
         val map = matcher.mapping()!!
         assertEquals(24.0 / 25, map.scale, .00001); assertEquals(3000.0, map.offsetMs, 1.0)
         assertTrue(abs(map.playback(map.reference(500_000)) - 500_000) <= 2)
+    }
+
+    @Test fun productionTenSecondCadenceCanVerifyBothFrameRateCorrections() {
+        val a = (1..30).map { anchor(it) }
+        for (scale in listOf(24.0 / 25, 25.0 / 24)) {
+            val matcher = TorboxVisualMatcher(a, scale)
+            feed(matcher, a.map { ((it.positionMs - 2000) / scale).toLong() to it.hash })
+            val map = matcher.mapping()!!
+            assertEquals(scale, map.scale, .00001)
+            assertEquals(2000.0, map.offsetMs, 1.0)
+        }
+    }
+
+    @Test fun matchingStillShotsDoNotCreateAFalseTwoSecondOffset() {
+        val a = (1..20).map { anchor(it) }
+        val matcher = TorboxVisualMatcher(a)
+        for (at in 0L..35_000L step 500L) {
+            val shot = a.take(3).firstOrNull { at in (it.positionMs - 2000)..(it.positionMs + 2000) }
+            matcher.observe(at, shot?.hash ?: unusable)
+            assertNull("Must not accept a provisional first capture at $at", matcher.mapping())
+        }
+        feed(matcher, a.drop(4).take(3).map { it.positionMs to it.hash })
+        assertEquals(0.0, matcher.mapping()!!.offsetMs, .01)
+    }
+
+    @Test fun aMatchingWindowMustCloseBeforeItBecomesEvidence() {
+        val a = (1..20).map { anchor(it) }
+        val matcher = TorboxVisualMatcher(a)
+        feed(matcher, a.take(2).map { it.positionMs to it.hash })
+        matcher.observe(30_000, a[2].hash)
+        assertNull(matcher.mapping())
+        matcher.observe(30_500, unusable)
+        assertNotNull(matcher.mapping())
+    }
+
+    @Test fun anEarlyOutlierExpiresWithoutPoisoningTheFiveMinuteMatchingBudget() {
+        val a = (1..30).map { anchor(it) }
+        val matcher = TorboxVisualMatcher(a)
+        feed(matcher, a.mapIndexed { i, anchor ->
+            (anchor.positionMs - if (i == 0) 3000 else 0) to anchor.hash
+        })
+        assertEquals(0.0, matcher.mapping()!!.offsetMs, .01)
     }
 }

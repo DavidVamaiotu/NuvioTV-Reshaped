@@ -6,6 +6,8 @@ The preview switch starts account setup from settings. Opening a movie with prev
 
 A streaming JSON reader handles the large torrent file listing, retaining the requested IMDb movie's paths and catalog. The API response is capped at 32 MiB. Other providers and manual Preview Sync remain available.
 
+Setup and playback share a streamed disk snapshot of each account listing for ten minutes. Missing library hashes are checked with a fresh listing before adding anything. The published batch list is cached for five minutes; immutable catalogs, indices and fingerprints are keyed by torrent hash and path. Index SHA-256 checks apply to cached and downloaded bytes. Metadata disk usage is bounded to 128 MiB. Pending libraries bypass snapshots while polling; stale file locations refresh once and are reused by later sheets. No API keys or generated CDN links are stored. TMDB playback uses the player's cached IMDb metadata first, then its existing TMDB identifier resolver.
+
 ## Immediate display, background matching
 
 Runtime and movie identity select an approximate initial candidate, which is emitted and prefetched immediately after its index loads. Fingerprint metadata, playback captures and color calibration never gate the first preview. Cold network/cache misses still require fetching a sheet.
@@ -13,6 +15,8 @@ Runtime and movie identity select an approximate initial candidate, which is emi
 Different sources load the packaged center-dhash128-v1 fingerprints in the background. Their frame indices, timestamps, duration and movie identity must match the selected index. Sparse 320 by 180 PixelCopy captures observe normal playback; no extra decoder, video download or player seek is used. At most 360 captures over five minutes are attempted, spaced at least 500 ms, and none while paused, seeking or buffering.
 
 Hash processing reproduces PIL grayscale weights, center crop and separable Lanczos3. Ambiguous best matches, black/flat frames, duplicate scenes and inconsistent timing are rejected. Three distinct scenes spanning at least 18 seconds must agree within 650 ms, with mean Hamming distance at most eight bits. A 24/25 or 25/24 speed hypothesis additionally needs five scenes across two minutes; runtime alone never applies a correction. A correction changes thumbnail lookup and cue times, never playback position. Manual Preview Sync takes precedence.
+
+A scene becomes evidence only after its matching window closes. Windows wider than 650 ms on the reference timeline are rejected, avoiding false offsets from static shots. At most 32 completed observations from the last three minutes are retained, allowing ten-second fingerprints to establish frame-rate corrections without keeping early outliers for the entire session.
 
 Verification is provisional for the sampled scenes. Alternate edits, inserted scenes, protected surfaces or insufficient observations may leave the initial approximate timing. Another release never becomes an exact grid-aligned source merely because its fingerprints match. The correction is session-scoped; cached sprites remain unchanged.
 

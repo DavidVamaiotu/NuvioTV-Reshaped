@@ -76,20 +76,42 @@ internal data class TorboxVisualMapping(val scale: Double = 1.0, val offsetMs: D
 }
 
 internal class TorboxVisualMatcher(private val anchors: List<TorboxVisualAnchor>, private val scale: Double = 1.0) {
+    private data class Observation(var best: TorboxVisualMatch, val firstMs: Long, var lastMs: Long)
     private val evidence = linkedMapOf<Int, TorboxVisualMatch>()
+    private var observing: Observation? = null
     private var lastPlaybackMs: Long? = null
     fun observe(playbackMs: Long, hash: PreviewHash128): TorboxVisualMatch? {
         val last = lastPlaybackMs
-        if (last != null && (playbackMs < last || playbackMs - last > 10_000)) evidence.clear()
+        if (last != null && (playbackMs < last || playbackMs - last > 10_000)) {
+            evidence.clear()
+            observing = null
+        }
         lastPlaybackMs = playbackMs
-        if (!hash.usable) return null
-        val scores = anchors.asSequence().filter { it.hash.usable && abs(it.positionMs - playbackMs * scale) <= 120_000 }
+        val scores = anchors.asSequence().filter { hash.usable && it.hash.usable && abs(it.positionMs - playbackMs * scale) <= 120_000 }
             .map { TorboxVisualMatch(it, playbackMs, it.hash.distance(hash)) }.sortedBy { it.distance }.take(2).toList()
-        val best = scores.firstOrNull() ?: return null
-        if (best.distance > 12 || scores.size < 2 || scores[1].distance - best.distance < 6) return null
-        val old = evidence[best.anchor.frame]
-        if (old == null || best.distance < old.distance) evidence[best.anchor.frame] = best
-        while (evidence.size > 12) evidence.remove(evidence.keys.first())
+        val best = scores.firstOrNull()?.takeIf {
+            it.distance <= 12 && scores.size >= 2 && scores[1].distance - it.distance >= 6
+        }
+        val current = observing
+        if (current != null && current.best.anchor.frame == best?.anchor?.frame) {
+            current.lastMs = playbackMs
+            if (best.distance < current.best.distance) current.best = best
+        } else {
+            // A still shot may match for seconds. Wait until its observation window closes,
+            // then reject imprecise timestamps rather than locking onto the first capture.
+            if (current != null) {
+                val frame = current.best.anchor.frame
+                if ((current.lastMs - current.firstMs) * scale <= 650 && playbackMs - current.lastMs <= 1_000) {
+                    val completed = current.best.copy(playbackMs = (current.firstMs + current.lastMs) / 2)
+                    val old = evidence[frame]
+                    if (old == null || completed.distance < old.distance) evidence[frame] = completed
+                } else evidence.remove(frame)
+            }
+            observing = best?.let { Observation(it, playbackMs, playbackMs) }
+        }
+        // Ten-second anchors need more than twelve distinct scenes to span two minutes.
+        evidence.entries.removeAll { playbackMs - it.value.playbackMs > 180_000 }
+        while (evidence.size > 32) evidence.remove(evidence.keys.first())
         return best
     }
 
