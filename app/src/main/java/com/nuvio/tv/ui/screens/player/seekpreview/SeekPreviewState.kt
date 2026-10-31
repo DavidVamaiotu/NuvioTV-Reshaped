@@ -7,6 +7,7 @@ import com.nuvio.tv.ui.screens.player.seekpreview.torbox.torboxPreviewKeys
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.torboxPreviewRequest
 import com.nuvio.tv.ui.screens.player.seekpreview.torbox.calibrateTorboxPreview
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import com.nuvio.tv.ui.screens.player.PlayerEvent
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
 import com.nuvio.tv.ui.screens.player.currentPlaybackDurationMs
@@ -150,11 +151,20 @@ class SeekPreviewState internal constructor(
             .transformLatest<Triple<String, String?, TorboxMovieRequest>, TorboxSpriteTrack?> { (key, streamUrl, request) ->
                 setOffset(0)
                 _previewCue.value = null
+                // The account listing is large: let a new source finish its first buffering (bounded)
+                // before downloading it, so preview setup never slows the start of playback.
+                if (key.isNotBlank() && request.durationMs > 0L) withTimeoutOrNull(TORBOX_START_WAIT_MS) {
+                    controller.uiState.first { it.isPlaying && !it.isBuffering }
+                }
                 val resolved = if (key.isBlank()) request else torboxPreviewRequest(controller, request)
                 val owned = TorboxSpriteTrack.open(key, resolved, controller.context.cacheDir.resolve("torbox-sprites-v1"))
                 var calibration: Job? = null
+                var stalls: Job? = null
                 try {
                     if (owned != null) calibration = scope.launch { calibrateTorboxPreview(controller, streamUrl, owned) }
+                    if (owned != null) stalls = scope.launch {
+                        controller.uiState.map { it.isBuffering }.distinctUntilChanged().collect { owned.playbackStalled = it }
+                    }
                     owned?.prefetch(runCatching { controller.currentPlaybackPositionMs() }.getOrNull() ?: 0L)
                     emit(owned) // Fingerprint verification never blocks or hides initial previews.
                     if (owned != null) {
@@ -164,7 +174,7 @@ class SeekPreviewState internal constructor(
                         emit(null) // Resume existing providers if the TorBox track becomes unavailable.
                     }
                     awaitCancellation()
-                } finally { calibration?.cancel(); owned?.close() }
+                } finally { calibration?.cancel(); stalls?.cancel(); owned?.close() }
             }.stateIn(scope, SharingStarted.Eagerly, null)
 
     /**
@@ -422,6 +432,9 @@ class SeekPreviewState internal constructor(
 
 /** A change of the scrub position at least this large is a step, not a snap onto a cue start. */
 private const val SCRUB_STEP_MIN_MS = 6_000L
+
+/** Longest a new source waits for its first buffering before TorBox preview setup starts. */
+private const val TORBOX_START_WAIT_MS = 15_000L
 
 /** Position/counters participate so a full read-ahead buffer does not freeze health observations. */
 private data class PreviewPlaybackSample(

@@ -164,6 +164,8 @@ internal class TorboxSpriteTrack private constructor(
             warming.launch {
                 var failures = 0
                 while (!closed) {
+                    // Playback comes first: no preview download competes with a stalled buffer.
+                    while (playbackStalled && !closed) delay(PREFETCH_STALL_POLL_MS)
                     val sheet = queue.next() ?: break
                     try { sheetBytes(sheet); failures = 0 }
                     catch (cancel: CancellationException) { throw cancel }
@@ -180,6 +182,9 @@ internal class TorboxSpriteTrack private constructor(
             }
         }
     }
+
+    /** Set by the player while it rebuffers; background sheet downloads wait until it plays again. */
+    @Volatile var playbackStalled = false
 
     /** While a remote key is held, lookups answer from RAM or disk only and never wait on the network. */
     @Volatile private var heldScrub = false
@@ -319,6 +324,7 @@ internal class TorboxSpriteTrack private constructor(
         private const val PREFETCH_MAX_FAILURES = 3
         private const val PREFETCH_RETRY_DELAY_MS = 2_000L
         private const val SHEET_RETRY_MS = 5_000L
+        private const val PREFETCH_STALL_POLL_MS = 500L
         private const val SHEET_MISSING_RETRY_MS = 60_000L
 
         /** Waits between opening attempts after a network failure; a missing pack is never retried. */
