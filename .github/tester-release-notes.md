@@ -1,3 +1,2 @@
-- Settings > Nuvio Reshaped is now grouped: Subtitles and sync, Seek previews, Sound and picture, Streams, Home and menus, Live TV, Sync with Google, and Diagnostics. Press OK on a group to open it.
-- Debug and log options moved to Diagnostics at the bottom; the Arc reset buttons sit under a Troubleshooting label in Sound and picture.
-- No setting was removed or changed, only moved.
+- TorBox seek previews stay complete while you hold left or right: the side frames no longer go missing, and the whole filmstrip moves together on every step.
+- Held scrubbing reuses each decoded preview sheet for every frame on it and prepares the next sheet in the direction you are moving, so fast holds keep up. This uses about 12 MB only while the key is held (playback is paused then) and is freed when you let go.

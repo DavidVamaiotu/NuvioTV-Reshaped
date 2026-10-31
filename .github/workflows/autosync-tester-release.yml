@@ -3,7 +3,7 @@ name: AutoSync TV Tester Release
 # Builds the Tester channel (TesterChannel.kt) from subtitle-autosync-tester. Runs when
 # this workflow file changes on the tester branch, or via manual dispatch when the workflow
 # is available on the default branch. Ordinary code pushes never publish a release.
-# Release request: Nuvio Reshaped settings grouped into sections (with the settings change).
+# Release request: TorBox filmstrip stays complete while seek is held.
 # It never touches the beta or stable releases.
 #
 # Tags are <nuvio version>-tester.N, always pre-releases and never "latest". Stable and Beta apps
