@@ -1,4 +1,3 @@
-- TorBox seek previews now keep showing while you hold left or right: frames already on the TV appear immediately, and the frame where you let go is still exact.
-- The whole movie's TorBox preview sheets are downloaded in the background, and one failed sheet no longer stops the rest.
-- A short network hiccup or rate limit no longer turns TorBox previews off for the rest of the movie; loading retries after 5, 20 and 60 seconds, and the large account listing gets a longer time limit (helps big remux sources).
-- TorBox preview failures are now listed in the seek preview diagnostics.
+- Settings > Nuvio Reshaped is now grouped: Subtitles and sync, Seek previews, Sound and picture, Streams, Home and menus, Live TV, Sync with Google, and Diagnostics. Press OK on a group to open it.
+- Debug and log options moved to Diagnostics at the bottom; the Arc reset buttons sit under a Troubleshooting label in Sound and picture.
+- No setting was removed or changed, only moved.
