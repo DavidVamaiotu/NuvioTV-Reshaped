@@ -192,7 +192,63 @@ internal class TorboxSpriteTrack private constructor(
 
     override fun noteHeldScrub(held: Boolean) {
         heldScrub = held
-        if (!held) lastHeldSourceMs = -1L
+        if (!held) {
+            lastHeldSourceMs = -1L
+            // Shown crops may still reference these bitmaps; dropping them leaves release to GC.
+            synchronized(heldSheets) { heldSheets.clear(); heldSheetBytes = 0 }
+        }
+    }
+
+    /**
+     * Whole decoded sheets kept only while a key is held. A held step jumps several cues, so
+     * keeping the sheet (instead of the two tiles either side) answers every cue on it, and the
+     * filmstrip neighbours, as crops without decoding the same sheet again. Bounded to about
+     * two sheets and cleared as soon as the hold ends.
+     */
+    private val heldSheets = LinkedHashMap<String, Bitmap>(4, .75f, true)
+    private var heldSheetBytes = 0
+    @Volatile private var heldDecodeAhead: kotlinx.coroutines.Job? = null
+
+    private fun heldCrop(frame: TorboxSpriteFrame): SeekPreviewThumbnail? {
+        val sheet = synchronized(heldSheets) { heldSheets[frame.sheet] } ?: return null
+        return SeekPreviewThumbnail(sheet, frame.startMs, frame.endMs,
+            approximate = !match.exactSource, origin = "TORBOX",
+            actualFrameMs = if (match.exactSource) frame.actualMs else null,
+            crop = Rect(frame.x, frame.y, frame.x + frame.width, frame.y + frame.height))
+    }
+
+    /** Decodes [sheet] from RAM/disk only (caller holds [mutex]); null when it is not on the device. */
+    private fun decodeHeldSheet(sheet: TorboxSpriteSheet): Bitmap? {
+        synchronized(heldSheets) { heldSheets[sheet.path] }?.let { return it }
+        if (!heldScrub || sheet.width.toLong() * sheet.height > HELD_SHEET_MAX_PIXELS) return null
+        val data = bytes.cached(sheet) ?: return null
+        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size,
+            BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }) ?: return null
+        if (bitmap.width != sheet.width || bitmap.height != sheet.height) return null
+        synchronized(heldSheets) {
+            if (!heldScrub) return null
+            heldSheets[sheet.path] = bitmap
+            heldSheetBytes += bitmap.byteCount
+            val oldest = heldSheets.entries.iterator()
+            while (heldSheetBytes > HELD_SHEETS_MAX_BYTES && heldSheets.size > 1 && oldest.hasNext()) {
+                val entry = oldest.next()
+                if (entry.key == sheet.path) continue
+                heldSheetBytes -= entry.value.byteCount
+                oldest.remove()
+            }
+        }
+        return bitmap
+    }
+
+    /** While held, the next sheet in the scrub direction is decoded before the cursor reaches it. */
+    private fun decodeAheadWhileHeld(next: TorboxSpriteSheet) {
+        if (heldDecodeAhead?.isActive == true || synchronized(heldSheets) { heldSheets.containsKey(next.path) }) return
+        heldDecodeAhead = warming.launch {
+            try { mutex.withLock { if (!closed) decodeHeldSheet(next) } }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) { }
+            catch (_: OutOfMemoryError) { }
+        }
     }
 
     /** Fetch [sheet] next, then the sheet after it in the direction the held key moves. */
@@ -204,7 +260,10 @@ internal class TorboxSpriteTrack private constructor(
         if (direction != 0) {
             var index = timeline.frames.binarySearchBy(frame.startMs) { it.startMs }
             while (index in timeline.frames.indices && timeline.frames[index].sheet == frame.sheet) index += direction
-            timeline.frames.getOrNull(index)?.let { queue.prioritize(it.sheet) }
+            timeline.frames.getOrNull(index)?.let { ahead ->
+                queue.prioritize(ahead.sheet)
+                timeline.sheets[ahead.sheet]?.let(::decodeAheadWhileHeld)
+            }
         }
         queue.prioritize(frame.sheet)
     }
@@ -243,6 +302,15 @@ internal class TorboxSpriteTrack private constructor(
             PreviewTorboxGate.blocked()
         if (heldScrub && markUnavailable && steer) prioritizeHeld(frame, sourceMs)
         mutex.withLock { tiles[frame.startMs] }?.let { return@withContext it }
+        if (heldScrub && markUnavailable) {
+            heldCrop(frame)?.let { return@withContext it }
+            val decoded = try { mutex.withLock { if (closed) null else decodeHeldSheet(sheet) } }
+                catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { null }
+                catch (_: OutOfMemoryError) { synchronized(heldSheets) { heldSheets.clear(); heldSheetBytes = 0 }; null }
+            if (decoded != null) return@withContext heldCrop(frame)
+            // Oversized sheets fall through to the region decode below, from cached bytes only.
+        }
         try {
             if (!cacheOnly) prefetchQueue?.prioritize(sheet.path)
             // A held scrub outruns any download: a sheet not on the device yet shows nothing new
@@ -325,6 +393,8 @@ internal class TorboxSpriteTrack private constructor(
         private const val PREFETCH_RETRY_DELAY_MS = 2_000L
         private const val SHEET_RETRY_MS = 5_000L
         private const val PREFETCH_STALL_POLL_MS = 500L
+        private const val HELD_SHEET_MAX_PIXELS = 2_000_000L
+        private const val HELD_SHEETS_MAX_BYTES = 12 * 1024 * 1024
         private const val SHEET_MISSING_RETRY_MS = 60_000L
 
         /** Waits between opening attempts after a network failure; a missing pack is never retried. */

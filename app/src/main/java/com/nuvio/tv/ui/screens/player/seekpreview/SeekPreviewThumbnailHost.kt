@@ -120,6 +120,8 @@ fun SeekPreviewThumbnailHost(
             var cachedRevision: Int? = null
             var slideJob: Job? = null
             var lastPaintAt = 0L
+            var paintedWhileHeld = false
+            var settleJob: Job? = null
             val fills = MutableStateFlow<Filmstrip?>(null)
 
             // A neighbor lookup finishes before taking the latest strip. Key repeats do not
@@ -192,7 +194,8 @@ fun SeekPreviewThumbnailHost(
                 val previous = strip?.takeIf { it.matches(rev, offset) }
                 val steps = previous?.stepsTo(center.cueStartMs)
                 val seeded = Filmstrip.around(center, previous, steps, rev, offset)
-                strip = seeded
+                // While held, the strip is published once its neighbours are in (below).
+                if (!(held && visible)) strip = seeded
                 if (latest.positionMs == positionMs) {
                     seekPreview.onPreviewCueResolved(SeekPreviewCue(
                         center.cueStartMs - offset, center.cueEndMs - offset,
@@ -208,7 +211,31 @@ fun SeekPreviewThumbnailHost(
                     }
                     lastPaintAt = now
                 }
-                fills.value = if (visible) seeded else null
+                if (held && visible) {
+                    // A held key moves on before a background fill could finish, which left the
+                    // side frames empty. Held lookups answer from decoded sheets, so the
+                    // neighbours are filled right here and the whole strip moves together.
+                    fills.value = null
+                    strip = activeTrack.fillFilmstrip(seeded, refreshAll = false, stillCurrent = {
+                        requestFlow.value.let { it.offsetMs == offset && it.revision == rev && it.visible }
+                    })
+                    paintedWhileHeld = true
+                } else if (paintedWhileHeld && visible) {
+                    // Held frames are crops of whole decoded sheets. Once the key is released,
+                    // swap each neighbour for its own small tile in place (no blank frames), so
+                    // the sheets are not kept alive by a strip left on screen.
+                    paintedWhileHeld = false
+                    fills.value = null
+                    settleJob?.cancel()
+                    settleJob = launch {
+                        fun stillCurrent() = strip?.center?.cueStartMs == seeded.center?.cueStartMs &&
+                            requestFlow.value.let { it.offsetMs == offset && it.revision == rev && it.visible && !it.held }
+                        activeTrack.fillFilmstrip(seeded, refreshAll = true, stillCurrent = ::stillCurrent,
+                            onProgress = { filled -> if (stillCurrent()) strip = filled })
+                    }
+                } else {
+                    fills.value = if (visible) seeded else null
+                }
             }
         }
     }
