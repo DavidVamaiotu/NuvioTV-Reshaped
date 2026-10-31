@@ -209,15 +209,36 @@ internal class TorboxSpriteTrack private constructor(
         http.file(batch, "$directory/${sheet.path}", sheet.bytes)
     }
 
+    /** Sheets whose last download failed: elapsed-realtime until which only cached bytes are used. */
+    private val sheetRetryAt = ConcurrentHashMap<String, Long>()
+
+    /**
+     * Only a failure that cannot heal during this playback turns TorBox off for the movie: the
+     * account key was refused, or bytes that passed their hash do not decode as the index says.
+     * A timeout, rate limit, server error, missing sheet or low memory skips that lookup and the
+     * sheet is tried again later, so one network hiccup no longer removes every preview.
+     */
+    private fun noteLookupFailure(sheet: TorboxSpriteSheet?, error: Throwable, mayDisable: Boolean) {
+        val permanent = mayDisable && (error is PreviewLinkExpired || (error !is IOException && error !is OutOfMemoryError))
+        if (permanent) healthy.value = false
+        else if (sheet != null) sheetRetryAt[sheet.path] = android.os.SystemClock.elapsedRealtime() +
+            if (error is PreviewLocationUnavailable) SHEET_MISSING_RETRY_MS else SHEET_RETRY_MS
+        com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewDiagnostics.note(
+            "torbox lookup failed: ${error.javaClass.simpleName} ${error.message.orEmpty()}" + if (permanent) " (disabled)" else "")
+    }
+
     private suspend fun rawThumbnail(positionMs: Long, markUnavailable: Boolean, steer: Boolean = false): SeekPreviewThumbnail? = withContext(Dispatchers.IO) {
         if (closed || !healthy.value) return@withContext null
         val sourceMs = sourcePosition(positionMs + offsetMs)
         val frame = timeline.frameAt(sourceMs) ?: return@withContext null
-        val cacheOnly = heldScrub && markUnavailable
-        if (cacheOnly && steer) prioritizeHeld(frame, sourceMs)
+        val sheet = timeline.sheets[frame.sheet] ?: return@withContext null
+        val now = android.os.SystemClock.elapsedRealtime()
+        // A held scrub, a sheet that just failed, or a rate-limit cooldown: answer from the device only.
+        val cacheOnly = (heldScrub && markUnavailable) || (sheetRetryAt[sheet.path] ?: 0L) > now ||
+            PreviewTorboxGate.blocked()
+        if (heldScrub && markUnavailable && steer) prioritizeHeld(frame, sourceMs)
         mutex.withLock { tiles[frame.startMs] }?.let { return@withContext it }
         try {
-            val sheet = requireNotNull(timeline.sheets[frame.sheet])
             if (!cacheOnly) prefetchQueue?.prioritize(sheet.path)
             // A held scrub outruns any download: a sheet not on the device yet shows nothing new
             // now, and the frame for the release position is looked up again with network.
@@ -277,8 +298,8 @@ internal class TorboxSpriteTrack private constructor(
                 if (closed) null else tiles[frame.startMs]
             }
         } catch (cancel: CancellationException) { throw cancel }
-        catch (_: Exception) { if (markUnavailable) healthy.value = false; null }
-        catch (_: OutOfMemoryError) { if (markUnavailable) healthy.value = false; null }
+        catch (error: Exception) { noteLookupFailure(sheet, error, mayDisable = markUnavailable && steer); null }
+        catch (error: OutOfMemoryError) { noteLookupFailure(sheet, error, mayDisable = false); null }
     }
 
     override fun close() {
@@ -297,11 +318,39 @@ internal class TorboxSpriteTrack private constructor(
     companion object {
         private const val PREFETCH_MAX_FAILURES = 3
         private const val PREFETCH_RETRY_DELAY_MS = 2_000L
+        private const val SHEET_RETRY_MS = 5_000L
+        private const val SHEET_MISSING_RETRY_MS = 60_000L
 
-        suspend fun open(key: String, request: TorboxMovieRequest, cacheDirectory: File): TorboxSpriteTrack? = withContext(Dispatchers.IO) {
+        /** Waits between opening attempts after a network failure; a missing pack is never retried. */
+        private val OPEN_RETRY_DELAYS_MS = longArrayOf(5_000L, 20_000L, 60_000L)
+
+        /**
+         * Opens the movie's previews, retrying a network failure, timeout or rate-limit cooldown a
+         * few times instead of leaving the whole playback without TorBox previews. Other providers
+         * stay usable meanwhile, and a source change cancels the wait.
+         */
+        suspend fun open(key: String, request: TorboxMovieRequest, cacheDirectory: File): TorboxSpriteTrack? {
+            var attempt = 0
+            while (true) {
+                val outcome = openOnce(key, request, cacheDirectory)
+                if (outcome.track != null || !outcome.retry || attempt >= OPEN_RETRY_DELAYS_MS.size) {
+                    if (outcome.track == null && outcome.retry) com.nuvio.tv.ui.screens.player.seekpreview.engine
+                        .PreviewDiagnostics.note("torbox open gave up after ${attempt + 1} attempts")
+                    return outcome.track
+                }
+                val wait = maxOf(OPEN_RETRY_DELAYS_MS[attempt++], PreviewTorboxGate.remainingMs() + 1_000L)
+                com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewDiagnostics.note(
+                    "torbox open retry $attempt in ${wait / 1000}s")
+                delay(wait)
+            }
+        }
+
+        private class OpenOutcome(val track: TorboxSpriteTrack?, val retry: Boolean)
+
+        private suspend fun openOnce(key: String, request: TorboxMovieRequest, cacheDirectory: File): OpenOutcome = withContext(Dispatchers.IO) {
             if (key.isBlank() || request.durationMs <= 0L ||
-                request.contentType?.lowercase() in setOf("series", "tv", "show", "channel", "live") ||
-                PreviewTorboxGate.blocked()) return@withContext null
+                request.contentType?.lowercase() in setOf("series", "tv", "show", "channel", "live")) return@withContext OpenOutcome(null, false)
+            if (PreviewTorboxGate.blocked()) return@withContext OpenOutcome(null, true)
             val setupResult = TorboxPreviewLibrary.ensure(key, cacheDirectory)
             val http = PreviewTorboxHttp(key, cacheDirectory)
             var transferred = false
@@ -329,7 +378,7 @@ internal class TorboxSpriteTrack private constructor(
                 }
                 val order = torboxPreviewMatchOrder(request)
                 val selected = choices.minWithOrNull { a, b -> order.compare(a.second, b.second) }
-                    ?: return@withContext null
+                    ?: return@withContext OpenOutcome(null, batches.isEmpty() && http.pendingBatch)
                 val (batch, match) = selected
                 val indexBytes = http.file(batch, match.pack.indexPath, 4 * 1024 * 1024, match.pack.indexSha256)
                 val index = JSONObject(String(indexBytes, Charsets.UTF_8))
@@ -362,15 +411,19 @@ internal class TorboxSpriteTrack private constructor(
                 val timeline = TorboxSpriteTimeline(frames, sheets)
                 require(kotlin.math.abs(timeline.frames.last().endMs - match.pack.durationMs) <= 1)
                 transferred = true
-                TorboxSpriteTrack(http, batch, match, timeline, cacheDirectory,
+                OpenOutcome(TorboxSpriteTrack(http, batch, match, timeline, cacheDirectory,
                     index.optString("fingerprints").takeIf { it.isNotBlank() },
                     listOf(1.0, 24.0 / 25, 25.0 / 24).minBy {
                         kotlin.math.abs(request.durationMs * it - match.pack.durationMs)
                     }.takeIf { kotlin.math.abs(request.durationMs * it - match.pack.durationMs) / match.pack.durationMs < .002 } ?: 1.0,
-                    TorboxPreviewTiming(request.durationMs, timeline.frames.last().endMs, match.exactSource))
+                    TorboxPreviewTiming(request.durationMs, timeline.frames.last().endMs, match.exactSource)), false)
             } catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { null }
-            catch (_: OutOfMemoryError) { null }
+            catch (error: Exception) {
+                com.nuvio.tv.ui.screens.player.seekpreview.engine.PreviewDiagnostics.note(
+                    "torbox open failed: ${error.javaClass.simpleName} ${error.message.orEmpty()}")
+                OpenOutcome(null, error is IOException)
+            }
+            catch (_: OutOfMemoryError) { OpenOutcome(null, true) }
             finally { if (!transferred) http.close() }
         }
 
@@ -408,6 +461,13 @@ private class PreviewTorboxHttp(
 ) : Closeable {
     @Volatile private var closed = false
     private val calls = ConcurrentHashMap.newKeySet<Call>()
+    /**
+     * The account listing holds every file of the preview library (tens of MB of JSON), and the
+     * catalog/index arrive while a large source fills its buffer at line speed. Sprite sheets
+     * keep the short limits of the shared client.
+     */
+    private val metadataClient = httpClient.newBuilder()
+        .readTimeout(20, TimeUnit.SECONDS).callTimeout(90, TimeUnit.SECONDS).build()
     private val links = ConcurrentHashMap<String, String>()
     private val locations = ConcurrentHashMap<String, PreviewBatch>()
     private val metadata = TorboxPreviewMetadataCache(File(cacheDirectory, "metadata-v1"))
@@ -445,7 +505,7 @@ private class PreviewTorboxHttp(
         return metadata.get("account/$account/list/$page", 32 * 1024 * 1024, 600_000L,
             refresh = refresh, fetch = { consume ->
                 readPayload(Request.Builder().url(url).header("Authorization", "Bearer $key").build(),
-                    32 * 1024 * 1024, consume)
+                    32 * 1024 * 1024, metadataClient, consume)
             }, decode = { input ->
             JsonReader(input.reader(Charsets.UTF_8)).use { reader ->
                 val rows = mutableListOf<PreviewListedTorrent>()
@@ -506,15 +566,17 @@ private class PreviewTorboxHttp(
     suspend fun file(batch: PreviewBatch, path: String, cap: Int, expectedSha256: String? = null): ByteArray {
         require(safePreviewPath(path))
         if (!path.endsWith(".json")) return downloadFile(batch, path, cap)
+        // Catalog, index and fingerprints are larger and fetched while playback buffers hardest.
         return metadata.get("batch/${batch.hash}/$path", cap, Long.MAX_VALUE,
             decode = { input -> input.readBytes().also {
                 require(JSONObject(String(it, Charsets.UTF_8)).getInt("version") == 1)
                 if (expectedSha256 != null) require(sha256(it) == expectedSha256)
             } },
-            fetch = { consume -> consume(downloadFile(batch, path, cap).inputStream()) })
+            fetch = { consume -> consume(downloadFile(batch, path, cap, client = metadataClient).inputStream()) })
     }
 
-    private suspend fun downloadFile(batch: PreviewBatch, path: String, cap: Int, refreshed: Boolean = false): ByteArray = try {
+    private suspend fun downloadFile(batch: PreviewBatch, path: String, cap: Int, refreshed: Boolean = false,
+                                     client: OkHttpClient = httpClient): ByteArray = try {
         require(safePreviewPath(path))
         val current = locations[batch.hash] ?: batch
         val file = current.files.singleOrNull { previewFileMatches(it.name, path, current.name) }
@@ -529,16 +591,16 @@ private class PreviewTorboxHttp(
             return link
         }
         val link = links[cacheKey] ?: resolve()
-        try { get(Request.Builder().url(link).build(), cap) }
+        try { get(Request.Builder().url(link).build(), cap, client) }
         catch (expired: PreviewLinkExpired) {
             links.remove(cacheKey)
-            get(Request.Builder().url(resolve()).build(), cap) // Refresh one expired URL; no general retry loop.
+            get(Request.Builder().url(resolve()).build(), cap, client) // Refresh one expired URL; no general retry loop.
         }
     } catch (stale: PreviewLocationUnavailable) {
         if (refreshed || PreviewTorboxGate.blocked()) throw stale
         val movieId = path.split('/').getOrNull(1)?.takeIf { path.startsWith("movies/") }
         val current = batches(movieId, refresh = true).firstOrNull { it.hash == batch.hash } ?: throw stale
-        downloadFile(current, path, cap, refreshed = true)
+        downloadFile(current, path, cap, refreshed = true, client = client)
     }
 
 
@@ -610,7 +672,7 @@ private class PreviewTorboxHttp(
         return result
     }
 
-    private suspend fun get(request: Request, cap: Int): ByteArray = readPayload(request, cap) { input ->
+    private suspend fun get(request: Request, cap: Int, client: OkHttpClient = httpClient): ByteArray = readPayload(request, cap, client) { input ->
         val output = ByteArrayOutputStream()
         val chunk = ByteArray(8192)
         while (true) {
@@ -621,11 +683,12 @@ private class PreviewTorboxHttp(
         output.toByteArray()
     }
 
-    private suspend fun <T> readPayload(request: Request, cap: Int, consume: (InputStream) -> T): T {
+    private suspend fun <T> readPayload(request: Request, cap: Int, client: OkHttpClient = httpClient,
+                                        consume: (InputStream) -> T): T {
         coroutineContext.ensureActive()
         PreviewTorboxGate.enter()
         if (closed) throw IOException("Preview closed")
-        val call = httpClient.newCall(request)
+        val call = client.newCall(request)
         calls.add(call)
         if (closed) call.cancel()
         try {

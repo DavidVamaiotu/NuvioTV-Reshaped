@@ -53,8 +53,10 @@ A TorBox track takes priority and suppresses on-device generation once loaded.
 Unavailable files, decoding failures or rate limits drop back to the existing
 preview providers. One isolated HTTP client keeps API authorization separate
 from CDN requests. Calls retain the shared pacing and Retry-After cooldown.
-A background download failure stops that worker and preserves cached previews.
-A foreground failure falls back to existing providers. Expired CDN URLs get one refresh.
+A failed background sheet is retried later; only three failures in a row stop that worker.
+A timeout, rate limit or missing sheet skips that lookup and retries the sheet later; only a refused key or
+undecodable verified bytes turn TorBox off. Opening retries network failures after 5 s, 20 s and 60 s,
+and the account listing has a longer limit than sprite sheets. Expired CDN URLs get one refresh.
 
 ## Append
 
