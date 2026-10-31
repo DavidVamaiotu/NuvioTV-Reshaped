@@ -164,4 +164,28 @@ class TorboxSpriteCacheTest {
         assertEquals("sprites/2.webp", countLimit.next()!!.path)
         assertNull(countLimit.next())
     }
+
+    @Test fun cachedLookupNeverDownloadsAndReadsVerifiedDiskCopies() = runBlocking {
+        val directory = temporary.newFolder()
+        val data = ByteArray(32) { (it * 3).toByte() }
+        val s = sheet(data)
+        val cache = TorboxSpriteByteCache(TorboxSpriteDiskCache(directory))
+        assertNull(cache.cached(s))
+        cache.get(s) { data }
+        assertArrayEquals(data, cache.cached(s))
+        val reopened = TorboxSpriteByteCache(TorboxSpriteDiskCache(directory))
+        assertArrayEquals(data, reopened.cached(s))
+        reopened.close()
+        assertNull(reopened.cached(s))
+    }
+
+    @Test fun aFailedSheetIsRetriedOnceAfterTheRest() {
+        val queue = TorboxPrefetchQueue(frames(), sheets(), 25_000)
+        val failed = queue.next()!!
+        queue.retryLater(failed)
+        val rest = generateSequence { queue.next() }.toList()
+        assertEquals(failed.path, rest.last().path)
+        queue.retryLater(failed)
+        assertNull(queue.next())
+    }
 }

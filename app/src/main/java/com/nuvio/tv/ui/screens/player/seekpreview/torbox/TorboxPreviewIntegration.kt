@@ -65,6 +65,7 @@ internal class TorboxFirstPreviewTrack(
         }
     }
     override fun close() = scope.cancel()
+    override fun noteHeldScrub(held: Boolean) { torbox.noteHeldScrub(held); fallback?.noteHeldScrub(held) }
     override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
         torbox.thumbnailFor(positionMs) ?: fallback?.thumbnailFor(positionMs)
     override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? =

@@ -106,6 +106,31 @@ internal class TorboxSpriteByteCache(
         }
     }
 
+    /**
+     * The sheet if it is already in RAM or verified on disk, without waiting on the network or
+     * on another caller's download. Used while a remote key is held.
+     */
+    fun cached(sheet: TorboxSpriteSheet): ByteArray? {
+        if (closed || sheet.bytes !in 1..2 * 1024 * 1024 || !validHash(sheet.sha256)) return null
+        synchronized(lock) { memory[sheet.sha256] }?.let { return it }
+        val data = disk.read(sheet) ?: return null
+        synchronized(lock) {
+            if (closed) return null
+            if (data.size <= maxBytes && memory[sheet.sha256] == null) {
+                memory[sheet.sha256] = data
+                bytes += data.size
+                val oldest = memory.entries.iterator()
+                while (bytes > maxBytes && oldest.hasNext()) {
+                    val entry = oldest.next()
+                    if (entry.key == sheet.sha256) continue
+                    bytes -= entry.value.size
+                    oldest.remove()
+                }
+            }
+        }
+        return data
+    }
+
     fun close() {
         closed = true
         synchronized(lock) { memory.clear(); bytes = 0 }
@@ -117,8 +142,8 @@ internal class TorboxPrefetchQueue(
     frames: List<TorboxSpriteFrame>,
     sheets: Map<String, TorboxSpriteSheet>,
     initialPositionMs: Long,
-    maxBytes: Long = 16L * 1024 * 1024,
-    maxSheets: Int = 96
+    maxBytes: Long = 48L * 1024 * 1024,
+    maxSheets: Int = 240
 ) {
     private val ordered = frames.map { it.sheet }.distinct()
     private val pending: MutableList<TorboxSpriteSheet>
@@ -135,6 +160,13 @@ internal class TorboxPrefetchQueue(
 
     @Synchronized fun next(): TorboxSpriteSheet? =
         if (pending.isEmpty()) null else pending.removeAt(0)
+
+    private val retried = HashSet<String>()
+
+    /** A sheet whose download failed is tried once more after the rest of the movie. */
+    @Synchronized fun retryLater(sheet: TorboxSpriteSheet) {
+        if (retried.add(sheet.path) && pending.none { it.path == sheet.path }) pending.add(sheet)
+    }
 
     @Synchronized fun prioritize(path: String) {
         val index = pending.indexOfFirst { it.path == path }

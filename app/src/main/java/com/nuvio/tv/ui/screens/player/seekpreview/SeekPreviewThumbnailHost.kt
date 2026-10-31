@@ -37,6 +37,10 @@ private val MinFrameWidth = 240.dp
 private val MaxFrameWidth = 400.dp
 private val FrameGapAboveBar = 10.dp
 private const val LingerAfterScrubMs = 1500L
+/** Key repeats arrive every ~50 ms after a ~500 ms initial delay; a shorter gap means the key is held. */
+private const val HeldInputGapMs = 600L
+/** Quiet time after the last repeat before the frame is looked up exactly (network allowed). */
+private const val HeldSettleMs = 220L
 
 /**
  * The scrub-time preview, Netflix style, above the progress bar: the frame of the cue the scrub
@@ -84,8 +88,25 @@ fun SeekPreviewThumbnailHost(
     val requestFlow = remember(activeTrack) {
         MutableStateFlow(PreviewRequest(displayTs, offsetMs, revision, lingerVisible))
     }
+    // When the scrub position last changed, to tell a held key from single taps.
+    val lastScrubInput = remember { LongArray(2) { Long.MIN_VALUE } } // [time, position]
     LaunchedEffect(activeTrack, displayTs, offsetMs, revision, lingerVisible) {
-        requestFlow.value = PreviewRequest(displayTs, offsetMs, revision, lingerVisible)
+        val now = SystemClock.elapsedRealtime()
+        val held = previewTs != null && lastScrubInput[0] != Long.MIN_VALUE &&
+            now - lastScrubInput[0] < HeldInputGapMs
+        if (previewTs != null && previewTs != lastScrubInput[1]) {
+            lastScrubInput[0] = now
+            lastScrubInput[1] = previewTs
+        } else if (previewTs == null) {
+            lastScrubInput[0] = Long.MIN_VALUE
+            lastScrubInput[1] = Long.MIN_VALUE
+        }
+        requestFlow.value = PreviewRequest(displayTs, offsetMs, revision, lingerVisible, held)
+        if (held) {
+            // No repeat for a moment: the key was released or paused, so look this one up exactly.
+            delay(HeldSettleMs)
+            requestFlow.value = requestFlow.value.copy(held = false)
+        }
     }
     LaunchedEffect(activeTrack) {
         if (activeTrack == null) {
@@ -120,7 +141,7 @@ fun SeekPreviewThumbnailHost(
 
             // StateFlow conflates inputs, while completed useful frames are painted even when
             // a held key has already moved again. Only an up-to-date result may align the seek.
-            requestFlow.collect { (positionMs, offset, rev, visible) ->
+            requestFlow.collect { (positionMs, offset, rev, visible, held) ->
                 val covering = cachedCovering
                 if (offset == cachedOffsetMs && (rev == cachedRevision || !visible) &&
                     covering != null && covering.canAlignSeek && covering.contains(positionMs) &&
@@ -130,9 +151,12 @@ fun SeekPreviewThumbnailHost(
                     return@collect
                 }
                 activeTrack.offsetMs = offset
+                activeTrack.noteHeldScrub(held)
                 val coveringThumbnail = activeTrack.thumbnailFor(positionMs)
                 var latest = requestFlow.value
                 if (coveringThumbnail == null) {
+                    // A held key keeps the strip it has; the exact lookup follows the release.
+                    if (held) return@collect
                     // A miss for an obsolete request must not erase a newer visible strip.
                     if (latest.positionMs != positionMs || latest.offsetMs != offset) return@collect
                     val center = strip?.center
@@ -147,7 +171,7 @@ fun SeekPreviewThumbnailHost(
                 if (!PreviewScrubPublication.mayPaint(positionMs, latest.positionMs,
                         coveringThumbnail.cueEndMs - coveringThumbnail.cueStartMs,
                         latest.offsetMs == offset && latest.revision == rev,
-                        strip?.center?.cueStartMs?.minus(offset))) return@collect
+                        strip?.center?.cueStartMs?.minus(offset), held = held && latest.held)) return@collect
 
                 val coveringCue = SeekPreviewCue(
                     coveringThumbnail.cueStartMs - offset, coveringThumbnail.cueEndMs - offset,
@@ -158,7 +182,7 @@ fun SeekPreviewThumbnailHost(
                 latest = requestFlow.value
                 if (!PreviewScrubPublication.mayPaint(positionMs, latest.positionMs, coveringCue.durationMs,
                         latest.offsetMs == offset && latest.revision == rev,
-                        strip?.center?.cueStartMs?.minus(offset))) return@collect
+                        strip?.center?.cueStartMs?.minus(offset), held = held && latest.held)) return@collect
 
                 cachedCovering = coveringCue
                 cachedPrefersSuccessor = prefersSuccessor
@@ -215,7 +239,8 @@ private data class PreviewRequest(
     val positionMs: Long,
     val offsetMs: Long,
     val revision: Int,
-    val visible: Boolean
+    val visible: Boolean,
+    val held: Boolean = false,
 )
 
 private val NoRevision: StateFlow<Int> = MutableStateFlow(0)

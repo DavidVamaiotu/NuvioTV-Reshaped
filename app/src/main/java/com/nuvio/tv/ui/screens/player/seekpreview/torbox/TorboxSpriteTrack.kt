@@ -129,8 +129,13 @@ internal class TorboxSpriteTrack private constructor(
     suspend fun colourReference(target: PreviewColourTarget): Bitmap? =
         rawThumbnail(target.lookupMs, markUnavailable = false)?.bitmap
 
-    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? =
-        rawThumbnail(positionMs, markUnavailable = true)?.let { thumbnail ->
+    override suspend fun thumbnailFor(positionMs: Long): SeekPreviewThumbnail? = displayed(positionMs, steer = true)
+
+    /** Filmstrip neighbours never steer the held-scrub prefetch direction. */
+    override suspend fun sideThumbnailFor(positionMs: Long): SeekPreviewThumbnail? = displayed(positionMs, steer = false)
+
+    private suspend fun displayed(positionMs: Long, steer: Boolean): SeekPreviewThumbnail? =
+        rawThumbnail(positionMs, markUnavailable = true, steer = steer)?.let { thumbnail ->
             val mapping = verifiedMapping()
             thumbnail.copy(
                 cueStartMs = timing.cueStart(thumbnail.cueStartMs, mapping),
@@ -157,15 +162,46 @@ internal class TorboxSpriteTrack private constructor(
         prefetchQueue = queue
         repeat(2) {
             warming.launch {
+                var failures = 0
                 while (!closed) {
                     val sheet = queue.next() ?: break
-                    try { sheetBytes(sheet) }
+                    try { sheetBytes(sheet); failures = 0 }
                     catch (cancel: CancellationException) { throw cancel }
-                    catch (_: Exception) { break } // Keep already cached previews on a background failure.
                     catch (_: OutOfMemoryError) { break }
+                    catch (_: Exception) {
+                        // One failed sheet no longer ends the movie's prefetch: it goes to the back
+                        // once, the worker waits out a rate-limit cooldown, and only a run of
+                        // failures stops it. Cached previews stay usable either way.
+                        if (++failures >= PREFETCH_MAX_FAILURES) break
+                        queue.retryLater(sheet)
+                        delay(maxOf(PREFETCH_RETRY_DELAY_MS, PreviewTorboxGate.remainingMs()))
+                    }
                 }
             }
         }
+    }
+
+    /** While a remote key is held, lookups answer from RAM or disk only and never wait on the network. */
+    @Volatile private var heldScrub = false
+    @Volatile private var lastHeldSourceMs = -1L
+
+    override fun noteHeldScrub(held: Boolean) {
+        heldScrub = held
+        if (!held) lastHeldSourceMs = -1L
+    }
+
+    /** Fetch [sheet] next, then the sheet after it in the direction the held key moves. */
+    private fun prioritizeHeld(frame: TorboxSpriteFrame, sourceMs: Long) {
+        val queue = prefetchQueue ?: return
+        val previous = lastHeldSourceMs
+        lastHeldSourceMs = sourceMs
+        val direction = if (previous < 0L || previous == sourceMs) 0 else if (sourceMs > previous) 1 else -1
+        if (direction != 0) {
+            var index = timeline.frames.binarySearchBy(frame.startMs) { it.startMs }
+            while (index in timeline.frames.indices && timeline.frames[index].sheet == frame.sheet) index += direction
+            timeline.frames.getOrNull(index)?.let { queue.prioritize(it.sheet) }
+        }
+        queue.prioritize(frame.sheet)
     }
 
     private suspend fun sheetBytes(sheet: TorboxSpriteSheet): ByteArray = bytes.get(sheet) {
@@ -173,14 +209,19 @@ internal class TorboxSpriteTrack private constructor(
         http.file(batch, "$directory/${sheet.path}", sheet.bytes)
     }
 
-    private suspend fun rawThumbnail(positionMs: Long, markUnavailable: Boolean): SeekPreviewThumbnail? = withContext(Dispatchers.IO) {
+    private suspend fun rawThumbnail(positionMs: Long, markUnavailable: Boolean, steer: Boolean = false): SeekPreviewThumbnail? = withContext(Dispatchers.IO) {
         if (closed || !healthy.value) return@withContext null
-        val frame = timeline.frameAt(sourcePosition(positionMs + offsetMs)) ?: return@withContext null
+        val sourceMs = sourcePosition(positionMs + offsetMs)
+        val frame = timeline.frameAt(sourceMs) ?: return@withContext null
+        val cacheOnly = heldScrub && markUnavailable
+        if (cacheOnly && steer) prioritizeHeld(frame, sourceMs)
         mutex.withLock { tiles[frame.startMs] }?.let { return@withContext it }
         try {
             val sheet = requireNotNull(timeline.sheets[frame.sheet])
-            prefetchQueue?.prioritize(sheet.path)
-            val data = sheetBytes(sheet)
+            if (!cacheOnly) prefetchQueue?.prioritize(sheet.path)
+            // A held scrub outruns any download: a sheet not on the device yet shows nothing new
+            // now, and the frame for the release position is looked up again with network.
+            val data = if (cacheOnly) bytes.cached(sheet) ?: return@withContext null else sheetBytes(sheet)
             coroutineContext.ensureActive()
             mutex.withLock {
                 if (closed || !healthy.value) return@withLock null
@@ -254,6 +295,9 @@ internal class TorboxSpriteTrack private constructor(
     }
 
     companion object {
+        private const val PREFETCH_MAX_FAILURES = 3
+        private const val PREFETCH_RETRY_DELAY_MS = 2_000L
+
         suspend fun open(key: String, request: TorboxMovieRequest, cacheDirectory: File): TorboxSpriteTrack? = withContext(Dispatchers.IO) {
             if (key.isBlank() || request.durationMs <= 0L ||
                 request.contentType?.lowercase() in setOf("series", "tv", "show", "channel", "live") ||
@@ -641,6 +685,7 @@ private object PreviewTorboxGate {
     private var next = 0L
     private val until = AtomicLong(0L)
     fun blocked(): Boolean = android.os.SystemClock.elapsedRealtime() < until.get()
+    fun remainingMs(): Long = (until.get() - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L)
     suspend fun enter() = mutex.withLock {
         if (blocked()) throw IOException("Preview cooldown")
         val now = android.os.SystemClock.elapsedRealtime()

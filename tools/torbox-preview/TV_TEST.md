@@ -32,7 +32,7 @@ shared least-recently-used disk cache to 128 MiB, apart from in-flight buffers
 and images still referenced by the UI. Only requested 320px tiles are decoded.
 Verified disk sheets are reused across playback sessions. Content hashes key
 the cache; credentials and temporary CDN URLs are never saved there.
-Prefetch is bounded to 16 MiB / 96 sheets per movie; larger packs remain
+Prefetch is bounded to 48 MiB / 240 sheets per movie (disk cache only); larger packs remain
 available on demand. All ten initial packs fit these budgets.
 Workers and outstanding HTTP calls stop when the player releases the track.
 
