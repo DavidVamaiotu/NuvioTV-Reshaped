@@ -1330,6 +1330,11 @@ fun PlayerScreen(
             type = uiState.contentType,
             description = uiState.description,
             cast = uiState.castMembers,
+            activeVideoQualityBadge = uiState.activeVideoQualityBadge,
+            activeHdrFormatBadge = uiState.activeHdrFormatBadge,
+            activeAudioFormatBadge = uiState.activeAudioFormatBadge,
+            activeAudioIsDolbyBadge = uiState.activeAudioIsDolbyBadge,
+            activeAudioLanguageBadge = uiState.activeAudioLanguageBadge,
             showClock = !uiState.isLive,
             modifier = Modifier
                 .fillMaxSize()
@@ -2775,6 +2780,17 @@ private fun PlayerControlsOverlay(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+
+                    ActivePlaybackBadgesRow(
+                        videoQuality = uiState.activeVideoQualityBadge,
+                        hdrFormat = uiState.activeHdrFormatBadge,
+                        audioFormat = uiState.activeAudioFormatBadge,
+                        isDolbyAudio = uiState.activeAudioIsDolbyBadge,
+                        audioLanguageLabel = uiState.activeAudioLanguageBadge,
+                        modifier = Modifier
+                            .padding(top = 6.dp, bottom = 2.dp)
+                            .reportRightEdge("activeBadges", titleRights)
+                    )
 
                     if (playerBadges.isNotEmpty()) {
                         PlayerBadges(

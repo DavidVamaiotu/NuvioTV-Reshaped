@@ -505,6 +505,8 @@ internal fun PlayerRuntimeController.tryParsingErrorProbeFallback(
     errorRetryJob?.cancel()
     errorRetryJob = scope.launch {
         showRecoveryOverlay()
+        PlayerMediaSourceFactory.evictMimeType(currentStreamUrl, currentHeaders)
+        ParallelRangeDataSource.releaseRetainedSession()
         val probedMime = PlayerMediaSourceFactory.probeNetworkMimeType(
             url = currentStreamUrl,
             headers = currentHeaders
@@ -516,6 +518,18 @@ internal fun PlayerRuntimeController.tryParsingErrorProbeFallback(
                 "Stream probe resolved mimeType=$probedMime (was $previousMimeType). Retrying playback..."
             )
             currentStreamMimeType = probedMime
+            currentStreamResponseHeaders = emptyMap()
+            releasePlayer(flushPlaybackState = false)
+            if (savedPosition > 0L) {
+                _uiState.update { it.copy(pendingSeekPosition = savedPosition) }
+            }
+            initializePlayer(currentStreamUrl, currentHeaders, startPaused = paused)
+        } else if (previousMimeType == null) {
+            Log.i(
+                PlayerRuntimeController.TAG,
+                "Stream probe inconclusive after container error with unknown mimeType; retrying as HLS (APPLICATION_M3U8)..."
+            )
+            currentStreamMimeType = androidx.media3.common.MimeTypes.APPLICATION_M3U8
             currentStreamResponseHeaders = emptyMap()
             releasePlayer(flushPlaybackState = false)
             if (savedPosition > 0L) {
