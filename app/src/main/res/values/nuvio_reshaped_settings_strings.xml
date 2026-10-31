@@ -1,9 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="settings_nuvio_reshaped" translatable="false">Nuvio Reshaped</string>
-    <string name="settings_nuvio_reshaped_description">Subtitle AutoSync, seek previews and stream matching</string>
+    <string name="settings_nuvio_reshaped_description">Everything Nuvio Reshaped adds, grouped</string>
     <string name="settings_nuvio_reshaped_autosync_section">Subtitle AutoSync</string>
     <string name="reshaped_debug_logs_to_phone_title">Send debug logs to phone</string>
     <string name="reshaped_debug_logs_to_phone_description">Show a QR code to download AutoSync and audio sync logs on your phone</string>
     <string name="reshaped_debug_logs_to_phone_instruction">Scan with a phone on the same network, then tap a log to download it.</string>
+    <string name="reshaped_group_subtitles">Subtitles and sync</string>
+    <string name="reshaped_group_subtitles_description">AutoSync, audio sync, font and notifications</string>
+    <string name="reshaped_group_seek_previews">Seek previews</string>
+    <string name="reshaped_group_seek_previews_description">Thumbnails while you scrub</string>
+    <string name="reshaped_group_formats_description">Surround, passthrough and Dolby Vision</string>
+    <string name="reshaped_group_streams">Streams</string>
+    <string name="reshaped_group_streams_description">How sources are picked</string>
+    <string name="reshaped_group_home">Home and menus</string>
+    <string name="reshaped_group_home_description">Netflix-style Home and the pill menu</string>
+    <string name="reshaped_group_live_tv_description">The Live TV tab and channel previews</string>
+    <string name="reshaped_group_sync_description">Settings and Live TV across your devices</string>
+    <string name="reshaped_group_diagnostics">Diagnostics</string>
+    <string name="reshaped_group_diagnostics_description">Logs for reporting a problem</string>
+    <string name="reshaped_settings_troubleshooting">Troubleshooting</string>
 </resources>

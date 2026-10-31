@@ -48,12 +48,6 @@ internal fun LazyListScope.reshapedFormatsSettingsItems(
     val builtInPlayer = playerSettings.playerPreference != PlayerPreference.EXTERNAL
     val deviceOnly = playerSettings.decoderPriority == 0
 
-    item(key = "reshaped_formats_header") {
-        SettingsSectionLabel(
-            text = stringResource(R.string.reshaped_formats_header),
-            description = stringResource(R.string.reshaped_formats_header_description),
-        )
-    }
     item(key = "reshaped_formats_enabled") {
         val context = LocalContext.current
         val settings by ReshapedFormatSettingsStore.settings(context).collectAsStateWithLifecycle()
@@ -173,6 +167,9 @@ internal fun LazyListScope.reshapedFormatsSettingsItems(
             onFocused = onItemFocused,
             enabled = builtInPlayer,
         )
+    }
+    item(key = "reshaped_formats_troubleshooting") {
+        SettingsSectionLabel(text = stringResource(R.string.reshaped_settings_troubleshooting))
     }
     item(key = "reshaped_formats_iec_probe") {
         val context = LocalContext.current

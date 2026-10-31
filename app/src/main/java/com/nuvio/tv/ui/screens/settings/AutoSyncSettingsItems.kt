@@ -77,6 +77,26 @@ internal fun LazyListScope.autoSyncSettingsItems(
         )
     }
 
+    item(key = "subtitle_auto_sync_aggressive_mode") {
+        val context = LocalContext.current
+        AutoSyncPreferences.ensureLoaded(context)
+        val checked by AutoSyncPreferences.aggressiveMode.collectAsStateWithLifecycle()
+
+        ToggleSettingsItem(
+            icon = Icons.Default.Sync,
+            title = stringResource(R.string.autosync_thorough_title),
+            subtitle = stringResource(R.string.autosync_thorough_description),
+            isChecked = checked,
+            onCheckedChange = { AutoSyncPreferences.setAggressiveMode(context, it) },
+            enabled = enabled,
+        )
+    }
+
+    audioSyncFallbackSettingsItems(enabled)
+}
+
+/** AutoSync debug rows, shown in the Diagnostics group of the Nuvio Reshaped page. */
+internal fun LazyListScope.autoSyncDiagnosticsSettingsItems(enabled: Boolean) {
     item(key = "subtitle_auto_sync_debug_logs") {
         val context = LocalContext.current
         AutoSyncPreferences.ensureLoaded(context)
@@ -102,21 +122,4 @@ internal fun LazyListScope.autoSyncSettingsItems(
         )
         if (showQr) DebugLogQrDialog(onDismiss = { showQr = false })
     }
-
-    item(key = "subtitle_auto_sync_aggressive_mode") {
-        val context = LocalContext.current
-        AutoSyncPreferences.ensureLoaded(context)
-        val checked by AutoSyncPreferences.aggressiveMode.collectAsStateWithLifecycle()
-
-        ToggleSettingsItem(
-            icon = Icons.Default.Sync,
-            title = stringResource(R.string.autosync_thorough_title),
-            subtitle = stringResource(R.string.autosync_thorough_description),
-            isChecked = checked,
-            onCheckedChange = { AutoSyncPreferences.setAggressiveMode(context, it) },
-            enabled = enabled,
-        )
-    }
-
-    audioSyncFallbackSettingsItems(enabled)
 }

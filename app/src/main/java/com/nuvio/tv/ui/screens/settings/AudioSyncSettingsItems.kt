@@ -102,7 +102,10 @@ internal fun LazyListScope.audioSyncFallbackSettingsItems(enabled: Boolean) {
             enabled = rowsEnabled && fallbackEnabled,
         )
     }
+}
 
+/** Audio sync statistics and log rows, shown in the Diagnostics group of the Nuvio Reshaped page. */
+internal fun LazyListScope.audioSyncDiagnosticsSettingsItems(enabled: Boolean) {
     item(key = "audio_sync_show_statistics") {
         val rowsEnabled = rowsEnabled(enabled)
         val fallbackEnabled by AudioSyncSettings.fallbackEnabled.collectAsStateWithLifecycle()
