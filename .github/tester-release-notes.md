@@ -1,3 +1,4 @@
-- TorBox thumbnails now accept other releases and cuts of the same movie without rejecting them for runtime or file-index differences. The closest available runtime is preferred when the exact file is unavailable.
-- Previews cover the full playback timeline, retain the last image through longer audio tails, and display normally without added labels or blur. Background visual matching can refine alignment without withholding thumbnails.
-- Smaller-copy generation now reuses the current movie or episode's cached source results without requiring the Sources panel to be opened, and excludes results from other episodes.
+- TorBox seek previews now keep showing while you hold left or right: frames already on the TV appear immediately, and the frame where you let go is still exact.
+- The whole movie's TorBox preview sheets are downloaded in the background, and one failed sheet no longer stops the rest.
+- A short network hiccup or rate limit no longer turns TorBox previews off for the rest of the movie; loading retries after 5, 20 and 60 seconds, and the large account listing gets a longer time limit (helps big remux sources).
+- TorBox preview failures are now listed in the seek preview diagnostics.
