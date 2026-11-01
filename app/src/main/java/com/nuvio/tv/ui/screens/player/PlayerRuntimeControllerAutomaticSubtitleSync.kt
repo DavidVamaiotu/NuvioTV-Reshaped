@@ -101,6 +101,17 @@ internal fun PlayerRuntimeController.prefetchAutoSyncIndex(
 ) {
     // A live channel has no subtitle index, and a second connection can take its provider's only slot.
     if (com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry.isLiveTv(url)) return
+    val mime = currentStreamMimeType ?: PlayerMediaSourceFactory.inferMimeType(
+        url = url,
+        filename = currentFilename,
+        responseHeaders = currentStreamResponseHeaders
+    )
+    if (mime == androidx.media3.common.MimeTypes.APPLICATION_M3U8 ||
+        mime == androidx.media3.common.MimeTypes.APPLICATION_MPD ||
+        mime == androidx.media3.common.MimeTypes.APPLICATION_SS
+    ) {
+        return
+    }
     AutoSyncPreferences.ensureLoaded(context)
     if (!AutoSyncPreferences.isEnabled(context)) return
     EmbeddedSubtitleTimelineLoader.prefetch(scope, url, headers)

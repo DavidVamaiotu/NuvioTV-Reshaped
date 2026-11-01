@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.RenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.extractor.DefaultExtractorsFactory
+import androidx.media3.extractor.Extractor
 import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.mkv.MatroskaExtractor as StockMatroskaExtractor
 import androidx.media3.extractor.text.SubtitleParser
@@ -109,31 +110,41 @@ private fun ExtractorsFactory.withAssMkvSupportCompat(
     assHandler: AssHandler
 ): ExtractorsFactory {
     val delegate = this
-    return ExtractorsFactory {
-        val extractors = delegate.createExtractors()
-        extractors.forEachIndexed { index, extractor ->
-            val underlying = extractor.getUnderlyingImplementation()
-            // Stock MatroskaExtractor: replace with ASS-aware variant for libass support.
-            // Only the innermost extractor is replaced, so wrappers such as AutoSync's
-            // embedded subtitle observer keep seeing the stream.
-            if (underlying is StockMatroskaExtractor) {
-                extractors[index] = extractor.replaceInnermostExtractor(
-                    NuvioAssMatroskaExtractor(subtitleParserFactory, assHandler)
-                )
-            }
-            // The DV7 factory swaps in a vendored DvMatroskaExtractor for DV conversion.
-            // Preserve its Dolby Vision transformer while enabling libass and zlib subtitle
-            // decompression from the same vendored Matroska extractor base class.
-            if (underlying is DvMatroskaExtractor) {
-                extractors[index] = extractor.replaceInnermostExtractor(
-                    NuvioAssMatroskaExtractor(
-                        subtitleParserFactory = subtitleParserFactory,
-                        assHandler = assHandler,
-                        dolbyVisionSampleTransformer = underlying.dolbyVisionSampleTransformer
+    return object : ExtractorsFactory {
+        override fun createExtractors(): Array<Extractor> =
+            wrapExtractors(delegate.createExtractors())
+
+        override fun createExtractors(
+            uri: android.net.Uri,
+            responseHeaders: Map<String, List<String>>
+        ): Array<Extractor> =
+            wrapExtractors(delegate.createExtractors(uri, responseHeaders))
+
+        private fun wrapExtractors(extractors: Array<Extractor>): Array<Extractor> {
+            extractors.forEachIndexed { index, extractor ->
+                val underlying = extractor.getUnderlyingImplementation()
+                // Stock MatroskaExtractor: replace with ASS-aware variant for libass support.
+                // Only the innermost extractor is replaced, so wrappers such as AutoSync's
+                // embedded subtitle observer keep seeing the stream.
+                if (underlying is StockMatroskaExtractor) {
+                    extractors[index] = extractor.replaceInnermostExtractor(
+                        NuvioAssMatroskaExtractor(subtitleParserFactory, assHandler)
                     )
-                )
+                }
+                // The DV7 factory swaps in a vendored DvMatroskaExtractor for DV conversion.
+                // Preserve its Dolby Vision transformer while enabling libass and zlib subtitle
+                // decompression from the same vendored Matroska extractor base class.
+                if (underlying is DvMatroskaExtractor) {
+                    extractors[index] = extractor.replaceInnermostExtractor(
+                        NuvioAssMatroskaExtractor(
+                            subtitleParserFactory = subtitleParserFactory,
+                            assHandler = assHandler,
+                            dolbyVisionSampleTransformer = underlying.dolbyVisionSampleTransformer
+                        )
+                    )
+                }
             }
+            return extractors
         }
-        extractors
     }
 }
