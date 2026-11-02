@@ -96,7 +96,7 @@
     <string name="web_import_error_source_missing_trakt_id">المجموعة \"{collection}\", مجلد \"{folder}\", المصدر {index}: عنوان قائمة Trakt مفقود</string>
     <string name="web_import_success">تم استيراد {count} مجموعة. راجعها واضغط حفظ التغييرات للتطبيق.</string>
     <string name="web_import_invalid_json">تنسيق JSON غير صالح</string>
-    
+
     <!-- HomeScreen -->
     <string name="home_no_addons">لا توجد إضافات مثبتة. أضف إضافة واحدة للبدء.</string>
     <string name="home_no_catalog_addons">لا توجد إضافات قوائم عرض مثبتة. ثبت واحدة لعرض المحتوى.</string>
@@ -176,7 +176,7 @@
     <!-- CatalogRowSection -->
     <string name="catalog_from_addon">من %1$s</string>
     <string name="action_see_all">عرض الكل</string>
-    <string name="action_load_more">تحميل المزيد</string>    
+    <string name="action_load_more">تحميل المزيد</string>
 
     <!-- HeroSection -->
     <string name="hero_creator">المؤلف: %1$s</string>
@@ -896,7 +896,7 @@
     <string name="mdblist_dialog_placeholder">أدخل مفتاح MDBList API</string>
     <string name="mdblist_not_set">غير محدد</string>
     <string name="mdblist_invalid_api_key">مفتاح MDBList API غير صالح</string>
-    
+
     <string name="debrid_title">الحسابات المرتبطة</string>
     <string name="debrid_subtitle">ربط الحسابات للحصول على الروابط والوصول للمكتبات</string>
     <string name="debrid_experimental_notice">هذه الإضافات تجريبية وقابلة للتعديل أو الإزالة مستقبلاً.</string>
@@ -1094,7 +1094,7 @@
     <string name="tmdb_more_like_this_subtitle">خلفيات توصيات TMDB في صفحة التفاصيل</string>
     <string name="tmdb_collections_title">سلاسل الأفلام</string>
     <string name="tmdb_collections_subtitle">سلاسل أفلام TMDB بترتيب الإصدار</string>
-    
+
     <string name="tmdb_language_dialog_title">لغة TMDB</string>
 
     <!-- TraktScreen -->
@@ -1942,7 +1942,7 @@
     <string name="trakt_status_rate_limited_slowing_polling">الطلبات مقيدة، جاري إبطاء الفحص...</string>
     <string name="trakt_user_fallback">مستخدم Trakt</string>
     <string name="trakt_error_failed_start">فشل بدء ربط Trakt</string>
-    
+
     <!-- General errors -->
     <string name="error_unknown">خطأ غير معروف</string>
     <string name="addon_error_not_found">الإضافة مفقودة</string>
@@ -2271,7 +2271,7 @@
     <string name="cast_error_load_details_for">تعذر تحميل تفاصيل %1$s</string>
     <string name="tmdb_entity_error_load_named">تعذر تحميل %1$s</string>
     <string name="tmdb_entity_error_load">تعذر تحميل عنصر TMDB</string>
-    
+
     <!-- Catalog see-all fallback -->
     <string name="catalog_see_all_title_fallback">القائمة</string>
 

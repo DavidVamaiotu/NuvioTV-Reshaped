@@ -304,7 +304,7 @@ internal fun PlayerRuntimeController.loadSourceStreams(forceRefresh: Boolean) {
                             filteredStreams
                         }
                         it.copy(
-                            isLoadingSourceStreams = false,
+                            isLoadingSourceStreams = true,
                             sourceAllStreams = badgePreserved,
                             sourceFilteredStreams = paginatedStreams,
                             sourceAvailableAddons = mergedAvailableAddons,
@@ -340,6 +340,7 @@ internal fun PlayerRuntimeController.loadSourceStreams(forceRefresh: Boolean) {
             }
         }
         sourceStreamsFetchCompleted = true
+        _uiState.update { it.copy(isLoadingSourceStreams = false) }
         markRemainingSourceChipsAsError()
     }
 }
@@ -371,7 +372,8 @@ private fun PlayerRuntimeController.launchSourceDebridPreparationIfNeeded(
         return
     }
     markLaunched()
-    scope.launch {
+    // Off the main thread, like the stream screen: each prepared link rewrites the stream list.
+    scope.launch(kotlinx.coroutines.Dispatchers.Default) {
         val playerSettings = playerSettingsDataStore.playerSettings.first()
         directDebridStreamPreparer.prepare(
             streams = streams,
@@ -1029,6 +1031,8 @@ internal fun PlayerRuntimeController.switchToSourceStream(
             isTorrentStream = false
         )
     }
+    clearChapterSkipState()
+    recomputeMergedSkipIntervals()
     showStreamSourceIndicator(stream)
     resetPostPlayOverlayState(clearEpisode = false)
 
@@ -1148,6 +1152,8 @@ private fun PlayerRuntimeController.switchToTorrentSourceStream(
             isTorrentStream = true
         )
     }
+    clearChapterSkipState()
+    recomputeMergedSkipIntervals()
     applyStreamMetadata(stream)
     currentFilename = stream.behaviorHints?.filename
     showStreamSourceIndicator(stream)
@@ -1167,7 +1173,7 @@ private fun PlayerRuntimeController.switchToTorrentEpisodeStream(
         isAutoPlay = isAutoPlay
     )
     stopTorrentStream()
-    switchToEpisodeStreamCommon(stream, forcedTargetVideo)
+    switchToEpisodeStreamCommon(stream, forcedTargetVideo, showSourceIndicator = !isAutoPlay)
     launchTorrentSourceStream(stream, infoHash, loadSavedProgress = true)
     persistTorrentStreamForReuse(stream)
 }
@@ -1235,7 +1241,7 @@ internal fun PlayerRuntimeController.loadEpisodesIfNeeded() {
 }
 
 internal fun PlayerRuntimeController.loadStreamsForEpisode(video: Video) {
-    loadStreamsForEpisode(video = video, forceRefresh = false)
+    loadStreamsForEpisode(video = video, forceRefresh = false, manualSelection = false)
 }
 
 internal fun PlayerRuntimeController.buildEpisodeRequestKey(type: String, video: Video): String {
@@ -1243,6 +1249,14 @@ internal fun PlayerRuntimeController.buildEpisodeRequestKey(type: String, video:
 }
 
 internal fun PlayerRuntimeController.loadStreamsForEpisode(video: Video, forceRefresh: Boolean) {
+    loadStreamsForEpisode(video, forceRefresh, manualSelection = true)
+}
+
+internal fun PlayerRuntimeController.loadStreamsForEpisode(
+    video: Video,
+    forceRefresh: Boolean,
+    manualSelection: Boolean
+) {
     streamRepository.setLocalPluginSearchPaused(false)
     val type = contentType
     if (type.isNullOrBlank()) {
@@ -1251,34 +1265,51 @@ internal fun PlayerRuntimeController.loadStreamsForEpisode(video: Video, forceRe
     }
 
     val requestKey = buildEpisodeRequestKey(type = type, video = video)
-    val state = _uiState.value
-    val hasCachedPayload = state.episodeAllStreams.isNotEmpty() || state.episodeStreamsError != null
-    if (!forceRefresh && requestKey == episodeStreamsCacheRequestKey && hasCachedPayload) {
-        _uiState.update {
-            it.copy(
-                showEpisodeStreams = true,
-                isLoadingEpisodeStreams = false,
-                episodeStreamsForVideoId = video.id,
-                episodeStreamsSeason = video.season,
-                episodeStreamsEpisode = video.episode,
-                episodeStreamsTitle = video.title
-            )
-        }
-        return
-    }
-
-    val targetChanged = requestKey != episodeStreamsCacheRequestKey
     episodeStreamsScope?.cancel()
     episodeStreamsScope = null
     episodeStreamsJob = null
     val newScope = kotlinx.coroutines.CoroutineScope(scope.coroutineContext + kotlinx.coroutines.SupervisorJob())
     episodeStreamsScope = newScope
     episodeStreamsJob = newScope.launch {
+        val playerSettings = if (manualSelection) null else playerSettingsDataStore.playerSettings.first()
+        val autoPlaySettings = playerSettings?.takeIf { it.streamAutoPlayMode != StreamAutoPlayMode.MANUAL }
+        val state = _uiState.value
+        val hasCachedPayload = state.episodeAllStreams.isNotEmpty() || state.episodeStreamsError != null
+        if (!forceRefresh && requestKey == episodeStreamsCacheRequestKey && hasCachedPayload) {
+            if (autoPlaySettings != null) {
+                val selectedStream = selectEpisodeAutoPlayStream(
+                    video = video,
+                    settings = autoPlaySettings,
+                    streams = state.episodeAllStreams
+                )
+                if (selectedStream != null) {
+                    switchToEpisodeStream(
+                        stream = selectedStream,
+                        forcedTargetVideo = video,
+                        isAutoPlay = true
+                    )
+                    return@launch
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    showEpisodeStreams = true,
+                    isLoadingEpisodeStreams = false,
+                    episodeStreamsForVideoId = video.id,
+                    episodeStreamsSeason = video.season,
+                    episodeStreamsEpisode = video.episode,
+                    episodeStreamsTitle = video.title
+                )
+            }
+            return@launch
+        }
+
+        val targetChanged = requestKey != episodeStreamsCacheRequestKey
         episodeStreamsCacheRequestKey = requestKey
         val previousAddonFilter = _uiState.value.episodeSelectedAddonFilter
         _uiState.update {
             it.copy(
-                showEpisodeStreams = true,
+                showEpisodeStreams = autoPlaySettings == null,
                 isLoadingEpisodeStreams = true,
                 episodeStreamsError = null,
                 episodeAllStreams = if (forceRefresh || targetChanged) emptyList() else it.episodeAllStreams,
@@ -1358,7 +1389,45 @@ internal fun PlayerRuntimeController.loadStreamsForEpisode(video: Video, forceRe
             }
         }
         markRemainingEpisodeSourceChipsAsError()
+        if (autoPlaySettings != null) {
+            val selectedStream = selectEpisodeAutoPlayStream(
+                video = video,
+                settings = autoPlaySettings,
+                streams = _uiState.value.episodeAllStreams
+            )
+            if (selectedStream != null) {
+                switchToEpisodeStream(
+                    stream = selectedStream,
+                    forcedTargetVideo = video,
+                    isAutoPlay = true
+                )
+            } else {
+                _uiState.update {
+                    it.copy(
+                        showEpisodeStreams = true,
+                        isLoadingEpisodeStreams = false
+                    )
+                }
+            }
+        }
     }
+}
+
+private suspend fun PlayerRuntimeController.selectEpisodeAutoPlayStream(
+    video: Video,
+    settings: PlayerSettings,
+    streams: List<Stream>
+): Stream? {
+    val installedAddonNames = streamAddonsFor(video.id).map { it.displayName }.toSet()
+    return StreamAutoPlaySelector.selectAutoPlayStream(
+        streams = streams,
+        mode = settings.streamAutoPlayMode,
+        regexPattern = settings.streamAutoPlayRegex,
+        source = settings.streamAutoPlaySource,
+        installedAddonNames = installedAddonNames,
+        selectedAddons = settings.streamAutoPlaySelectedAddons,
+        selectedPlugins = settings.streamAutoPlaySelectedPlugins
+    )
 }
 
 private fun PlayerRuntimeController.launchEpisodeDebridPreparationIfNeeded(
@@ -1373,7 +1442,8 @@ private fun PlayerRuntimeController.launchEpisodeDebridPreparationIfNeeded(
         return
     }
     markLaunched()
-    scope.launch {
+    // Off the main thread, like the stream screen: each prepared link rewrites the stream list.
+    scope.launch(kotlinx.coroutines.Dispatchers.Default) {
         val playerSettings = playerSettingsDataStore.playerSettings.first()
         directDebridStreamPreparer.prepare(
             streams = streams,
@@ -1655,13 +1725,15 @@ internal fun PlayerRuntimeController.switchToEpisodeStream(
             isNextEpisodeMetadataResolved = false,
         )
     }
-    showStreamSourceIndicator(stream)
+    if (!isAutoPlay) showStreamSourceIndicator(stream)
     recomputeNextEpisode(resetVisibility = true)
 
     updateEpisodeDescription()
 
     playbackStartedForParentalGuide = false
     skipIntervals = emptyList()
+    apiSkipIntervals = emptyList()
+    clearChapterSkipState()
     skipIntroFetchedKey = null
     lastActiveSkipType = null
     autoSkippedIntervalKeys.clear()
@@ -1693,7 +1765,8 @@ private fun String.safeStreamTraceHost(): String {
  */
 private fun PlayerRuntimeController.switchToEpisodeStreamCommon(
     stream: Stream,
-    forcedTargetVideo: Video? = null
+    forcedTargetVideo: Video? = null,
+    showSourceIndicator: Boolean
 ) {
     episodeStreamsScope?.cancel()
     episodeStreamsScope = null
@@ -1771,13 +1844,15 @@ private fun PlayerRuntimeController.switchToEpisodeStreamCommon(
             isNextEpisodeMetadataResolved = false,
         )
     }
-    showStreamSourceIndicator(stream)
+    if (showSourceIndicator) showStreamSourceIndicator(stream)
     recomputeNextEpisode(resetVisibility = true)
     updateEpisodeDescription()
     refreshSubtitlesForCurrentEpisode()
 
     playbackStartedForParentalGuide = false
     skipIntervals = emptyList()
+    apiSkipIntervals = emptyList()
+    clearChapterSkipState()
     skipIntroFetchedKey = null
     lastActiveSkipType = null
     autoSkippedIntervalKeys.clear()

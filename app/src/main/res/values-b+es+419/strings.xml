@@ -135,7 +135,7 @@
     <string name="error_stream_tried_none">Addons de stream probados: %1$s. Ninguno de ellos devolvió streams para el id=%2$s (tipo=%3$s).</string>
     <string name="error_stream_tried_generic">Addons de stream probados: %1$s. No se pudieron cargar los streams para el id=%2$s (tipo=%3$s).</string>
     <string name="error_stream_tried_issues">Addons de stream probados: %1$s. No se pudieron cargar los streams para el id=%2$s (tipo=%3$s). Problemas: %4$s.</string>
-    
+
     <string name="continue_watching">Seguir Viendo</string>
     <string name="cw_upcoming">Próximos</string>
     <string name="cw_next_up">Siguiente</string>
@@ -832,7 +832,7 @@
     <string name="audio_tunneled_sub">Sincronización de audio y video a nivel de hardware. Puede mejorar la reproducción en algunos dispositivos Android TV.</string>
     <string name="audio_force_optical_passthrough">Forzar transcodificación AC-3 (Óptico/SPDIF)</string>
     <string name="audio_force_optical_passthrough_sub">Transcodifica formatos multicanal (TrueHD, DTS, AAC, etc.) a Dolby Digital 5.1 en tiempo real para conexiones ópticas/SPDIF.</string>
-    <!-- DV7 Handling Mode -->   
+    <!-- DV7 Handling Mode -->
     <string name="dv7_handling_title">Gestión de Dolby Vision Perfil 7</string>
     <string name="dv7_handling_dialog_subtitle">Elige cómo se procesan los streams Dolby Vision Perfil 7 durante la reproducción.</string>
     <string name="dv7_mode_auto">Automático (recomendado)</string>
@@ -1795,7 +1795,7 @@
     <string name="stream_player_external">Externo</string>
     <string name="stream_filter_all">Todos</string>
     <string name="stream_episode_label">T%1$d E%2$d</string>
-    
+
     <string name="player_no_external_player">No se encontró un reproductor externo</string>
     <string name="player_loading_preparing">Preparando reproducción…</string>
     <string name="player_loading_detecting_format">Detectando formato del stream…</string>
@@ -1860,7 +1860,7 @@
     <string name="player_more_aspect_ratio">Relación de Aspecto</string>
     <string name="player_more_open_external">Abrir en reproductor externo</string>
     <string name="player_error_no_stream_url">No se proporcionó una URL de stream</string>
-    
+
 
     <string name="stream_info_section_source">ORIGEN</string>
     <string name="stream_info_section_file">ARCHIVO</string>
@@ -1883,7 +1883,7 @@
     <string name="stream_info_subtitle_source_addon">Addon</string>
     <string name="stream_info_subtitle_source_embedded">Integrado</string>
     <string name="stream_info_player_engine">Motor de reproducción</string>
-    
+
     <string name="sources_title">Fuentes</string>
     <string name="sources_reload">Recargar</string>
     <string name="sources_close">Cerrar</string>
@@ -2237,7 +2237,7 @@
     <string name="custom_server_save_failed">No se pudo guardar la configuración del servidor.</string>
     <string name="custom_server_session_clear_failed">No se pudo cerrar de forma segura la sesión actual. El servidor no se modificó.</string>
     <string name="custom_server_restart_failed">El servidor se guardó, pero la aplicación no pudo reiniciarse automáticamente. Reiníciala manualmente.</string>
-    
+
     <string name="auth_qr_title">Iniciar Sesión con QR</string>
     <string name="auth_qr_tagline">Disfruta tu biblioteca en cualquier lugar</string>
     <string name="auth_qr_finishing">Finalizando inicio de sesión\u2026</string>
@@ -3160,7 +3160,7 @@
     <!-- External playback keep-alive service -->
     <string name="external_playback_notification_text">Reproduciendo en reproductor externo</string>
     <string name="external_playback_channel_description">Mantiene la aplicación activa durante la reproducción en un reproductor externo</string>
-    
+
     <!-- Web config page: Direct Debrid formatter -->
     <string name="web_debrid_title">Configuración de Direct Debrid</string>
     <string name="web_debrid_intro_title">Personaliza las transmisiones de Debrid</string>

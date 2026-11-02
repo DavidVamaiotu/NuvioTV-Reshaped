@@ -137,8 +137,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1071
-        versionName = "1.1.0-beta.8"
+        versionCode = 1072
+        versionName = "1.1.0-beta.9"
 
         buildConfigField("String", "PARENTAL_GUIDE_API_URL", "\"${localProperties.getProperty("PARENTAL_GUIDE_API_URL", "")}\"")
         buildConfigField("String", "INTRODB_API_URL", "\"${localProperties.getProperty("INTRODB_API_URL", "")}\"")
@@ -375,6 +375,8 @@ androidComponents {
     }
     // Only the full flavor ships the in-app updater.
     onVariants(selector().withFlavor("distribution" to "full")) { variant ->
+        // AGP makes no ART profile for debuggable variants, and ART ignores .dm files for them anyway.
+        if (variant.debuggable) return@onVariants
         val variantName = variant.name.replaceFirstChar { it.uppercase() }
         val embedTask = tasks.register<EmbedUpdateDexMetadataTask>("embed${variantName}UpdateDexMetadata") {
             dexMetadataDirectory.from(provider {
@@ -515,6 +517,7 @@ dependencies {
     implementation(libs.media3.decoder)
     implementation(libs.media3.session)
     implementation(libs.media3.container)
+    implementation("androidx.media3:media3-effect:1.8.0")
 
     // Transitive dependencies required by forked local AARs (not bundled in AARs):
     // - Guava: needed by lib-common (ImmutableList/ImmutableSet in Tracks, Player API)

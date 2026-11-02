@@ -1283,7 +1283,7 @@
     <string name="profile_pin_overlay_forgot_hint">PINを忘れた場合はNuvioウェブサイトのアカウントページからリセットできます</string>
     <string name="profile_pin_overlay_back_hint">戻るボタンでキャンセル</string>
 
-    
+
     <!-- Essential addon setup wizard -->
     <string name="essential_addon_setup_title">アドオンをセットアップ</string>
     <string name="essential_addon_setup_subtitle">ストリーミングを開始するにはアドオンを1つインストールしてください。後でアドオンから追加できます。</string>
@@ -1344,7 +1344,7 @@
     <string name="catalog_order_enable">有効にする</string>
     <string name="catalog_order_disable">無効にする</string>
 
-    
+
     <string name="stream_retry">再試行</string>
     <string name="stream_no_streams">ストリームが見つかりません</string>
     <string name="stream_no_streams_hint">より多くのアドオンをインストールしてストリームを見つけてみてください</string>
@@ -1424,7 +1424,7 @@
     <string name="player_more_open_external">外部プレーヤーで開く</string>
     <string name="player_error_no_stream_url">ストリームURLが指定されていません</string>
 
-    
+
     <string name="stream_info_section_source">SOURCE</string>
     <string name="stream_info_section_file">FILE</string>
     <string name="stream_info_section_video">VIDEO</string>
@@ -1558,7 +1558,7 @@
     <string name="display_mode_refresh">更新</string>
     <string name="display_mode_resolution">解像度</string>
 
-    
+
     <string name="search_keyboard_hint">検索するにはキーボードの完了を押してください</string>
     <string name="search_placeholder">映画とシリーズを検索</string>
     <string name="search_start_title">検索を始める</string>
@@ -1912,7 +1912,7 @@
     <string name="plugin_repo_refreshed">リポジトリを更新しました</string>
 
     <!-- Trakt errors -->
-    
+
     <string name="trakt_error_code_expired">デバイスコードの有効期限が切れました。やり直してください。</string>
     <string name="trakt_error_code_used">デバイスコードは既に使用されています。やり直してください。</string>
     <string name="trakt_error_denied">Traktで承認が拒否されました。</string>

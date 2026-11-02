@@ -1,2 +1,3 @@
-- TorBox seek previews stay complete while you hold left or right: the side frames no longer go missing, and the whole filmstrip moves together on every step.
-- Held scrubbing reuses each decoded preview sheet for every frame on it and prepares the next sheet in the direction you are moving, so fast holds keep up. This uses about 12 MB only while the key is held (playback is paused then) and is freed when you let go.
+- Updated to upstream Nuvio TV 1.1.0-beta.9, including audio night mode and LFE downmix controls, HDR detection improvements, chapter/skip handling, and playback fixes.
+- Retained Reshaped settings, AutoSync/AudioSync, seek previews, source recovery, pill navigation, and Arc format controls. The rebuilt decoder combines upstream audio changes with Reshaped end-of-stream and per-format transcode handling.
+- Tester keeps grouped Reshaped settings and the latest held-seek TorBox filmstrip, cache, and colour-matching improvements.
