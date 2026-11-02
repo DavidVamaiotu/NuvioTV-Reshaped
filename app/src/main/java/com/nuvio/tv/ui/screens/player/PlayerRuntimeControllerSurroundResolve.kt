@@ -215,6 +215,7 @@ private fun PlayerRuntimeController.commitSurroundResolution(
         downmixEnabled = surround.downmixEnabled,
         audioOutputChannels = surround.audioOutputChannels,
         downmixNormalizationEnabled = !currentPlayerSettingsForReport.maintainOriginalAudioOnDownmix,
+        lfeMixLevel = currentPlayerSettingsForReport.downmixLfeLevel.level,
         forceOpticalPassthrough = inputs.forceOpticalActive,
         deniedTranscodeMimes = surround.deniedTranscodeMimes
     )
