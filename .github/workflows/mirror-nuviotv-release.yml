@@ -403,7 +403,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/test_seek_preview_native.py
-          # Includes cancellation and Reshaped networking regressions.
+          # Full suite gates the combined upstream and Reshaped decoder update.
           ./gradlew :app:testFullReleaseUnitTest --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$AUTOSYNC_TAG"
 

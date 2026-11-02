@@ -110,6 +110,8 @@ struct DecoderContext {
   jint requested_output_channel_count;
   char* requested_output_layout_name;
   double center_mix_level;
+  // LFE share mixed into the other channels when the downmix layout has no LFE.
+  double lfe_mix_level;
   bool downmix_normalization_enabled;
   bool has_input_layout;
   bool has_output_layout;
@@ -161,6 +163,7 @@ int decodePacket(DecoderContext* decoderContext, AVPacket* packet,
                  uint8_t* outputBuffer, int outputSize,
                  jint userCenterMixLevelDb,
                  jboolean downmixNormalizationEnabled,
+                 jfloat lfeMixLevel,
                  GrowOutputBufferCallback growBuffer, jboolean endOfStream);
 
 int ac3TrailingSilenceSamples(int queuedSamples, int frameSize);
@@ -170,7 +173,8 @@ int ac3TrailingSilenceSamples(int queuedSamples, int frameSize);
  */
 int configureResampler(DecoderContext* decoderContext, AVFrame* frame,
                        jint userCenterMixLevelDb,
-                       jboolean downmixNormalizationEnabled);
+                       jboolean downmixNormalizationEnabled,
+                       jfloat lfeMixLevel);
 
 /**
  * Transforms ffmpeg AVERROR into a negative AUDIO_DECODER_ERROR constant value.
@@ -290,6 +294,7 @@ AUDIO_DECODER_FUNC(jint, ffmpegDecode, jlong context, jobject inputData,
                    jobject outputData, jint outputSize,
                    jint userCenterMixLevelDb,
                    jboolean downmixNormalizationEnabled,
+                   jfloat lfeMixLevel,
                    jboolean endOfStream) {
   if (!context) {
     LOGE("Context must be non-NULL.");
@@ -320,6 +325,7 @@ AUDIO_DECODER_FUNC(jint, ffmpegDecode, jlong context, jobject inputData,
       decodePacket((DecoderContext*)context, packet, outputBuffer, outputSize,
                    userCenterMixLevelDb,
                    downmixNormalizationEnabled,
+                   lfeMixLevel,
                    GrowOutputBufferCallback{env, thiz, decoderOutputBuffer},
                    endOfStream);
   av_packet_free(&packet);
@@ -661,6 +667,7 @@ int decodePacket(DecoderContext* decoderContext, AVPacket* packet,
                  uint8_t* outputBuffer, int outputSize,
                  jint userCenterMixLevelDb,
                  jboolean downmixNormalizationEnabled,
+                 jfloat lfeMixLevel,
                  GrowOutputBufferCallback growBuffer, jboolean endOfStream) {
   AVCodecContext* codecContext = decoderContext->codec_context;
   bool deliverInput = packet->size > 0 || !endOfStream;
@@ -703,7 +710,7 @@ int decodePacket(DecoderContext* decoderContext, AVPacket* packet,
 
     result =
         configureResampler(decoderContext, frame, userCenterMixLevelDb,
-                           downmixNormalizationEnabled);
+                           downmixNormalizationEnabled, lfeMixLevel);
     if (result < 0) {
       av_frame_free(&frame);
       return transformError(result);
@@ -810,7 +817,8 @@ int decodePacket(DecoderContext* decoderContext, AVPacket* packet,
 
 int configureResampler(DecoderContext* decoderContext, AVFrame* frame,
                        jint userCenterMixLevelDb,
-                       jboolean downmixNormalizationEnabled) {
+                       jboolean downmixNormalizationEnabled,
+                       jfloat lfeMixLevel) {
   AVCodecContext* codecContext = decoderContext->codec_context;
   AVChannelLayout inputLayout = {};
   if (!getInputChannelLayout(codecContext, frame, &inputLayout)) {
@@ -846,6 +854,8 @@ int configureResampler(DecoderContext* decoderContext, AVFrame* frame,
   bool applyNormalization = isDownmixActive && downmixNormalizationEnabled;
   double centerMixLevel =
       getAdjustedCenterMixLevel(frame, userCenterMixLevelDb, isDownmixActive);
+  // swresample only uses this when the output layout has no LFE channel.
+  double lfeLevel = isDownmixActive && lfeMixLevel > 0.0f ? lfeMixLevel : 0.0;
 
   bool needsReconfigure =
       !decoderContext->resample_context ||
@@ -859,7 +869,8 @@ int configureResampler(DecoderContext* decoderContext, AVFrame* frame,
       (!decoderContext->has_center_mix_level && isDownmixActive) ||
       (decoderContext->has_center_mix_level != isDownmixActive) ||
       (isDownmixActive &&
-       fabs(decoderContext->center_mix_level - centerMixLevel) > 0.000001);
+       fabs(decoderContext->center_mix_level - centerMixLevel) > 0.000001) ||
+      fabs(decoderContext->lfe_mix_level - lfeLevel) > 0.000001;
 
   if (!needsReconfigure) {
     av_channel_layout_uninit(&inputLayout);
@@ -883,6 +894,9 @@ int configureResampler(DecoderContext* decoderContext, AVFrame* frame,
 
   if (isDownmixActive) {
     av_opt_set_double(resampleContext, "center_mix_level", centerMixLevel, 0);
+    if (lfeLevel > 0.0) {
+      av_opt_set_double(resampleContext, "lfe_mix_level", lfeLevel, 0);
+    }
     if ((decoderContext->output_sample_format == AV_SAMPLE_FMT_FLT ||
          decoderContext->output_sample_format == AV_SAMPLE_FMT_FLTP) &&
         (inputSampleFormat == AV_SAMPLE_FMT_FLT ||
@@ -914,6 +928,7 @@ int configureResampler(DecoderContext* decoderContext, AVFrame* frame,
   decoderContext->has_input_layout = true;
   decoderContext->has_output_layout = true;
   decoderContext->center_mix_level = centerMixLevel;
+  decoderContext->lfe_mix_level = lfeLevel;
   decoderContext->downmix_normalization_enabled = applyNormalization;
   decoderContext->has_center_mix_level = isDownmixActive;
   decoderContext->downmix_active = isDownmixActive;
@@ -1030,6 +1045,7 @@ void clearResampler(DecoderContext* decoderContext) {
     decoderContext->has_output_layout = false;
   }
   decoderContext->downmix_normalization_enabled = false;
+  decoderContext->lfe_mix_level = 0.0;
   decoderContext->has_center_mix_level = false;
   decoderContext->downmix_active = false;
 

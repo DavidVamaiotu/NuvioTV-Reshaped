@@ -275,7 +275,8 @@ internal fun PlayerRuntimeController.handleMpvPlaybackError(
         } else {
             mpvView?.currentPositionMs()?.coerceAtLeast(0L) ?: 0L
         }
-        if (attemptMpvAutoRetry(detailedError = detailedError, savedPosition = savedPosition)) return
+        val retryCanHelp = httpCode == null || !isPermanentHttpStatus(httpCode)
+        if (retryCanHelp && attemptMpvAutoRetry(detailedError = detailedError, savedPosition = savedPosition)) return
 
         finishLoadingDiagnostics("mpv_error")
         cancelNextEpisodeAutoPlayOnFatalError()
@@ -321,7 +322,7 @@ private fun PlayerRuntimeController.attemptMpvAutoRetry(
         if (savedPosition > 0L) {
             _uiState.update { it.copy(pendingSeekPosition = savedPosition) }
         }
-        initializePlayer(currentStreamUrl, currentHeaders, startPaused = paused)
+        reinitializeCurrentStream(startPaused = paused)
     }
     return true
 }

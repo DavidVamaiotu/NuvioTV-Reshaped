@@ -1,4 +1,3 @@
-- Updated to upstream Nuvio TV 1.1.0-beta.8, including chapter controls, HDR subtitle styles, the new libass subtitle renderer, stream audio-delay hints, and Nuvio engine 0.1.6.
-- Kept Reshaped settings, AutoSync/AudioSync, seek previews, source recovery, Arc sound and picture controls, and pill navigation. Chapter controls work alongside seek previews.
-- Background update downloads and optional automatic installs follow Reshaped's Beta and Tester channels, including safe moves between them.
-- Fixed the ARM32-only tester build. TorBox sprite prefetching and its bounded memory/disk caches remain available.
+- Updated to upstream Nuvio TV 1.1.0-beta.9, including audio night mode and LFE downmix controls, HDR detection improvements, chapter/skip handling, and playback fixes.
+- Retained Reshaped settings, AutoSync/AudioSync, seek previews, source recovery, pill navigation, and Arc format controls. The rebuilt decoder combines upstream audio changes with Reshaped end-of-stream and per-format transcode handling.
+- Tester keeps grouped Reshaped settings and the latest held-seek TorBox filmstrip, cache, and colour-matching improvements.
