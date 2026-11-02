@@ -13,6 +13,7 @@ import org.junit.Test
 class FfmpegForkRoutingTest {
     private fun renderer(supportsAc3: Boolean = true): FfmpegAudioRenderer {
         val sink = mockk<AudioSink>(relaxed = true)
+        every { sink.supportsFormat(any()) } returns supportsAc3
         every { sink.getFormatSupport(any()) } returns if (supportsAc3) {
             AudioSink.SINK_FORMAT_SUPPORTED_DIRECTLY
         } else {
