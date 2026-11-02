@@ -403,7 +403,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/test_seek_preview_native.py
-          # Full suite checks the combined decoder, sink capability and surround route policy.
+          # Full suite checks the combined decoder, AC-3 sink capability and surround route policy.
           ./gradlew :app:testFullReleaseUnitTest --build-cache --stacktrace
           .github/scripts/reshaped-tv-apks.sh build "$AUTOSYNC_TAG"
 
