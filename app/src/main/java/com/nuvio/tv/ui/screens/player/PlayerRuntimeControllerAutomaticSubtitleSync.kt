@@ -268,7 +268,9 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH &&
                     (
                         analysisOutcome == null ||
-                            analysisOutcome == AutoSyncAnalysisOutcome.SUBTITLE_UNAVAILABLE
+                            analysisOutcome == AutoSyncAnalysisOutcome.SUBTITLE_UNAVAILABLE ||
+                            analysisOutcome == AutoSyncAnalysisOutcome.NO_FIT ||
+                            analysisOutcome == AutoSyncAnalysisOutcome.INCONCLUSIVE
                         ) &&
                     stillRelevant()
                 ) {
