@@ -3427,9 +3427,6 @@
     <string name="autosync_tolerance_value">%1$d ms</string>
 
 
-    <string name="autosync_toast_failed">Échec de la synchronisation&#160;: la synchronisation automatique n’a pas pu faire correspondre ce sous-titre à la vidéo.</string>
-    <string name="autosync_toast_failed_no_reference">Échec de la synchronisation&#160;: cette vidéo ne contient aucun sous-titre intégré à comparer.</string>
-    <string name="autosync_toast_failed_unsupported">Échec de la synchronisation&#160;: la synchronisation automatique ne prend pas en charge ce format de sous-titres.</string>
 
     <string name="stream_resume_from_time">Reprendre à %1$s</string>
     <string name="stream_resume_from_percent">Reprendre à %1$d&#160;%%</string>
