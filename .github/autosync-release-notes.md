@@ -1,4 +1,5 @@
 - Updated to upstream NuvioTV 1.1.0 stable, including playback, audio, subtitle selection, and updater improvements.
+- Included upstream fixes for earlier watch-state sync, refresh after navigation, CloudStream plugin lifecycle compatibility, pinned optical audio capabilities, and updated Lithuanian translations.
 - Retained Reshaped settings, AutoSync/AudioSync, secondary subtitle language fallback, seek previews, custom fonts, source recovery, pill navigation, and the combined FFmpeg decoder.
 - Preserved saved AutoSync choices while adapting upstream's restored-subtitle search and reactive settings.
 - Stable promotion builds directly from the tester branch, including its TorBox preview, scrub/color matching, and audio format controls.
