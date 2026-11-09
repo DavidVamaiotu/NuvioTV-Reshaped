@@ -57,6 +57,12 @@ class TraktProgressServiceFailureTest {
     @Test
     fun `failed dropped-shows fetch keeps shows hidden from progress`() = runBlocking {
         val service = createService()
+        // The hidden IDs arrive before the initial refresh finishes. Wait for the full
+        // snapshot before sending a refresh signal, otherwise the startup collector can
+        // miss that signal and this test never reaches its injected HTTP failure.
+        withTimeout(TIMEOUT_MS) {
+            service.observeRemoteProgressLoaded().first { loaded -> loaded }
+        }
         withTimeout(TIMEOUT_MS) {
             while (!service.isShowHiddenFromProgress(DROPPED_SHOW_ID)) delay(20)
         }
