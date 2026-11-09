@@ -91,8 +91,9 @@ class TesterChannelTest {
     }
 
     @Test
-    fun `stable builds never outrank a tester build`() {
-        assertFalse(newer("1.1.0-autosync.1", LATER, false, "1.1.0-beta.3-tester.4", BETA_BUILT_AT))
+    fun `unified stable builds can update an older tester build`() {
+        assertTrue(newer("1.1.0-autosync.1", LATER, false, "1.1.0-beta.3-tester.4", BETA_BUILT_AT))
+        assertFalse(newer("1.1.0-autosync.1", EARLIER, false, "1.1.0-beta.3-tester.4", BETA_BUILT_AT))
         assertFalse(newer("1.0.0-autosync.21", LATER, false, "1.1.0-beta.3-tester.4", BETA_BUILT_AT))
     }
 

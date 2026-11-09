@@ -20,7 +20,7 @@ internal object TesterChannel {
     )
 
     // Release builds are stamped with their build time as versionCode; beta and tester builds add
-    // this lead over stable (mirror-nuviotv-release.yml, autosync-tester-release.yml).
+    // this lead; canonical stable releases from 1.1.0 use the same scheme.
     private const val BETA_LINE_VERSION_CODE_LEAD = 100_000_000L
 
     private val installedTesterBuildKey = booleanPreferencesKey("reshaped_installed_tester_build")
@@ -82,9 +82,11 @@ internal object TesterChannel {
         val publishedAt = remotePublishedAt
             ?.let { runCatching { Instant.parse(it).epochSecond }.getOrNull() }
             ?: return false
-        // A stable release (no lead) never outranks a beta or tester build. A non-prerelease from
-        // the beta line can't be told apart from stable, so it is treated the same way.
-        val lead = if (remoteTester || remotePrerelease) BETA_LINE_VERSION_CODE_LEAD else 0L
+        // Stable 1.0.x used plain epoch seconds. From stable 1.1.0 all TV channels share
+        // the beta/tester lead, so a later stable build can install over a tester build.
+        val unifiedStableCode = !VersionUtils.isPrerelease(remoteTag) &&
+            remoteBase >= checkNotNull(VersionUtils.parse("1.1.0"))
+        val lead = if (remoteTester || remotePrerelease || unifiedStableCode) BETA_LINE_VERSION_CODE_LEAD else 0L
         return publishedAt + lead > localVersionCode
     }
 

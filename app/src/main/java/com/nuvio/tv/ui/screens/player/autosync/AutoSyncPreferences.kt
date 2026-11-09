@@ -28,6 +28,9 @@ internal object AutoSyncPreferences {
 
     private val _debugLogsEnabled = MutableStateFlow(false)
     val debugLogsEnabled: StateFlow<Boolean> = _debugLogsEnabled.asStateFlow()
+    /** [enabled] as Compose state, so the settings list can show the dependent rows only when on. */
+    private val _enabledState = mutableStateOf(false)
+    val enabledState: State<Boolean> get() = _enabledState
 
     /** Thorough search: stop only on a stronger match; the applied match is gated the same. */
     private val _aggressiveMode = MutableStateFlow(true)
@@ -44,6 +47,7 @@ internal object AutoSyncPreferences {
             if (initialized) return
             val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             _enabled.value = prefs.getBoolean(KEY_ENABLED, false)
+            _enabledState.value = _enabled.value
             _aggressiveMode.value = prefs.getBoolean(KEY_AGGRESSIVE_MODE, true)
             _debugLogsEnabled.value = prefs.getBoolean(KEY_DEBUG_LOGS, false)
             _syncToleranceMs.value = prefs.getInt(KEY_SYNC_TOLERANCE_MS, 0)

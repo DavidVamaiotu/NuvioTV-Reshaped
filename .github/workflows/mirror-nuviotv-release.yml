@@ -1,10 +1,16 @@
 name: AutoSync TV Release
 
-# Manual releases build the selected branch as Beta, including subtitle-autosync-tester.
+# Manual releases build the exact selected branch; stable promotion supports the tester branch.
 
 
 on:
   workflow_dispatch:
+    inputs:
+      release_channel:
+        description: Release channel for the selected source branch
+        type: choice
+        options: [beta, stable]
+        default: beta
   push:
     branches:
       - subtitle-autosync
@@ -54,6 +60,13 @@ jobs:
               exit 1
             fi
             PRERELEASE=true
+            if [[ "${{ inputs.release_channel }}" == "stable" ]]; then
+              if [[ "$UPSTREAM_TAG" =~ - ]]; then
+                echo "Stable promotion requires a stable upstream version." >&2
+                exit 1
+              fi
+              PRERELEASE=false
+            fi
             NEEDS_SYNC=false
           else
             RELEASE_JSON="$(gh api repos/NuvioMedia/NuvioTV/releases --jq '[.[] | select(.draft == false)][0]')"
