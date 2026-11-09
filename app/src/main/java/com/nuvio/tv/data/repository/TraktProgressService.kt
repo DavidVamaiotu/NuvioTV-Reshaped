@@ -163,7 +163,9 @@ class TraktProgressService @Inject constructor(
         Log.e(TAG, "Uncaught exception in TraktProgressService scope", throwable)
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
-    private val refreshSignals = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    // onStart emits the initial refresh before merge subscribes to this flow. Keep an
+    // early manual/profile refresh until that subscription exists instead of losing it.
+    private val refreshSignals = MutableSharedFlow<Unit>(replay = 1, extraBufferCapacity = 1)
     private val remoteProgress = MutableStateFlow<List<WatchProgress>>(emptyList())
     private val optimisticProgress = MutableStateFlow<Map<String, OptimisticProgressEntry>>(emptyMap())
     private val metadataState = MutableStateFlow<Map<String, ContentMetadata>>(emptyMap())
