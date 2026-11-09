@@ -33,6 +33,7 @@ import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncFallback
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncSettings
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncTaps
 import com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSources
+import com.nuvio.tv.ui.screens.player.autosync.searchAfterSelectedFailed
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -232,21 +233,19 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     "lang=${selectedSubtitle.lang} candidates=${candidatesAtStart.size}",
             )
             var analysisOutcome: AutoSyncAnalysisOutcome? = null
-            var searchResult = AutomaticSubtitleSync.findTimelineRetime(
+            suspend fun search(withAlternatives: Boolean) = AutomaticSubtitleSync.findTimelineRetime(
                 sourceKey = sourceUrlAtStart,
                 sourceHeaders = sourceHeadersAtStart,
                 selectedSubtitleUrl = selectedUrl,
                 selectedSubtitleHeaders = selectedSubtitle.headers.orEmpty(),
                 selectedSubtitleBodyDeferred = selectedBodyDeferred,
                 preferredLanguage = selectedSubtitle.lang,
-                alternativeSubtitles = if (candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH) {
+                alternativeSubtitles = if (withAlternatives) {
                     candidatesAtStart.map { it.toAutoSyncCandidate() }
                 } else {
                     emptyList()
                 },
-                alternativeSubtitlesProvider = if (
-                    candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH
-                ) {
+                alternativeSubtitlesProvider = if (withAlternatives) {
                     { _uiState.value.addonSubtitles.map { it.toAutoSyncCandidate() } }
                 } else {
                     null
@@ -258,6 +257,19 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                 // as on the phone, instead of waiting up to a minute for a delay-only sample.
                 sparseLiveReferenceAllowed = !audioSyncTakesOver,
             )
+            var searchResult = search(
+                withAlternatives = candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH,
+            )
+            if (
+                searchResult == null && stillRelevant() &&
+                candidateScope.searchAfterSelectedFailed(analysisOutcome)
+            ) {
+                Log.d(
+                    PlayerRuntimeController.TAG,
+                    "AUTO_SYNC_V2 restored subtitle did not fit (outcome=$analysisOutcome), searching alternatives",
+                )
+                searchResult = search(withAlternatives = true)
+            }
 
             // No match in the first language: search the secondary subtitle language before the
             // audio fallback. Only at startup, only when a subtitle could still match (not when
@@ -522,20 +534,18 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
                     "lang=${selectedSubtitle.lang} candidates=${candidatesAtStart.size}",
             )
             var analysisOutcome: AutoSyncAnalysisOutcome? = null
-            val resolved = AutomaticSubtitleSync.findTimelineRetime(
+            suspend fun search(withAlternatives: Boolean) = AutomaticSubtitleSync.findTimelineRetime(
                 sourceKey = sourceUrlAtStart,
                 sourceHeaders = sourceHeadersAtStart,
                 selectedSubtitleUrl = selectedUrl,
                 selectedSubtitleHeaders = selectedSubtitle.headers.orEmpty(),
                 preferredLanguage = selectedSubtitle.lang,
-                alternativeSubtitles = if (candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH) {
+                alternativeSubtitles = if (withAlternatives) {
                     candidatesAtStart.map { it.toAutoSyncCandidate() }
                 } else {
                     emptyList()
                 },
-                alternativeSubtitlesProvider = if (
-                    candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH
-                ) {
+                alternativeSubtitlesProvider = if (withAlternatives) {
                     { _uiState.value.addonSubtitles.map { it.toAutoSyncCandidate() } }
                 } else {
                     null
@@ -543,6 +553,20 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
                 onAnalysisOutcome = { outcome -> analysisOutcome = outcome },
                 allowLiveReference = false,
             )
+            var resolved = search(
+                withAlternatives = candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH,
+            )
+            if (
+                resolved == null && streamUnchanged() &&
+                _uiState.value.selectedAddonSubtitle?.url == selectedUrl &&
+                candidateScope.searchAfterSelectedFailed(analysisOutcome)
+            ) {
+                Log.d(
+                    PlayerRuntimeController.TAG,
+                    "AUTO_SYNC_V2 mpv restored subtitle did not fit (outcome=$analysisOutcome), searching alternatives",
+                )
+                resolved = search(withAlternatives = true)
+            }
 
             // The plain selection loads the original file; let it land so it cannot replace
             // the synced copy afterwards.
@@ -673,7 +697,7 @@ private fun PlayerRuntimeController.runLibassAutomaticSubtitleSync(
                     "lang=${selectedSubtitle.lang} candidates=${candidatesAtStart.size}",
             )
             var analysisOutcome: AutoSyncAnalysisOutcome? = null
-            val startupSearch = candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH
+            var startupSearch = candidateScope == AutoSyncCandidateScope.STARTUP_SEARCH
             suspend fun search(ass: Boolean) = AutomaticSubtitleSync.findTimelineRetime(
                 sourceKey = sourceUrlAtStart,
                 sourceHeaders = sourceHeadersAtStart,
@@ -697,6 +721,17 @@ private fun PlayerRuntimeController.runLibassAutomaticSubtitleSync(
                 onAnalysisOutcome = { outcome -> analysisOutcome = outcome },
             )
             var resolved = search(ass = true)
+            if (
+                resolved == null && stillRelevant() &&
+                candidateScope.searchAfterSelectedFailed(analysisOutcome)
+            ) {
+                Log.d(
+                    PlayerRuntimeController.TAG,
+                    "AUTO_SYNC_V2 libass restored subtitle did not fit (outcome=$analysisOutcome), searching alternatives",
+                )
+                startupSearch = true
+                resolved = search(ass = true)
+            }
             // No ASS/SSA fits: try the other formats, unless the video has nothing to compare with.
             if (
                 resolved == null && startupSearch && streamUnchanged() &&
