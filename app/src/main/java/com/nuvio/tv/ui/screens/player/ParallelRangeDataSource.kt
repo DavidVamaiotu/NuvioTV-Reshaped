@@ -270,11 +270,15 @@ internal class ParallelRangeDataSource(
         }
 
         private fun recycleBuffer(buffer: PooledBuffer, chunkSz: Long, poolCap: Int) {
-            if (poolCap > 0) {
-                val pool = globalBufferPool.computeIfAbsent(chunkSz) { ConcurrentLinkedDeque() }
-                if (pool.size < poolCap) {
-                    pool.offerLast(buffer)
-                    return
+            // Clearing the pool must not detach a deque after a worker chooses it but
+            // before that worker returns its buffer, or the allocation becomes unreachable.
+            synchronized(globalBufferPool) {
+                if (poolCap > 0) {
+                    val pool = globalBufferPool.computeIfAbsent(chunkSz) { ConcurrentLinkedDeque() }
+                    if (pool.size < poolCap) {
+                        pool.offerLast(buffer)
+                        return
+                    }
                 }
             }
             freeBuffer(buffer)
@@ -470,12 +474,14 @@ internal class ParallelRangeDataSource(
         }
 
         private fun clearGlobalPool() {
-            globalBufferPool.values.forEach { pool ->
-                while (true) {
-                    freeBuffer(pool.pollFirst() ?: break)
+            synchronized(globalBufferPool) {
+                globalBufferPool.values.forEach { pool ->
+                    while (true) {
+                        freeBuffer(pool.pollFirst() ?: break)
+                    }
                 }
+                globalBufferPool.clear()
             }
-            globalBufferPool.clear()
             Log.d(TAG, "Cleared global buffer pool as all ParallelRangeDataSource instances are closed")
         }
     }

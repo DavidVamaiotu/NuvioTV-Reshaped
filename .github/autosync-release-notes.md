@@ -1,3 +1,5 @@
+- Fixed a native chunk-buffer cleanup race exposed by the streaming stress suite; concurrent recycling can no longer lose a buffer during pool cleanup.
+- Included upstream Continue Watching focus retention and next-episode rebuilding fixes, plus updated Dutch translations with Reshaped AutoSync resources preserved.
 - Updated to upstream NuvioTV 1.1.0 stable, including playback, audio, subtitle selection, and updater improvements.
 - Included upstream fixes for earlier watch-state sync, refresh after navigation, CloudStream plugin lifecycle compatibility, pinned optical audio capabilities, and updated Lithuanian translations.
 - Retained Reshaped settings, AutoSync/AudioSync, secondary subtitle language fallback, seek previews, custom fonts, source recovery, pill navigation, and the combined FFmpeg decoder.
