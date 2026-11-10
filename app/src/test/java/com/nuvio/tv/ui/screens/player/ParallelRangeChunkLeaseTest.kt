@@ -346,6 +346,58 @@ class ParallelRangeChunkLeaseTest {
     }
 
     @Test
+    fun `clearing an empty pool cannot orphan a concurrently recycled buffer`() {
+        @Suppress("UNCHECKED_CAST")
+        val pools = ParallelRangeDataSource::class.java.getDeclaredField("globalBufferPool")
+            .apply { isAccessible = true }.get(null) as
+            ConcurrentHashMap<Long, java.util.concurrent.ConcurrentLinkedDeque<Any>>
+        val emptyObserved = CountDownLatch(1)
+        val finishClear = CountDownLatch(1)
+        val recycleStarted = CountDownLatch(1)
+        val errors = AtomicReference<Throwable?>()
+        pools[CHUNK] = object : java.util.concurrent.ConcurrentLinkedDeque<Any>() {
+            override fun pollFirst(): Any? {
+                val value = super.pollFirst()
+                if (value == null) {
+                    emptyObserved.countDown()
+                    check(finishClear.await(5, TimeUnit.SECONDS))
+                }
+                return value
+            }
+        }
+        val buffer = pooledBuffer(memory.allocate(CHUNK.toInt()))
+        val clear = Thread {
+            try { call(ParallelRangeDataSource.Companion, "clearGlobalPool") }
+            catch (error: Throwable) { errors.set(error) }
+        }
+        val recycle = Thread {
+            recycleStarted.countDown()
+            try { releaseSessionBuffer(buffer, 4) }
+            catch (error: Throwable) { errors.set(error) }
+        }
+        try {
+            clear.start()
+            assertTrue(emptyObserved.await(5, TimeUnit.SECONDS))
+            recycle.start()
+            assertTrue(recycleStarted.await(5, TimeUnit.SECONDS))
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (recycle.state != Thread.State.BLOCKED && recycle.isAlive &&
+                System.nanoTime() < deadline) Thread.sleep(1)
+            // On the old code recycle completes into the deque that clear then removes.
+        } finally {
+            finishClear.countDown()
+            clear.join(5_000)
+            if (recycle.state != Thread.State.NEW) recycle.join(5_000)
+        }
+        assertFalse(clear.isAlive)
+        assertFalse(recycle.isAlive)
+        errors.get()?.let { throw AssertionError("pool worker failed", it) }
+        drainPool()
+        assertEquals(0, memory.badFrees.get())
+        assertEquals("concurrent recycling must remain reachable", memory.allocated.get(), memory.freed.get())
+    }
+
+    @Test
     fun `paced reader stays correct while sessions are torn down repeatedly`() {
         serve()
         val done = AtomicBoolean(false)
