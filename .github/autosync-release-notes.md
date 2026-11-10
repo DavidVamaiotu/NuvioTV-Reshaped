@@ -1,3 +1,4 @@
+- Movie post-play recommendations now use end-credit chapter timing, while ignoring opening credits and retaining post-credit-tail handling.
 - Fixed a native chunk-buffer cleanup race exposed by the streaming stress suite; concurrent recycling can no longer lose a buffer during pool cleanup.
 - Included upstream Continue Watching focus retention and next-episode rebuilding fixes, plus updated Dutch translations with Reshaped AutoSync resources preserved.
 - Updated to upstream NuvioTV 1.1.0 stable, including playback, audio, subtitle selection, and updater improvements.
