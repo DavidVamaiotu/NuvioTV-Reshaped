@@ -257,6 +257,14 @@ class PlayerRuntimeController(
             .ifEmpty { StreamSidecarSubtitles.forUrl(currentStreamUrl) }
     }
 
+    /** URL opened from the reuse-last-link cache; it is refetched after a playback error even without a token. */
+    internal var linkCacheSourceUrl: String? = currentStreamUrl.takeIf {
+        navigationArgs.fromLinkCache && it.isNotBlank() && !it.startsWith("torrent://")
+    }
+
+    /** Last URL refetched after a playback error, so a link is refreshed at most once. */
+    internal var linkRefreshAttemptedUrl: String? = null
+
     fun getCurrentStreamUrl(): String = currentStreamUrl
     fun getCurrentHeaders(): Map<String, String> = currentHeaders
 
@@ -658,6 +666,7 @@ class PlayerRuntimeController(
     internal var ffmpegAudioRenderer: FfmpegAudioRenderer? = null
     internal var mpvView: NuvioMpvSurfaceView? = null
     internal val subtitleCueTracker = SubtitleCueTracker()
+    internal val styledSubtitles = StyledSubtitlePresenter()
     internal var mpvInitializationInProgress: Boolean = false
     internal var mpvMediaLoadPrepared: Boolean = false
     internal var mpvTrackRefreshJob: Job? = null

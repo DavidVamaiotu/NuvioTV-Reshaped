@@ -39,7 +39,8 @@ internal data class PlayerNavigationArgs(
     val profileId: Int?,
     val autoSourceRecoveryToken: String? = null,
     val audioDelayMs: Int? = null,
-    val audioDelayLanguage: String? = null
+    val audioDelayLanguage: String? = null,
+    val fromLinkCache: Boolean = false
 ) {
     val torrentTrackers: List<String>
         get() {
@@ -102,7 +103,8 @@ internal data class PlayerNavigationArgs(
                 autoSourceRecoveryToken = savedStateHandle.get<String>("autoSourceRecoveryToken"),
                 profileId = savedStateHandle.get<String>("profileId")?.toIntOrNull(),
                 audioDelayMs = savedStateHandle.get<String>("audioDelayMs")?.toIntOrNull(),
-                audioDelayLanguage = decodedOrNull("audioDelayLanguage")
+                audioDelayLanguage = decodedOrNull("audioDelayLanguage"),
+                fromLinkCache = savedStateHandle.get<String>("fromLinkCache")?.toBooleanStrictOrNull() == true
             )
         }
     }

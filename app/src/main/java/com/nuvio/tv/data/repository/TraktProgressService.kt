@@ -290,6 +290,10 @@ class TraktProgressService @Inject constructor(
         }
         scope.launch {
             refreshEvents().collectLatest {
+                if (!traktAuthService.getCurrentAuthState().isAuthenticated) {
+                    trace("refresh skipped: not signed in to Trakt")
+                    return@collectLatest
+                }
                 val success = try {
                     refreshRemoteSnapshot()
                     true

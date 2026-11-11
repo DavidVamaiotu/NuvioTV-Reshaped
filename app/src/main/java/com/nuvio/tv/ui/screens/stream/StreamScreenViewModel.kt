@@ -513,7 +513,8 @@ class StreamScreenViewModel @Inject constructor(
                                 audioDelayLanguage = cached.audioDelayLanguage,
                                 addonName = cached.addonName,
                                 addonLogo = cached.addonLogo,
-                                streamDescription = cached.streamDescription
+                                streamDescription = cached.streamDescription,
+                                fromLinkCache = true
                             ),
                             showDirectAutoPlayOverlay = showOverlay || it.showDirectAutoPlayOverlay,
                             isDirectAutoPlayFlow = showOverlay || it.isDirectAutoPlayFlow
@@ -2225,7 +2226,9 @@ data class StreamPlaybackInfo(
     val autoSourceRecoveryToken: String? = null,
     val audioDelayMs: Int? = null,
     val audioDelayLanguage: String? = null,
-    val isServerStream: Boolean = false
+    val isServerStream: Boolean = false,
+    /** The link was taken from the reuse-last-link cache, not picked fresh from add-ons. */
+    val fromLinkCache: Boolean = false
 )
 
 private fun playbackUrlFor(playbackInfo: StreamPlaybackInfo): String? =
