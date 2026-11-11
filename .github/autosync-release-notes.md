@@ -1,3 +1,5 @@
+- Integrated upstream subtitle appearance, font upload and chapter controls while retaining existing Reshaped imported fonts and seek previews.
+- Expired-link refresh now hands unsuccessful attempts back to Reshaped engine retries and source recovery, and ignores results after switching sources.
 - Saved list memberships now show checkmarks consistently in the shared Home, Details, and poster list picker.
 - Included upstream HLS SPS/PPS repair, MPV audio-clock position recovery, episode restoration after process death, and slower description scrolling; retained Reshaped playback and network instrumentation.
 - DASH playback correctly recognizes encoded MIME hints in stream URLs while retaining literal plus signs and safe handling of malformed escapes.

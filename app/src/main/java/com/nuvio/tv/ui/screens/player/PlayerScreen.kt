@@ -1150,11 +1150,22 @@ fun PlayerScreen(
                 val previewConfiguredSubtitlePosition = uiState.showSubtitleOverlay || uiState.showSubtitleStylePanel
                 val subtitleCueState by viewModel.controller.subtitleCueTracker.state.collectAsState()
                 val prescannedSubtitleTexts by viewModel.controller.subtitleCueTracker.prescannedTexts.collectAsState()
-                val subtitleWidthKey = listOf(uiState.selectedSubtitleTrackIndex, uiState.selectedAddonSubtitle, subtitleTextMetrics)
+                val renderedSubtitleStyle = uiState.effectiveSubtitleStyle
+                val styledSubtitleTypeface = rememberSubtitleTypeface(renderedSubtitleStyle.fontId)
+                val measuredSubtitleTextMetrics = remember(
+                    subtitleTextMetrics,
+                    renderedSubtitleStyle.usesStyledRenderer,
+                    styledSubtitleTypeface
+                ) {
+                    subtitleTextMetrics?.let { metrics ->
+                        if (renderedSubtitleStyle.usesStyledRenderer) metrics.forStyledRenderer(styledSubtitleTypeface) else metrics
+                    }
+                }
+                val subtitleWidthKey = listOf(uiState.selectedSubtitleTrackIndex, uiState.selectedAddonSubtitle, measuredSubtitleTextMetrics)
                 var widestSubtitleBlockPx by remember(subtitleWidthKey) { mutableStateOf<Float?>(null) }
                 val subtitleMeasurePaint = remember { android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG) }
                 LaunchedEffect(subtitleWidthKey, prescannedSubtitleTexts) {
-                    val metrics = subtitleTextMetrics ?: return@LaunchedEffect
+                    val metrics = measuredSubtitleTextMetrics ?: return@LaunchedEffect
                     val texts = prescannedSubtitleTexts
                     val widest = withContext(Dispatchers.Default) {
                         val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
@@ -1163,7 +1174,7 @@ fun PlayerScreen(
                     widestSubtitleBlockPx = maxOf(widestSubtitleBlockPx ?: 0f, widest)
                 }
                 LaunchedEffect(subtitleWidthKey, subtitleCueState) {
-                    val metrics = subtitleTextMetrics ?: return@LaunchedEffect
+                    val metrics = measuredSubtitleTextMetrics ?: return@LaunchedEffect
                     if (!subtitleCueState.visible) return@LaunchedEffect
                     val width = if (subtitleCueState.hasBitmap) {
                         Float.MAX_VALUE
@@ -1173,7 +1184,7 @@ fun PlayerScreen(
                     widestSubtitleBlockPx = maxOf(widestSubtitleBlockPx ?: 0f, width)
                 }
                 val subtitleTitleMarginPx = with(LocalDensity.current) { SUBTITLE_TITLE_MARGIN.toPx() }
-                val subtitleClearsControlsTitle = subtitleTextMetrics?.let {
+                val subtitleClearsControlsTitle = measuredSubtitleTextMetrics?.let {
                     subtitleClearsTitle(widestSubtitleBlockPx, it.centerXPx, controlsTitleRightPx, subtitleTitleMarginPx)
                 } == true
                 val effectiveControlsClearancePx = effectiveSubtitleControlsClearancePx(
@@ -1274,6 +1285,20 @@ fun PlayerScreen(
                             modifier = Modifier.fillMaxSize()
                         )
                     }
+                }
+
+                if (!postPlayRecommendationState.isVisible) {
+                    val styledSubtitleCues by viewModel.controller.styledSubtitles.cues.collectAsState()
+                    val fallbackSubtitleTextSizePx = with(LocalDensity.current) {
+                        (SUBTITLE_BASE_TEXT_SP * renderedSubtitleStyle.size / 100f).sp.toPx()
+                    }
+                    StyledSubtitleOverlay(
+                        cues = styledSubtitleCues,
+                        style = renderedSubtitleStyle,
+                        textSizePx = subtitleTextMetrics?.textSizePx ?: fallbackSubtitleTextSizePx,
+                        liftPx = subtitleLiftPx,
+                        modifier = Modifier.fillMaxSize()
+                    )
                 }
 
                 if (postPlayRecommendationState.canReturnToPlayer) {
@@ -1821,7 +1846,11 @@ fun PlayerScreen(
                 .reportSubtitleClearance(subtitleClearanceGapPx) { seekClearancePx = it }
                 .then(playerControlsDim)
         ) {
-            SeekOverlayHost(viewModel = viewModel, chapters = uiState.chapters)
+            SeekOverlayHost(
+                viewModel = viewModel,
+                chapters = uiState.chapters,
+                showChapterTitle = uiState.showChapterTitle
+            )
         }
 
         // Chapters side panel (slides in from right, over a scrim)
@@ -2528,7 +2557,6 @@ private data class SubtitleAppliedConfig(
 private val SUBTITLE_CONTROLS_LIFT = 130.dp
 private val SUBTITLE_CONTROLS_GAP = 8.dp
 private val SUBTITLE_TITLE_MARGIN = 16.dp
-private const val EXO_SUBTITLE_BASE_SP = 24f
 private const val EXO_SUBTITLE_INNER_PADDING_RATIO = 0.125f
 
 @Composable
@@ -2547,35 +2575,11 @@ private fun Modifier.reportSubtitleClearance(gapPx: Float, onClearance: (Float) 
         }
     }
 
-private fun PlayerView.isAssOrSsaSubtitleSelected(): Boolean {
-    val currentTracks = player?.currentTracks
-    if (currentTracks != null) {
-        for (group in currentTracks.groups) {
-            if (group.type != androidx.media3.common.C.TRACK_TYPE_TEXT) continue
-            for (index in 0 until group.length) {
-                if (!group.isTrackSelected(index)) continue
-                val format = group.getTrackFormat(index)
-                if (format.sampleMimeType == androidx.media3.common.MimeTypes.TEXT_SSA) return true
-                val hasAssCodec = format.codecs
-                    ?.split(',')
-                    ?.asSequence()
-                    ?.map { it.trim().lowercase(java.util.Locale.US) }
-                    ?.any { codec ->
-                        codec == androidx.media3.common.MimeTypes.TEXT_SSA ||
-                            codec == "s_text/ass" ||
-                            codec == "s_text/ssa" ||
-                            codec.endsWith("/x-ssa")
-                    } == true
-                if (hasAssCodec) return true
-            }
-        }
-    }
-    val sidecarKey = subtitleView?.getTag(R.id.player_view_sidecar_generation_tag) as? String
-    if (sidecarKey != null && (sidecarKey.contains(".ass", ignoreCase = true) || sidecarKey.contains(".ssa", ignoreCase = true))) {
-        return true
-    }
-    return false
-}
+private fun PlayerView.isAssOrSsaSubtitleSelected(): Boolean =
+    PlayerSubtitleUtils.isAssOrSsaSelected(
+        tracks = player?.currentTracks,
+        sidecarKey = subtitleView?.getTag(R.id.player_view_sidecar_generation_tag) as? String
+    )
 
 private fun PlayerView.applySubtitleStyleIfNeeded(
     subtitleStyle: SubtitleStyleSettings,
@@ -2595,8 +2599,7 @@ private fun PlayerView.applySubtitleStyleIfNeeded(
     }
     setTag(R.id.player_view_subtitle_style_tag, config)
     subView.apply {
-        val baseFontSize = EXO_SUBTITLE_BASE_SP
-        val scaledFontSize = baseFontSize * (subtitleStyle.size / 100f)
+        val scaledFontSize = SUBTITLE_BASE_TEXT_SP * (subtitleStyle.size / 100f)
         setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, scaledFontSize)
         setApplyEmbeddedFontSizes(false)
 
@@ -2627,19 +2630,10 @@ private fun PlayerView.applySubtitleStyleIfNeeded(
 
         setApplyEmbeddedStyles(!isAss)
 
-        val bottomPaddingFraction =
-            (0.06f + (subtitleStyle.verticalOffset / 250f)).coerceIn(0f, 0.4f)
         val applyPosition = {
-            val extraPadding = (height * (subtitleStyle.verticalOffset / 400f)).toInt().coerceAtLeast(0)
-            setPadding(paddingLeft, paddingTop, paddingRight, extraPadding)
-            val availableHeight = height - extraPadding
-            setBottomPaddingFraction(
-                if (liftPx > 0f && availableHeight > 0) {
-                    maxOf(bottomPaddingFraction, (liftPx - extraPadding) / availableHeight).coerceIn(0f, 0.5f)
-                } else {
-                    bottomPaddingFraction
-                }
-            )
+            val placement = subtitleBottomPlacement(height, subtitleStyle.verticalOffset, liftPx)
+            setPadding(paddingLeft, paddingTop, paddingRight, placement.paddingPx)
+            setBottomPaddingFraction(placement.fraction)
         }
         if (height > 0) applyPosition() else post { applyPosition() }
     }
@@ -2659,7 +2653,7 @@ private fun PlayerView.exoSubtitleTextMetrics(): SubtitleTextMetrics? {
     if (subView.width <= 0) return null
     val textSizePx = android.util.TypedValue.applyDimension(
         android.util.TypedValue.COMPLEX_UNIT_SP,
-        EXO_SUBTITLE_BASE_SP * (applied.style.size / 100f),
+        SUBTITLE_BASE_TEXT_SP * (applied.style.size / 100f),
         resources.displayMetrics
     )
     val innerPaddingPx = textSizePx * EXO_SUBTITLE_INNER_PADDING_RATIO
@@ -2681,7 +2675,10 @@ private fun measureSubtitleBlockPx(
     metrics: SubtitleTextMetrics
 ): Float {
     paint.textSize = metrics.textSizePx
-    paint.typeface = if (metrics.bold) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
+    paint.typeface = android.graphics.Typeface.create(
+        metrics.typeface ?: android.graphics.Typeface.DEFAULT,
+        if (metrics.bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL
+    )
     return subtitleBlockWidthPx(text, metrics) { paint.measureText(it) }
 }
 
@@ -2985,6 +2982,7 @@ private fun PlayerControlsOverlay(
                         PlayerControlsProgressBarHost(
                             viewModel = viewModel,
                             chapters = uiState.chapters,
+                            showChapterTitle = uiState.showChapterTitle,
                             focusRequester = progressBarFocusRequester,
                             upFocusRequester = progressBarUpFocusRequester,
                             downFocusRequester = playPauseFocusRequester,
@@ -3244,6 +3242,7 @@ private fun PlayerControlsOverlay(
 private fun PlayerControlsProgressBarHost(
     viewModel: PlayerViewModel,
     chapters: List<PlayerChapter>,
+    showChapterTitle: Boolean,
     focusRequester: FocusRequester,
     upFocusRequester: FocusRequester? = null,
     downFocusRequester: FocusRequester? = null,
@@ -3253,7 +3252,9 @@ private fun PlayerControlsProgressBarHost(
 ) {
     val playbackTimeline by viewModel.playbackTimeline.collectAsState()
 
-    ChapterTitle(chapters = chapters, positionMs = playbackTimeline.currentPosition)
+    if (showChapterTitle) {
+        ChapterTitle(chapters = chapters, positionMs = playbackTimeline.currentPosition)
+    }
     ProgressBar(
         chapters = chapters,
         currentPosition = playbackTimeline.currentPosition,
@@ -3619,7 +3620,8 @@ private fun SeekOverlay(
     bufferedPosition: Long = 0L,
     preview: @Composable () -> Unit = {},
     progressOverlay: @Composable BoxScope.() -> Unit = {},
-    chapters: List<PlayerChapter> = emptyList()
+    chapters: List<PlayerChapter> = emptyList(),
+    showChapterTitle: Boolean = true
 ) {
     Column(
         modifier = Modifier
@@ -3628,7 +3630,9 @@ private fun SeekOverlay(
     ) {
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
             preview()
-            ChapterTitle(chapters = chapters, positionMs = currentPosition)
+            if (showChapterTitle) {
+                ChapterTitle(chapters = chapters, positionMs = currentPosition)
+            }
             ProgressBar(
                 currentPosition = currentPosition,
                 duration = duration,
@@ -3657,7 +3661,11 @@ private fun SeekOverlay(
 }
 
 @Composable
-private fun SeekOverlayHost(viewModel: PlayerViewModel, chapters: List<PlayerChapter>) {
+private fun SeekOverlayHost(
+    viewModel: PlayerViewModel,
+    chapters: List<PlayerChapter>,
+    showChapterTitle: Boolean
+) {
     val playbackTimeline by viewModel.playbackTimeline.collectAsState()
 
     SeekOverlay(
@@ -3666,7 +3674,8 @@ private fun SeekOverlayHost(viewModel: PlayerViewModel, chapters: List<PlayerCha
         bufferedPosition = playbackTimeline.bufferedPosition,
         preview = { SeekPreviewThumbnailHost(viewModel = viewModel) },
         progressOverlay = { SeekPreviewCueTicks(viewModel, playbackTimeline.duration, Modifier.matchParentSize()) },
-        chapters = chapters
+        chapters = chapters,
+        showChapterTitle = showChapterTitle
     )
 }
 

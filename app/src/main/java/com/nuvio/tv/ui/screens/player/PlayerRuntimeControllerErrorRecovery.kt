@@ -478,7 +478,8 @@ internal fun PlayerRuntimeController.tryParsingErrorProbeFallback(
     detailedError: String,
     allowEngineFailover: Boolean,
     savedPosition: Long = 0L,
-    paused: Boolean = userPausedManually
+    paused: Boolean = userPausedManually,
+    onRefreshFailure: (() -> Unit)? = null
 ): Boolean {
     if (currentVideoTrackIsLikelyVc1 ||
         Vc1VideoFormatHeuristics.isLikelyVc1(streamName = _uiState.value.currentStreamName ?: streamName)
@@ -534,6 +535,9 @@ internal fun PlayerRuntimeController.tryParsingErrorProbeFallback(
             }
             reinitializeCurrentStream(startPaused = paused)
         } else {
+            if (tryRefreshExpiredLinkAfterError(detailedError, onRefreshFailure)) {
+                return@launch
+            }
             if (maybeAutoSwitchInternalPlayerOnStartupError(detailedError = detailedError, allowEngineFailover = allowEngineFailover)) {
                 return@launch
             }
