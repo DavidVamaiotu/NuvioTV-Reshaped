@@ -1145,34 +1145,40 @@ internal class ParallelRangeDataSource(
     private fun ensureChunkScheduled(chunkIndex: Long) {
         val activeSession = session ?: return
 
-        enforceSessionCap(activeSession, protectIndex = chunkIndex, poolCap = maxPoolSize)
-        activeSession.futures.computeIfAbsent(chunkIndex) {
-            val future = CompletableFuture<DownloadedChunk>()
-            activeSession.touch(chunkIndex)
-            Log.d(TAG, "Scheduling chunk $chunkIndex")
-            sharedExecutor.execute {
-                try {
-                    if (!future.isCancelled && !activeSession.abandoned.get()) {
-                        val result = downloadChunk(activeSession, chunkIndex, future)
-                        if (!future.complete(result)) {
-                            releaseBuffer(result.buffer)
+        // Publish futures under the same lock that snapshots and tears down a session.
+        // Otherwise teardown can clear the map before computeIfAbsent publishes a
+        // completed download, losing the only owner that can release its buffer.
+        synchronized(sessionLock) {
+            if (activeSession.abandoned.get()) return
+            enforceSessionCap(activeSession, protectIndex = chunkIndex, poolCap = maxPoolSize)
+            activeSession.futures.computeIfAbsent(chunkIndex) {
+                val future = CompletableFuture<DownloadedChunk>()
+                activeSession.touch(chunkIndex)
+                Log.d(TAG, "Scheduling chunk $chunkIndex")
+                sharedExecutor.execute {
+                    try {
+                        if (!future.isCancelled && !activeSession.abandoned.get()) {
+                            val result = downloadChunk(activeSession, chunkIndex, future)
+                            if (!future.complete(result)) {
+                                releaseBuffer(result.buffer)
+                            }
+                        } else if (future.isCancelled) {
+
+                        } else {
+                            future.completeExceptionally(IOException("Session abandoned"))
                         }
-                    } else if (future.isCancelled) {
+                    } catch (e: Exception) {
+                        future.completeExceptionally(e)
+                    } catch (e: OutOfMemoryError) {
 
-                    } else {
-                        future.completeExceptionally(IOException("Session abandoned"))
+                        drainIdleBuffers(activeSession.chunkSize)
+                        future.completeExceptionally(
+                            IOException("Native chunk buffer allocation failed (out of memory)", e)
+                        )
                     }
-                } catch (e: Exception) {
-                    future.completeExceptionally(e)
-                } catch (e: OutOfMemoryError) {
-
-                    drainIdleBuffers(activeSession.chunkSize)
-                    future.completeExceptionally(
-                        IOException("Native chunk buffer allocation failed (out of memory)", e)
-                    )
                 }
+                future
             }
-            future
         }
     }
 
