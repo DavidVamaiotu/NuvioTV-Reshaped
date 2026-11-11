@@ -1,3 +1,5 @@
+- Added French and Polish translations for subtitle appearance, custom-font upload and chapter controls.
+- Fixed a native streaming buffer leak when session teardown races with publication of a newly scheduled download.
 - Integrated upstream subtitle appearance, font upload and chapter controls while retaining existing Reshaped imported fonts and seek previews.
 - Expired-link refresh now hands unsuccessful attempts back to Reshaped engine retries and source recovery, and ignores results after switching sources.
 - Saved list memberships now show checkmarks consistently in the shared Home, Details, and poster list picker.
