@@ -1,3 +1,4 @@
+- Saved list memberships now show checkmarks consistently in the shared Home, Details, and poster list picker.
 - Included upstream HLS SPS/PPS repair, MPV audio-clock position recovery, episode restoration after process death, and slower description scrolling; retained Reshaped playback and network instrumentation.
 - DASH playback correctly recognizes encoded MIME hints in stream URLs while retaining literal plus signs and safe handling of malformed escapes.
 - Movie post-play recommendations now use end-credit chapter timing, while ignoring opening credits and retaining post-credit-tail handling.
