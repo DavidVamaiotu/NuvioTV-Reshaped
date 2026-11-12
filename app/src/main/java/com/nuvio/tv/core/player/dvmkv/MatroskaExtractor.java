@@ -195,6 +195,18 @@ public class MatroskaExtractor implements Extractor {
     default void onSampleTimeUs(long timeUs) {}
 
     /**
+     * Optionally rewrites an AV1 sample payload (a temporal unit of OBUs).
+     *
+     * <p>Same contract as {@link #transformHevcSample}: reads the first
+     * {@code sampleLength} bytes; a non-null result uses
+     * {@link #lastTransformedSampleLength()} as its valid length.
+     */
+    @Nullable
+    default byte[] transformAv1Sample(byte[] sample, int sampleLength) {
+      return null;
+    }
+
+    /**
      * Optionally rewrites Dolby Vision codec signaling for output {@link Format}.
      *
      * <p>This is used when sample-level metadata conversion changes the effective Dolby Vision
@@ -2259,7 +2271,11 @@ public class MatroskaExtractor implements Extractor {
         // If there is supplemental data, the structure of the sample data is:
         // encryption data (if any) || sample size (4 bytes) || sample data || supplemental data
         deferSupplementalMainSampleSizePrefix =
-            track.isHevc && !track.hasContentEncryption && track.requiresDolbyVisionTransform && dolbyVisionSampleTransformer != null;
+            !track.hasContentEncryption
+                && (track.isHevc
+                    || (CODEC_ID_AV1.equals(track.codecId) && sampleStrippedBytes.limit() == 0))
+                && track.requiresDolbyVisionTransform
+                && dolbyVisionSampleTransformer != null;
         if (!deferSupplementalMainSampleSizePrefix) {
           int sampleSize = size + sampleStrippedBytes.limit() - sampleBytesRead;
           writeSupplementalMainSampleSizePrefix(output, sampleSize);
@@ -2359,6 +2375,41 @@ public class MatroskaExtractor implements Extractor {
           sampleCurrentNalBytesRemaining -= bytesWritten;
         }
       }
+    } else if (CODEC_ID_AV1.equals(track.codecId)
+        && !track.hasContentEncryption
+        && track.requiresDolbyVisionTransform
+        && dolbyVisionSampleTransformer != null
+        && sampleStrippedBytes.limit() == 0) {
+      int remainingSampleBytes = size - sampleBytesRead;
+      if (dolbyVisionSampleBuffer.length < remainingSampleBytes) {
+        int newSize = Math.max(remainingSampleBytes, dolbyVisionSampleBuffer.length * 2);
+        newSize = (newSize + 262143) & ~262143;
+        dolbyVisionSampleBuffer = new byte[newSize];
+      }
+      byte[] sampleData = dolbyVisionSampleBuffer;
+      writeToTarget(input, sampleData, /* offset= */ 0, remainingSampleBytes);
+      sampleBytesRead += remainingSampleBytes;
+
+      byte[] payloadToWrite = sampleData;
+      int payloadLength = remainingSampleBytes;
+      try {
+        byte[] transformedPayload =
+            dolbyVisionSampleTransformer.transformAv1Sample(sampleData, remainingSampleBytes);
+        if (transformedPayload != null) {
+          payloadToWrite = transformedPayload;
+          payloadLength = dolbyVisionSampleTransformer.lastTransformedSampleLength();
+        }
+      } catch (RuntimeException e) {
+        Log.w(TAG, "DolbyVisionSampleTransformer.transformAv1Sample failed: " + e.getMessage());
+      }
+
+      if (deferSupplementalMainSampleSizePrefix) {
+        writeSupplementalMainSampleSizePrefix(output, payloadLength);
+        sampleBytesWritten += 4;
+      }
+      ParsableByteArray payload = new ParsableByteArray(payloadToWrite, payloadLength);
+      output.sampleData(payload, payloadLength);
+      sampleBytesWritten += payloadLength;
     } else {
       if (track.trueHdSampleRechunker != null) {
         checkState(sampleStrippedBytes.limit() == 0);
@@ -3474,6 +3525,13 @@ public class MatroskaExtractor implements Extractor {
         // in the conversion path), so we use the self-contained codec mapping.
         mimeType = MimeTypes.VIDEO_H265;
         codecs = DolbyVisionCompatibility.chooseHevcCodecsString(codecs, null);
+      }
+      if (MimeTypes.VIDEO_DOLBY_VISION.equals(mimeType)
+          && codecs != null) {
+        String lowerCodecs = codecs.toLowerCase(Locale.ROOT);
+        if (lowerCodecs.startsWith("dav1.") || lowerCodecs.startsWith("dva1.")) {
+          initializationData = null;
+        }
       }
 
       @C.SelectionFlags int selectionFlags = 0;

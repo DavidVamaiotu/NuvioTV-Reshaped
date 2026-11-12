@@ -1,3 +1,5 @@
+- Included upstream Continue Watching metadata/airdate refresh, search focus restoration, AV1 HDR10+ stripping and thermal reporting fixes.
+- Adapted stable root-screen insets to Reshaped Live TV while retaining encrypted-sample guards and Dolby Vision diagnostics.
 - Added French and Polish translations for subtitle appearance, custom-font upload and chapter controls.
 - Fixed a native streaming buffer leak when session teardown races with publication of a newly scheduled download.
 - Integrated upstream subtitle appearance, font upload and chapter controls while retaining existing Reshaped imported fonts and seek previews.
