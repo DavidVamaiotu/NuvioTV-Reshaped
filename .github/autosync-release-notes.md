@@ -1,3 +1,5 @@
+- Included upstream watched-state fixes for YouTube and other single-item add-on videos, retaining pending marks across tracking-source changes.
+- Folder hero descriptions now follow the configured home scrolling layout; updated Vietnamese translations retain Reshaped resource keys.
 - Included upstream Continue Watching metadata/airdate refresh, search focus restoration, AV1 HDR10+ stripping and thermal reporting fixes.
 - Adapted stable root-screen insets to Reshaped Live TV while retaining encrypted-sample guards and Dolby Vision diagnostics.
 - Added French and Polish translations for subtitle appearance, custom-font upload and chapter controls.
