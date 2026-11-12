@@ -76,10 +76,11 @@ class HomeEnrichmentRepositoryBoundaryTest {
 
         viewModel.onItemFocusPipeline(item(itemId))
         awaitAtLeast(metaCalls, 1)
+        awaitEnrichment(viewModel)
 
         reachable.set(true)
-        focusAndSettle(viewModel, item(otherId))
-        focusAndSettle(viewModel, item(itemId))
+        focusAndAwaitEnrichment(viewModel, item(otherId))
+        focusAndAwaitEnrichment(viewModel, item(itemId))
 
         // The failed lookup came back as a codeless Error, so the item was never marked prefetched
         // and the focus gate let it through again.
@@ -91,9 +92,15 @@ class HomeEnrichmentRepositoryBoundaryTest {
         )
     }
 
-    private suspend fun focusAndSettle(viewModel: HomeViewModel, item: MetaPreview) {
+    private suspend fun focusAndAwaitEnrichment(viewModel: HomeViewModel, item: MetaPreview) {
         viewModel.onItemFocusPipeline(item)
-        delay(HomeViewModel.EXTERNAL_META_PREFETCH_FOCUS_DEBOUNCE_MS + 400)
+        awaitEnrichment(viewModel)
+    }
+
+    private suspend fun awaitEnrichment(viewModel: HomeViewModel) {
+        // API entry is earlier than repository completion and cache publication. Waiting for
+        // the actual focus job keeps slow runners from observing an unfinished retry.
+        withTimeout(5_000) { viewModel.tmdbEnrichFocusJob?.join() }
     }
 
     private suspend fun awaitAtLeast(counter: AtomicInteger, expected: Int) {
