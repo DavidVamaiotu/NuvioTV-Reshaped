@@ -158,6 +158,37 @@ class SearchViewModelSuggestionsTest {
     }
 
     @Test
+    fun `focus recomposition empty then restored text retains results throughout`() = runTest {
+        val viewModel = newViewModel()
+        viewModel.onEvent(SearchEvent.QueryChanged("wolf"))
+        advanceUntilIdle()
+        val before = viewModel.uiState.value
+
+        viewModel.onEvent(SearchEvent.QueryChanged(""))
+        advanceTimeBy(16)
+        runCurrent()
+        assertEquals(before, viewModel.uiState.value)
+        viewModel.onEvent(SearchEvent.QueryChanged("wolf"))
+        advanceUntilIdle()
+        assertEquals(before, viewModel.uiState.value)
+    }
+
+    @Test
+    fun `backspacing the final character retires previous results`() = runTest {
+        val viewModel = newViewModel()
+        viewModel.onEvent(SearchEvent.QueryChanged("wolf"))
+        advanceUntilIdle()
+        viewModel.onEvent(SearchEvent.QueryChanged("w"))
+        advanceUntilIdle()
+        viewModel.onEvent(SearchEvent.QueryChanged(""))
+        advanceUntilIdle()
+        assertEquals("", viewModel.uiState.value.query)
+        assertEquals("", viewModel.uiState.value.submittedQuery)
+        assertTrue(viewModel.uiState.value.catalogRows.isEmpty())
+        assertTrue(viewModel.uiState.value.suggestions.isEmpty())
+    }
+
+    @Test
     fun `clearing the field retires the suggestions and the submitted query`() = runTest {
         val viewModel = newViewModel()
 

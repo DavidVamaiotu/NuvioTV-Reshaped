@@ -97,6 +97,7 @@ class SearchViewModel @Inject constructor(
     private var lastCompletedRequestKey: String? = null
     private var hasRenderedFirstCatalog = false
     private var pendingCatalogResponses = 0
+    private var pendingEmptyQueryJob: Job? = null
     private var revealBatchAfterNextDiscoverFetch = false
     private var hideUnreleasedContent = false
 
@@ -258,6 +259,24 @@ class SearchViewModel @Inject constructor(
     }
 
     private fun onQueryChanged(query: String) {
+        pendingEmptyQueryJob?.cancel()
+        pendingEmptyQueryJob = null
+        if (query == _uiState.value.query) return
+        if (query.isEmpty() && _uiState.value.query.isNotEmpty()) {
+            // Focus recomposition can emit empty then restore the text on the next frame.
+            // Keep the current results for two frames, then honor a real clear/backspace.
+            // A restored query cancels this job before anything visible is cleared or fetched.
+            pendingEmptyQueryJob = viewModelScope.launch {
+                delay(32L)
+                applyQueryChanged(query)
+            }
+            return
+        }
+        applyQueryChanged(query)
+    }
+
+    private fun applyQueryChanged(query: String) {
+        if (query == _uiState.value.query) return
         _uiState.update {
             val trimmedInput = query.trim()
             // Narrow the strip to what still matches before anything is fetched, so a letter
