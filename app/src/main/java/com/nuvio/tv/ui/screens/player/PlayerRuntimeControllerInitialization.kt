@@ -1708,6 +1708,9 @@ internal fun PlayerRuntimeController.initializePlayer(
                         if (tryRefreshExpiredLinkAfterError(detailedError) { onPlayerError(error) }) {
                             return
                         }
+                        if (tryFallbackToNextSourceAfterError(detailedError) { onPlayerError(error) }) {
+                            return
+                        }
 
                         // ── Main Engine Failover ──
                         if (maybeAutoSwitchInternalPlayerOnStartupError(detailedError = detailedError, allowEngineFailover = allowEngineFailover)) {
@@ -2193,6 +2196,7 @@ internal fun PlayerRuntimeController.resetLoadingOverlayForNewStream() {
     cancelFirstFrameWatchdog()
     cancelTunnelAvSyncWatchdog() // Nuvio RS hook: Arc formats
     cancelStallWatchdog()
+    scheduleSourceStartupTimeout()
     val preparingMessage = context.getString(R.string.player_loading_preparing)
     resetLoadingDiagnostics(
         phase = "preparing",

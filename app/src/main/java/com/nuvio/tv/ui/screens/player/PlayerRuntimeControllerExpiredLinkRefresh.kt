@@ -101,19 +101,13 @@ internal fun PlayerRuntimeController.tryRefreshExpiredLinkAfterError(
                 onRefreshFailure()
                 return@launch
             }
-            if (autoSourceRecovery?.failDefinitively(errorMessage) == true) return@launch
-            _uiState.update {
-                it.copy(
-                    error = errorMessage,
-                    isBuffering = false,
-                    showLoadingOverlay = false,
-                    showPauseOverlay = false
-                )
-            }
+            showErrorUnlessSourceFallback(errorMessage)
             return@launch
         }
+        val wasAutoSelected = failedUrl == autoSelectedSourceUrl
         // Saves the fresh link for reuse and resumes from the saved position.
         switchToSourceStream(refreshed)
+        if (wasAutoSelected) autoSelectedSourceUrl = currentStreamUrl
     }
     return true
 }

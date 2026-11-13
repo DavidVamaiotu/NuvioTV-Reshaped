@@ -279,6 +279,10 @@ internal fun PlayerRuntimeController.handleMpvPlaybackError(
                 mpvErrorRecoveryArmed = false
                 handleMpvPlaybackError(source, mpvErrorCode, detailedErrorOverride, allowEngineFailover)
             }) return
+        if (tryFallbackToNextSourceAfterError(detailedError) {
+                mpvErrorRecoveryArmed = false
+                handleMpvPlaybackError(source, mpvErrorCode, detailedErrorOverride, allowEngineFailover)
+            }) return
 
         val startupFailed = !hasRenderedFirstFrame
         if (startupFailed &&
