@@ -216,7 +216,7 @@ internal class AudioSubtitleSyncController(
 
     /** How much of the film may be read ahead of playback; the user's setting. */
     @Volatile
-    var samplingMode: AudioSamplingMode = AudioSamplingMode.HIGH
+    var samplingMode: AudioSamplingMode = AudioSamplingMode.LOW
         set(value) {
             field = value
             // Declined while sampling was off earlier in this stream: try again now that it is allowed.
@@ -367,6 +367,13 @@ internal class AudioSubtitleSyncController(
         if (!spotSamplingStarted.compareAndSet(false, true)) return
         if (samplingMode == AudioSamplingMode.OFF) {
             SyncLog.i("audio sampling across the film is off")
+            spotDeclined = true
+            return
+        }
+        // The spot decoder can't decode what the look-ahead decoder couldn't either, so sampling
+        // would only open extra connections to the host for nothing.
+        if (liveOnly) {
+            SyncLog.i("audio sampling skipped: this audio can only be heard during playback")
             spotDeclined = true
             return
         }
@@ -908,20 +915,12 @@ internal class AudioSubtitleSyncController(
                     recognizerQueueMs = SystemClock.elapsedRealtime() - requestedAt
                     recognizerUnavailable = false
                     updateListening()
+                    // The model is only downloaded from Settings, never during playback.
                     if (!AsrModel.isReady(appContext)) {
-                        if (!AsrModel.isUnmetered(appContext)) {
-                            notify(AudioSyncStatus.ModelNeedsWifi(AsrModel.DOWNLOAD_MB))
-                            recognizerUnavailable = true
-                            updateListening()
-                            return@execute
-                        }
-                        notify(AudioSyncStatus.ModelDownloading(AsrModel.DOWNLOAD_MB))
-                        if (!AsrModel.download(appContext)) {
-                            SyncLog.w("speech model download failed; using speech detection only")
-                            recognizerUnavailable = true
-                            updateListening()
-                            return@execute
-                        }
+                        SyncLog.i("speech model not downloaded; using speech detection only")
+                        recognizerUnavailable = true
+                        updateListening()
+                        return@execute
                     }
                     if (released || !enabled) return@execute
                     // The optimized ORT model, or the upstream ONNX one when only that could be fetched.
@@ -1331,12 +1330,6 @@ internal sealed interface AudioSyncStatus {
 
     /** A subtitle was picked and the audio is being analysed. */
     data object Listening : AudioSyncStatus
-
-    /** The speech model is being downloaded (once). */
-    data class ModelDownloading(val megabytes: Int) : AudioSyncStatus
-
-    /** The speech model is missing and the connection is metered; syncing uses speech detection only. */
-    data class ModelNeedsWifi(val megabytes: Int) : AudioSyncStatus
 
     /** No second decoder for this codec: syncing uses the playing audio only, without look-ahead. */
     data class LiveOnly(val mimeType: String) : AudioSyncStatus

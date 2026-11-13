@@ -208,6 +208,10 @@ internal class AsrSyncEngine(
             references = emptyList()
             locked = false
             provisional = null
+            // Pending audio (up to ~30 MB) is only useful to a running session; free it now rather
+            // than holding it until the next stream. Words already recognized are small and kept.
+            queue.clear()
+            queuedSamples = 0
         }
     }
 
