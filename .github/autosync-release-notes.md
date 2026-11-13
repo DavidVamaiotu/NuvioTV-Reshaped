@@ -1,3 +1,4 @@
+- Fixed letterbox masking over libass overlay subtitles while preserving True Black Bars, subtitle controls and Reshaped playback recovery; updated Indonesian translations.
 - Added upstream next-matching-source fallback while preserving Reshaped ranked filters, expired-link refresh, engine/audio retries and source recovery.
 - Source search results are shared and the currently playing source is focused when opening the sources panel.
 - Continue Watching retains the enriched series title and artwork when advancing to another episode while keeping the new episode details.
