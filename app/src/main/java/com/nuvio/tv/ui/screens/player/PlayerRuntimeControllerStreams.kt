@@ -6,6 +6,7 @@ import com.nuvio.tv.core.player.recovery.AutoSourceRecoverySettings
 import com.nuvio.tv.core.player.recovery.prepareAutoSource
 
 import com.nuvio.tv.ui.reshaped.livetv.keepPlayerForLiveTvZap // Nuvio RS hook
+import com.nuvio.tv.reshaped.livetv.LiveTvPlaybackRegistry
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
@@ -1008,6 +1009,10 @@ internal fun PlayerRuntimeController.switchToSourceStream(
     nextEpisodeAutoPlayJob?.cancel()
     nextEpisodeAutoPlayJob = null
 
+    // A channel or catch-up selection starts a different timeline, unlike an alternate VOD source.
+    val isLiveTvSwitch = LiveTvPlaybackRegistry.isLiveTv(currentStreamUrl) ||
+        LiveTvPlaybackRegistry.isLiveTv(url)
+    val resumePositionMs = if (isLiveTvSwitch) 0L else currentPlaybackPositionMs()?.coerceAtLeast(0L) ?: 0L
     flushPlaybackSnapshotForSwitchOrExit()
 
     val newHeaders = PlayerMediaSourceFactory.sanitizeHeaders(
@@ -1061,6 +1066,13 @@ internal fun PlayerRuntimeController.switchToSourceStream(
             isTorrentStream = false
         )
     }
+    if (isLiveTvSwitch) {
+        pendingResumeProgress = null
+        _uiState.update { it.copy(pendingSeekPosition = null) }
+    } else if (resumePositionMs > 0L) {
+        pendingResumeProgress = null
+        _uiState.update { it.copy(pendingSeekPosition = resumePositionMs) }
+    }
     clearChapterSkipState()
     recomputeMergedSkipIntervals()
     showStreamSourceIndicator(stream)
@@ -1111,7 +1123,10 @@ internal fun PlayerRuntimeController.switchToSourceStream(
         }
     }
 
-    if (resumeSavedProgress) loadSavedProgressFor(currentSeason, currentEpisode)
+    // The captured position is authoritative; a later saved-progress read would replace it on mpv.
+    if (resumeSavedProgress && !isLiveTvSwitch && resumePositionMs <= 0L) {
+        loadSavedProgressFor(currentSeason, currentEpisode)
+    }
 }
 
 internal fun PlayerRuntimeController.dismissEpisodesPanel() {

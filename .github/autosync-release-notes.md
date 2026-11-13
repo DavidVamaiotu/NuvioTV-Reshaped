@@ -1,3 +1,4 @@
+- Preserved on-demand playback position across source switches while keeping Live TV/catch-up at the correct starting point; matched styled MPV subtitle sizing to ExoPlayer and updated Hebrew/Vietnamese translations.
 - Added Continue Watching selection preferences while retaining Reshaped layout and playback controls; synced upstream 1.2.0-beta.1.
 - Fixed letterbox masking over libass overlay subtitles while preserving True Black Bars, subtitle controls and Reshaped playback recovery; updated Indonesian translations.
 - Added upstream next-matching-source fallback while preserving Reshaped ranked filters, expired-link refresh, engine/audio retries and source recovery.
