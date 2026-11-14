@@ -126,6 +126,7 @@ internal class AudioSyncFallback private constructor(
         if (isMpv) controller.spotOnlyAudioLanguage = mpvAudioLanguage()
         controller.enabled = AudioSyncSettings.fallbackEnabled.value
         controller.samplingMode = AudioSyncSettings.samplingMode.value
+        controller.samplingOnMobileData = AudioSyncSettings.samplingOnMobileData.value
         controller.onSourceChanged(sourceUrl)
         controller.setSpotSource(
             forSourceKey = sourceUrl,
@@ -159,6 +160,7 @@ internal class AudioSyncFallback private constructor(
         if (!AudioSyncSettings.fallbackEnabled.value) return
         controller.enabled = true
         controller.samplingMode = AudioSyncSettings.samplingMode.value
+        controller.samplingOnMobileData = AudioSyncSettings.samplingOnMobileData.value
         controller.listensBeforeSession = true
         // Start an already-downloaded recognizer before subtitle discovery, downloads or
         // AutoSync's analysis. Recognition can then begin immediately on a later takeover.

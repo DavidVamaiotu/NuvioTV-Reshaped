@@ -90,6 +90,21 @@ internal fun LazyListScope.audioSyncFallbackSettingsItems(enabled: Boolean) {
         )
     }
 
+    item(key = "audio_sync_mobile_data") {
+        val rowsEnabled = rowsEnabled(enabled)
+        val fallbackEnabled by AudioSyncSettings.fallbackEnabled.collectAsStateWithLifecycle()
+        val sampling by AudioSyncSettings.samplingMode.collectAsStateWithLifecycle()
+        val checked by AudioSyncSettings.samplingOnMobileData.collectAsStateWithLifecycle()
+        ToggleSettingsItem(
+            icon = Icons.Default.NetworkCell,
+            title = stringResource(R.string.audio_sync_metered_title),
+            subtitle = stringResource(R.string.audio_sync_metered_description),
+            isChecked = checked,
+            onCheckedChange = AudioSyncSettings::setSamplingOnMobileData,
+            enabled = rowsEnabled && fallbackEnabled && sampling != AudioSamplingMode.OFF,
+        )
+    }
+
     item(key = "audio_sync_sampling") {
         val rowsEnabled = rowsEnabled(enabled)
         val fallbackEnabled by AudioSyncSettings.fallbackEnabled.collectAsStateWithLifecycle()

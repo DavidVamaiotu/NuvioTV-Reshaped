@@ -18,6 +18,7 @@ import com.nuvio.tv.domain.repository.MetaRepository
 import com.nuvio.tv.R
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -386,8 +387,10 @@ class MetaRepositoryImpl @Inject constructor(
             return@flow
         }
 
-        val deferred = inFlightAddonMeta.getOrPut(cacheKey) {
-            repositoryScope.async {
+        // Publish the shared request before it can finish and remove itself. An immediate
+        // failure must not be inserted back into the map after its finally block ran.
+        val deferred = inFlightAddonMeta.computeIfAbsent(cacheKey) {
+            repositoryScope.async(start = CoroutineStart.LAZY) {
                 try {
                     // Kept here rather than in the enclosing flow's lists: this
                     // Deferred is shared, so only its creator would see those, and

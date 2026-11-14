@@ -238,6 +238,18 @@ internal class AudioSubtitleSyncController(
     @Volatile
     private var sessionStartedAtMs = 0L
 
+    /** Existing opt-in to use extra data on metered connections, independent of intensity. */
+    @Volatile
+    var samplingOnMobileData: Boolean = false
+        set(value) {
+            field = value
+            if (value && spotDeclined) {
+                spotDeclined = false
+                spotStatus = ""
+                spotSamplingStarted.set(false)
+            }
+        }
+
     /** How much of the film may be read ahead of playback; the user's setting. */
     @Volatile
     var samplingMode: AudioSamplingMode = AudioSamplingMode.HIGH
@@ -514,9 +526,14 @@ internal class AudioSubtitleSyncController(
         // Spot-only playback never fills the timeline itself, so there is nothing to wait for.
         if (!spotOnly && timeline.knownFrameCount() < SAMPLE_AFTER_FRAMES) return
         if (!spotSamplingStarted.compareAndSet(false, true)) return
-        if (samplingMode == AudioSamplingMode.OFF) {
-            SyncLog.i("audio sampling across the film is off")
-            spotStatus = "off (Audio sampling in Settings › Playback)"
+        if (!audioSamplingAllowed(samplingMode, samplingOnMobileData, AsrModel.isUnmetered(appContext))) {
+            val reason = if (samplingMode == AudioSamplingMode.OFF) {
+                "off (Audio sampling in Settings › Playback)"
+            } else {
+                "off on mobile data (can be enabled in Settings › Playback)"
+            }
+            SyncLog.i("audio sampling $reason")
+            spotStatus = reason
             spotDeclined = true
             return
         }

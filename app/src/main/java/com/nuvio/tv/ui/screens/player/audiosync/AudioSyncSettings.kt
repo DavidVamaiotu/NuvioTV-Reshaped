@@ -31,6 +31,11 @@ internal object AudioSyncSettings {
     /** Sync to the audio when AutoSync keeps a subtitle's original timing. */
     val fallbackEnabled: StateFlow<Boolean> = _fallbackEnabled.asStateFlow()
 
+    private val _samplingOnMobileData = MutableStateFlow(false)
+
+    /** Retains the existing opt-in for extra sampling traffic on metered connections. */
+    val samplingOnMobileData: StateFlow<Boolean> = _samplingOnMobileData.asStateFlow()
+
     private val _samplingMode = MutableStateFlow(DEFAULT_SAMPLING_MODE)
 
     /** Reading short parts of the film ahead of playback; see [AudioSamplingMode]. */
@@ -54,6 +59,7 @@ internal object AudioSyncSettings {
         this.saveString = saveString
         _fallbackEnabled.value = load(FALLBACK_ENABLED) ?: true
         _showStatistics.value = load(SHOW_STATISTICS) ?: false
+        _samplingOnMobileData.value = load(SAMPLING_ON_MOBILE_DATA) ?: false
         _samplingMode.value = loadString(SAMPLING_MODE)
             ?.let { stored -> AudioSamplingMode.entries.firstOrNull { it.name == stored } }
             ?: DEFAULT_SAMPLING_MODE
@@ -62,6 +68,11 @@ internal object AudioSyncSettings {
     fun setFallbackEnabled(enabled: Boolean) {
         _fallbackEnabled.value = enabled
         save(FALLBACK_ENABLED, enabled)
+    }
+
+    fun setSamplingOnMobileData(enabled: Boolean) {
+        _samplingOnMobileData.value = enabled
+        save(SAMPLING_ON_MOBILE_DATA, enabled)
     }
 
     fun setSamplingMode(mode: AudioSamplingMode) {
@@ -75,6 +86,11 @@ internal object AudioSyncSettings {
         save(SHOW_STATISTICS, enabled)
     }
 
+    private const val SAMPLING_ON_MOBILE_DATA = "audio_sync_sampling_on_mobile_data"
     private const val SAMPLING_MODE = "audio_sync_sampling_mode"
     private const val SHOW_STATISTICS = "audio_sync_show_statistics"
 }
+
+/** Sampling intensity and permission to use metered data are independent preferences. */
+internal fun audioSamplingAllowed(mode: AudioSamplingMode, onMobileData: Boolean, unmetered: Boolean): Boolean =
+    mode != AudioSamplingMode.OFF && (unmetered || onMobileData)

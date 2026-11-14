@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
@@ -90,6 +91,35 @@ class HomeEnrichmentRepositoryBoundaryTest {
             true,
             itemId in viewModel.prefetchedExternalMetaIds
         )
+    }
+
+    @Test
+    fun `an immediately completed transport failure cannot poison later retries`() = runBlocking {
+        val reachable = AtomicBoolean(false)
+        val api = mockk<AddonApi>()
+        coEvery { api.getMeta(any()) } coAnswers {
+            if (!reachable.get()) throw IOException("offline")
+            Response.success(MetaResponseDto(meta = MetaDto(id = itemId, type = "series", name = "Recovered")))
+        }
+        val repository = realRepository(api)
+        // Run the real request immediately, so completion before in-flight map publication is
+        // deterministic rather than depending on how quickly Dispatchers.IO schedules it.
+        val field = MetaRepositoryImpl::class.java.getDeclaredField("repositoryScope").apply { isAccessible = true }
+        (field.get(repository) as kotlinx.coroutines.CoroutineScope).cancel()
+        val immediate = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Unconfined)
+        field.set(repository, immediate)
+        try {
+            val failed = repository.getMetaFromAllAddons("series", itemId, catalogSourceUrl)
+                .last()
+            assertEquals(true, failed is com.nuvio.tv.core.network.NetworkResult.Error)
+            reachable.set(true)
+            val recovered = repository.getMetaFromAllAddons("series", itemId, catalogSourceUrl)
+                .last()
+            assertEquals("a completed failed request must not block a fresh lookup", true,
+                recovered is com.nuvio.tv.core.network.NetworkResult.Success)
+        } finally {
+            immediate.cancel()
+        }
     }
 
     private suspend fun focusAndAwaitEnrichment(viewModel: HomeViewModel, item: MetaPreview) {

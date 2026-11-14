@@ -17,6 +17,8 @@
     <string name="audio_sync_sampling_low">Low</string>
     <string name="audio_sync_sampling_high">High</string>
     <string name="audio_sync_sampling_off_description">Listens during playback only. No extra data is used, but sync can take longer. The mpv player can only sync to audio with Low or High.</string>
-    <string name="audio_sync_sampling_low_description">Reads a few short dialogue samples ahead of playback over one connection, up to 75 MB per title. Used on metered networks even when set to High.</string>
+    <string name="audio_sync_sampling_low_description">Reads a few short dialogue samples ahead of playback over one connection, up to 75 MB per title. When metered sampling is enabled, this limit also applies on metered networks when set to High.</string>
     <string name="audio_sync_sampling_high_description">Default. Reads more dialogue samples over several connections for the fastest sync, usually up to 150 MB per title and up to 400 MB for very high-bitrate files. Some hosts limit connections per stream.</string>
+    <string name="audio_sync_metered_title">Sample across the film on metered networks</string>
+    <string name="audio_sync_metered_description">Allow extra dialogue samples on metered connections. Uses the Low sampling limit even when Audio sampling is set to High.</string>
 </resources>
