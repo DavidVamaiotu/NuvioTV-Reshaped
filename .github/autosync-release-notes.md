@@ -1,3 +1,4 @@
+- Added the system-installer option and optimized-install messaging while retaining Reshaped update channels and legacy migration; cancelling installation no longer triggers repeated prompts.
 - Preserved on-demand playback position across source switches while keeping Live TV/catch-up at the correct starting point; matched styled MPV subtitle sizing to ExoPlayer and updated Hebrew/Vietnamese translations.
 - Added Continue Watching selection preferences while retaining Reshaped layout and playback controls; synced upstream 1.2.0-beta.1.
 - Fixed letterbox masking over libass overlay subtitles while preserving True Black Bars, subtitle controls and Reshaped playback recovery; updated Indonesian translations.
