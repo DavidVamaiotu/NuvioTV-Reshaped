@@ -221,6 +221,14 @@ internal class AudioSubtitleSyncController(
     @Volatile
     private var spotStatus = ""
 
+    /** Bytes sampling has read from this stream so far: later runs share one budget. */
+    @Volatile
+    private var spotBytesUsed = 0L
+
+    /** Sampling runs cut short by a subtitle change and started again for this stream. */
+    private val spotRestarts = AtomicInteger(0)
+
+
     /** (source key, reason) when this stream is not sampled at all. */
     @Volatile
     private var spotUnavailable: Pair<String, String>? = null
@@ -477,6 +485,8 @@ internal class AudioSubtitleSyncController(
         switchedAway.clear()
         handover = null
         spotSamplingStarted.set(false)
+        spotBytesUsed = 0L
+        spotRestarts.set(0)
         spotDeclined = false
         spotStatus = ""
         model = null
@@ -586,8 +596,15 @@ internal class AudioSubtitleSyncController(
         }
         // On high, a high-bitrate file may read past the target so each spot still holds whole
         // sentences; on low the target is also the cap.
-        val targetBytes = if (high) TARGET_SPOT_BYTES else LOW_SPOT_BYTES
-        val maxBytes = if (high) MAX_SPOT_BYTES else LOW_SPOT_BYTES
+        // A run that resumes one cut short spends what is left of the stream's budget.
+        val targetBytes = (if (high) TARGET_SPOT_BYTES else LOW_SPOT_BYTES) - spotBytesUsed
+        val maxBytes = (if (high) MAX_SPOT_BYTES else LOW_SPOT_BYTES) - spotBytesUsed
+        if (targetBytes < MIN_RESUMED_SPOT_BYTES) {
+            SyncLog.i("audio sampling budget for this stream is spent")
+            return
+        }
+        var planned = 0
+        var sampled = 0
         try {
             // Every subtitle at hand shows roughly where people talk, even with its timing off.
             val tracks = listOf(current.track) + englishCandidates()
@@ -597,7 +614,14 @@ internal class AudioSubtitleSyncController(
             val coveredMs = timeline.segments(fromFrame = SpeechTimeline.frameForTimeUs(playbackPositionMs * 1_000L))
                 .firstOrNull()?.let { (it.toFrame * SpeechTimeline.FRAME_DURATION_MS).toLong() } ?: 0L
             val notBeforeMs = if (playbackPositionMs < RESUME_THRESHOLD_MS) coveredMs + SPOT_MS else 0L
+            // Places an earlier, interrupted run already sampled are known and skipped.
             val spots = DialogueSpotPlanner.plan(tracks, mediaDurationMs, spotCount, SPOT_MS, notBeforeMs)
+                .filterNot { spotMs ->
+                    val from = SpeechTimeline.frameForTimeUs(spotMs * 1_000L)
+                    val to = SpeechTimeline.frameForTimeUs((spotMs + SPOT_MS) * 1_000L)
+                    timeline.knownFramesIn(from, to) * 2 >= to - from
+                }
+            planned = spots.size
             if (spots.isEmpty()) {
                 spotStatus = "no suitable dialogue spots found"
                 SyncLog.i("audio sampling skipped: no suitable dialogue spots")
@@ -623,6 +647,8 @@ internal class AudioSubtitleSyncController(
                 val seconds = (SystemClock.elapsedRealtime() - startedAt) / 1_000
                 spotStatus = "sampled $sampled of ${spots.size} dialogue spots in ${seconds}s (${bytes / 1_000_000} MB)"
             }
+            sampled = result.sampled
+            spotBytesUsed += result.bytes
             SyncLog.i(
                 "sampled ${result.sampled} spots over ${result.connections} connection(s), " +
                     "${result.bytes / 1_000_000} MB, failure=${result.failure}"
@@ -639,6 +665,15 @@ internal class AudioSubtitleSyncController(
                 SyncLog.i("sampling decoder[$index] ${sampledDecoder.diagnostics()}")
                 sampledDecoder.release()
             }
+        }
+        // Cut short because the subtitle changed (its session ended) while this stream still plays
+        // unsynced: the next subtitle's session samples the remaining spots instead of only
+        // listening to playback.
+        val cutShort = sampled < planned && session !== current && sourceKey == source.sourceKey &&
+            !released && enabled && (model == null || estimated)
+        if (cutShort && spotRestarts.incrementAndGet() <= MAX_SPOT_RESTARTS) {
+            SyncLog.i("audio sampling cut short by a subtitle change ($sampled of $planned spots); resuming for the next subtitle")
+            spotSamplingStarted.set(false)
         }
     }
 
@@ -1510,6 +1545,12 @@ internal class AudioSubtitleSyncController(
 
         /** Low sampling: fewer spots over a single connection, capped well below high. */
         private const val LOW_SPOT_COUNT = 3
+
+        /** A resumed sampling run needs at least this much of the stream's budget left. */
+        private const val MIN_RESUMED_SPOT_BYTES = 10L * 1_000_000L
+
+        /** How often an interrupted sampling run is resumed per stream. */
+        private const val MAX_SPOT_RESTARTS = 2
         private const val LOW_SPOT_BYTES = 75L * 1_000_000L
 
         /** Enough for a few whole sentences, which speech recognition needs. */
