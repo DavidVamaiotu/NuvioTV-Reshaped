@@ -43,6 +43,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.nuvio.tv.R
 import com.nuvio.tv.ui.reshaped.debuglog.DebugLogQrDialog
+import com.nuvio.tv.ui.screens.player.audiosync.AudioSamplingMode
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncFallback
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncPreferences
 import com.nuvio.tv.ui.screens.player.audiosync.AudioSyncSettings
@@ -89,16 +90,30 @@ internal fun LazyListScope.audioSyncFallbackSettingsItems(enabled: Boolean) {
         )
     }
 
-    item(key = "audio_sync_mobile_data") {
+    item(key = "audio_sync_sampling") {
         val rowsEnabled = rowsEnabled(enabled)
         val fallbackEnabled by AudioSyncSettings.fallbackEnabled.collectAsStateWithLifecycle()
-        val checked by AudioSyncSettings.samplingOnMobileData.collectAsStateWithLifecycle()
-        ToggleSettingsItem(
+        val sampling by AudioSyncSettings.samplingMode.collectAsStateWithLifecycle()
+        NavigationSettingsItem(
             icon = Icons.Default.NetworkCell,
-            title = "Sample across the film on metered networks",
-            subtitle = "Syncs much faster by reading a few short parts of the film ahead of playback, also on metered connections. Uses up to 150 MB per film.",
-            isChecked = checked,
-            onCheckedChange = AudioSyncSettings::setSamplingOnMobileData,
+            title = stringResource(R.string.audio_sync_sampling_title) + ": " + stringResource(
+                when (sampling) {
+                    AudioSamplingMode.OFF -> R.string.audio_sync_sampling_off
+                    AudioSamplingMode.LOW -> R.string.audio_sync_sampling_low
+                    AudioSamplingMode.HIGH -> R.string.audio_sync_sampling_high
+                },
+            ),
+            subtitle = stringResource(
+                when (sampling) {
+                    AudioSamplingMode.OFF -> R.string.audio_sync_sampling_off_description
+                    AudioSamplingMode.LOW -> R.string.audio_sync_sampling_low_description
+                    AudioSamplingMode.HIGH -> R.string.audio_sync_sampling_high_description
+                },
+            ),
+            onClick = {
+                val modes = AudioSamplingMode.entries
+                AudioSyncSettings.setSamplingMode(modes[(sampling.ordinal + 1) % modes.size])
+            },
             enabled = rowsEnabled && fallbackEnabled,
         )
     }

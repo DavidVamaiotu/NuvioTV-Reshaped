@@ -10,4 +10,13 @@
     <string name="player_audio_sync_adjusted">Subtitle timing changed, re-synced (%1$s)</string>
     <string name="audio_sync_show_statistics_title">Show AudioSync statistics</string>
     <string name="audio_sync_show_statistics_subtitle">Shows a live panel in the top-left corner of the player with what audio sync has heard and why it is or isn\'t synced yet.</string>
+    <string name="player_audio_sync_failed">Couldn\'t sync subtitles to audio</string>
+    <string name="player_audio_sync_unmatched">Couldn\'t sync subtitles to audio yet, still listening</string>
+    <string name="audio_sync_sampling_title">Audio sampling</string>
+    <string name="audio_sync_sampling_off">Off</string>
+    <string name="audio_sync_sampling_low">Low</string>
+    <string name="audio_sync_sampling_high">High</string>
+    <string name="audio_sync_sampling_off_description">Listens during playback only. No extra data is used, but sync can take longer. The mpv player can only sync to audio with Low or High.</string>
+    <string name="audio_sync_sampling_low_description">Reads a few short dialogue samples ahead of playback over one connection, up to 75 MB per title. Used on metered networks even when set to High.</string>
+    <string name="audio_sync_sampling_high_description">Default. Reads more dialogue samples over several connections for the fastest sync, usually up to 150 MB per title and up to 400 MB for very high-bitrate files. Some hosts limit connections per stream.</string>
 </resources>

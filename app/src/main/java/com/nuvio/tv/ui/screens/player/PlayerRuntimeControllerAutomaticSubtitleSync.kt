@@ -38,6 +38,7 @@ import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.update
@@ -523,10 +524,18 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
         .distinctBy { it.url }
     val candidateByUrl = candidatesAtStart.associateBy { it.url }
 
+    AudioSyncFallback.stop(this)
+    // Audio sync fallback: on mpv it hears the film through sampled spots only.
+    val audioFallback = AudioSyncFallback.of(this)
+    audioFallback?.arm()
+
     automaticSubtitleSyncJob = scope.launch {
         fun streamUnchanged(): Boolean =
             currentStreamUrl == sourceUrlAtStart && isUsingMpvEngine()
 
+        // Every way out of this run disarms the fallback, unless it took over the subtitle. A
+        // cancelled run leaves it alone: the run that replaced it has armed it again.
+        var audioTookOver = false
         try {
             Log.d(
                 PlayerRuntimeController.TAG,
@@ -576,7 +585,13 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
             if (resolved == null) {
                 Log.d(PlayerRuntimeController.TAG, "AUTO_SYNC_V2 mpv no match outcome=$analysisOutcome")
                 if (activeSubtitleUrl == selectedUrl) {
-                    showAutoSyncToast(AutoSyncBubbleKind.Failure, context.buildAutoSyncFailureToast(analysisOutcome))
+                    audioTookOver = analysisOutcome != AutoSyncAnalysisOutcome.SUBTITLE_UNAVAILABLE &&
+                        audioFallback?.takeOver(selectedUrl) == true
+                    if (audioTookOver) {
+                        showAutoSyncToast(AutoSyncBubbleKind.Working, context.getString(R.string.autosync_toast_failed_audio_fallback))
+                    } else {
+                        showAutoSyncToast(AutoSyncBubbleKind.Failure, context.buildAutoSyncFailureToast(analysisOutcome))
+                    }
                 }
                 return@launch
             }
@@ -649,6 +664,8 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
             if (streamUnchanged() && _uiState.value.selectedAddonSubtitle?.url == selectedUrl) {
                 showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
             }
+        } finally {
+            if (!audioTookOver && isActive) audioFallback?.disarm()
         }
     }
 }
