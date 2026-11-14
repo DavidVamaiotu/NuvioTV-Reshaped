@@ -145,6 +145,9 @@ class HomeEnrichmentRetryTest {
 
         viewModel.onItemFocusPipeline(item(itemId))
         awaitCalls(calls, 1, "TMDB succeeding should not stop the external fetch being attempted")
+        // Entering the repository precedes publishing both results. Join the focus job before
+        // reading its caches so a busy IO dispatcher cannot race the assertion below.
+        withTimeout(5_000) { requireNotNull(viewModel.tmdbEnrichFocusJob).join() }
 
         // The state the second gate reads: TMDB resolved and is cached, external failed and is not.
         assertTrue("TMDB should be cached after it resolved", itemId in viewModel.prefetchedTmdbIds)
@@ -158,6 +161,7 @@ class HomeEnrichmentRetryTest {
         focusAndSettle(viewModel, item(itemId))
 
         awaitCalls(calls, 2, "a TMDB success must not suppress the external retry")
+        withTimeout(5_000) { requireNotNull(viewModel.tmdbEnrichFocusJob).join() }
         assertTrue(
             "the external retry resolved, so it should now be cached too",
             itemId in viewModel.prefetchedExternalMetaIds
