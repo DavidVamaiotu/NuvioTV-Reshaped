@@ -105,4 +105,32 @@ class SourceFallbackContinuationTest {
         assertNull(state.value.error)
     }
 
+    @Test
+    fun `new episode clears exhausted guard and retains preplay attempts`() {
+        exhaustedUrl = failedUrl
+        val keys = mutableSetOf("old-episode")
+        every { controller.sourceFallbackTriedKeys } returns keys
+        val tried = SourceFallbackHandoff.TriedSources(setOf("url:first", "url:second"), 1)
+
+        controller.restartSourceFallback(failedUrl, tried)
+
+        assertNull(exhaustedUrl)
+        assertEquals(tried.keys, keys)
+        verify { controller.sourceFallbackAttempts = 1 }
+        verify { controller.autoSelectedSourceUrl = failedUrl }
+    }
+
+    @Test
+    fun `manual episode switch drops previous automatic attempts`() {
+        exhaustedUrl = failedUrl
+        val keys = mutableSetOf("old-episode")
+        every { controller.sourceFallbackTriedKeys } returns keys
+
+        controller.restartSourceFallback("https://cdn.example/manual", null)
+
+        assertNull(exhaustedUrl)
+        assertTrue(keys.isEmpty())
+        verify { controller.sourceFallbackAttempts = 0 }
+        verify { controller.autoSelectedSourceUrl = null }
+    }
 }
