@@ -270,8 +270,12 @@ class PlayerRuntimeController(
         navigationArgs.autoPlayNav && it.isNotBlank() && !it.startsWith("torrent://")
     }
     internal var sourceFallbackExhaustedUrl: String? = null
-    internal var sourceFallbackAttempts = 0
-    internal val sourceFallbackTriedKeys = mutableSetOf<String>()
+
+    /** The sources the stream screen tried before this one, so the fallback goes on from them. */
+    private val sourcesTriedBeforePlayback = SourceFallbackHandoff.take(initialStreamUrl, currentStreamUrl)
+        ?.takeIf { autoSelectedSourceUrl != null }
+    internal var sourceFallbackAttempts = sourcesTriedBeforePlayback?.attempts ?: 0
+    internal val sourceFallbackTriedKeys = sourcesTriedBeforePlayback?.keys.orEmpty().toMutableSet()
     internal var sourceFallbackJob: Job? = null
     internal var sourceStartupTimeoutJob: Job? = null
 
