@@ -101,8 +101,9 @@ internal class AudioSubtitleSyncController(
     }
 
     // English references recognition waits for. Kept apart from [fetchPool], which can hold a dozen
-    // same-language alternatives, so recognition never queues behind them. Threads start on first use.
-    private val referenceFetchPool: ExecutorService = Executors.newFixedThreadPool(2) { runnable ->
+    // same-language alternatives, so recognition never queues behind them. One thread per reference
+    // used, so a slow host holds up only its own file. Threads start on first use.
+    private val referenceFetchPool: ExecutorService = Executors.newFixedThreadPool(MAX_REFERENCES) { runnable ->
         Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
             runnable.run()
@@ -131,7 +132,10 @@ internal class AudioSubtitleSyncController(
         normal = fetchPool,
         urgent = referenceFetchPool,
         parsed = parsedReferences,
-        download = { url -> downloadReference(url) },
+        download = { url ->
+            SharedReferenceCache.get(url)?.also { SyncLog.i("reference $url ready from an earlier download") }
+                ?: downloadReference(url).also { SharedReferenceCache.put(url, it) }
+        },
         log = SyncLog::w,
     )
 
@@ -608,7 +612,7 @@ internal class AudioSubtitleSyncController(
         try {
             // Every subtitle at hand shows roughly where people talk, even with its timing off.
             val tracks = listOf(current.track) + englishCandidates()
-                .mapNotNull { parsedReferences[it.url]?.takeIf { cues -> cues.isNotEmpty() } }
+                .mapNotNull { (parsedReferences[it.url] ?: SharedReferenceCache.get(it.url))?.takeIf { cues -> cues.isNotEmpty() } }
                 .map(SubtitleSpeechTrack::fromCues)
             // A fresh start covers the opening itself; after a resume any part of the film helps.
             val coveredMs = timeline.segments(fromFrame = SpeechTimeline.frameForTimeUs(playbackPositionMs * 1_000L))
@@ -873,12 +877,20 @@ internal class AudioSubtitleSyncController(
         }
     }
 
+    /**
+     * Downloads the English references recognition will use ([bridgeReferences] takes the same
+     * ones), as soon as they are known: by the time audio sync takes over, usually right after
+     * playback starts, they are ready instead of downloading then. Each file downloads once.
+     */
+    private fun prefetchReferences() {
+        englishCandidates().take(MAX_REFERENCES).forEach { fetchReference(it, urgent = true, onReady = null) }
+    }
+
     /** Subtitles the user could pick; English ones become recognition references. */
     fun setReferenceSubtitles(list: List<ReferenceCandidate>) {
         candidates = list
         if (list.isNotEmpty()) prepareRecognizer()
-        // Download the likeliest English references now so a later pick is instant.
-        englishCandidates().take(PREFETCH_REFERENCES).forEach { fetchReference(it, urgent = true, onReady = null) }
+        prefetchReferences()
         // Subtitles listed after the pick join the running search.
         session?.let { current -> if (model == null || estimated) startPool(current) }
     }
@@ -1032,7 +1044,7 @@ internal class AudioSubtitleSyncController(
                 SyncLog.i("English reference lookup for $videoId found ${found.size}")
                 fallbackCandidates = found
                 fallbackState = FallbackState.Done
-                found.take(PREFETCH_REFERENCES).forEach { fetchReference(it, urgent = true, onReady = null) }
+                prefetchReferences()
                 fallbackListeners.forEach { runCatching(it) }
                 fallbackListeners.clear()
             }
@@ -1062,6 +1074,7 @@ internal class AudioSubtitleSyncController(
         onReady: ((List<Triple<Long, Long, String>>) -> Unit)?,
     ) {
         referenceHeaders.putIfAbsent(candidate.url, candidate)
+        referenceRequestedAt.putIfAbsent(candidate.url, SystemClock.elapsedRealtime())
         referenceFetcher.fetch(candidate.url, urgent, onReady)
     }
 
@@ -1069,13 +1082,25 @@ internal class AudioSubtitleSyncController(
 
     private fun downloadReference(url: String): List<Triple<Long, Long, String>> {
         val candidate = referenceHeaders[url] ?: ReferenceCandidate(url = url, language = "", headers = emptyMap())
+        val startedAt = SystemClock.elapsedRealtime()
+        val queuedMs = referenceRequestedAt[url]?.let { startedAt - it } ?: -1L
         return runCatching {
-            dialogueOf(parseSidecarTimedCuesRobust(downloadWithRetry(candidate), url).cues)
+            val body = downloadWithRetry(candidate)
+            val downloadedAt = SystemClock.elapsedRealtime()
+            dialogueOf(parseSidecarTimedCuesRobust(body, url).cues).also { dialogue ->
+                SyncLog.i(
+                    "reference $url: queued ${queuedMs}ms, downloaded in ${downloadedAt - startedAt}ms, " +
+                        "parsed in ${SystemClock.elapsedRealtime() - downloadedAt}ms (${dialogue.size} lines)"
+                )
+            }
         }.getOrElse {
-            SyncLog.w("reference download failed for $url: ${it.message}")
+            SyncLog.w("reference download failed for $url after ${SystemClock.elapsedRealtime() - startedAt}ms: ${it.message}")
             emptyList()
         }
     }
+
+    /** When each reference was first asked for, for the log's queue times. */
+    private val referenceRequestedAt = ConcurrentHashMap<String, Long>()
 
     /**
      * Speech recognition: English words heard in the dialogue are matched against an English
@@ -1100,6 +1125,8 @@ internal class AudioSubtitleSyncController(
         if (references.isEmpty()) {
             if (fallbackState == FallbackState.Loading) {
                 referenceStatus = "looking up English subtitles…"
+                // English references are still being looked up: recognise speech meanwhile.
+                engine.expectReferences(REFERENCE_WAIT_MS)
                 fallbackListeners += { if (session === current) bridgeReferences(current, engine) }
                 return
             }
@@ -1118,6 +1145,7 @@ internal class AudioSubtitleSyncController(
         if (references.isEmpty()) {
             referenceStatus = "none available"
             problem = "No English subtitle found for this title, using speech detection (slower)"
+            engine.expectReferences(0L)
             noUsableReference = true
             updateListening()
             return
@@ -1126,12 +1154,15 @@ internal class AudioSubtitleSyncController(
         referenceStatus = "downloading ${references.size}…"
         val matched = java.util.concurrent.atomic.AtomicInteger(0)
         val finished = java.util.concurrent.atomic.AtomicInteger(0)
+        // Speech is recognised while they download, so the words are ready when one matches.
+        engine.expectReferences(REFERENCE_WAIT_MS)
         for (candidate in references) {
             fetchReference(candidate, urgent = true) { dialogue ->
                 if (session !== current) return@fetchReference
+                val bridgingAt = SystemClock.elapsedRealtime()
                 val referenceTrack = SubtitleSpeechTrack.fromCues(dialogue)
                 val bridge = SubtitleBridge.align(current.track, referenceTrack)
-                SyncLog.i("reference ${candidate.url}: bridge=$bridge")
+                SyncLog.i("reference ${candidate.url}: bridge=$bridge in ${SystemClock.elapsedRealtime() - bridgingAt}ms")
                 pool?.addReference(candidate.url, dialogue)
                 if (bridge != null) {
                     matched.incrementAndGet()
@@ -1149,6 +1180,7 @@ internal class AudioSubtitleSyncController(
                 }
                 if (done == references.size && matched.get() == 0) {
                     problem = "English subtitles don't line up with yours (different release?), using speech detection"
+                    engine.expectReferences(0L)
                     noUsableReference = true
                     updateListening()
                 }
@@ -1526,8 +1558,13 @@ internal class AudioSubtitleSyncController(
         private const val PREFERENCES = "nuvio_audio_sync"
         private const val REMEMBER_PREFIX = "v3:"
         private const val MAX_REMEMBERED = 200
-        private const val PREFETCH_REFERENCES = 2
         private const val MAX_REFERENCES = 4
+
+        /**
+         * How long speech is recognised ahead of references still downloading: covers a slow host
+         * (references took up to 20 s on a TV), and bounds the work when none ever arrives.
+         */
+        private const val REFERENCE_WAIT_MS = 30_000L
         private const val MAX_FALLBACK_REFERENCES = 6
         private const val MAX_ALTERNATIVES = 12
         private const val DOWNLOAD_RETRIES = 3
