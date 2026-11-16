@@ -8,7 +8,6 @@ import android.view.SurfaceHolder
 import com.nuvio.tv.data.local.MpvHardwareDecodeMode
 import com.nuvio.tv.data.local.SubtitleStyleSettings
 import `is`.xyz.mpv.MPV
-import `is`.xyz.mpv.Utils
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.pow
@@ -48,7 +47,7 @@ class NuvioMpvSurfaceView @JvmOverloads constructor(
 
     fun ensureInitialized() {
         if (initialized) return
-        Utils.copyAssets(context)
+        prepareMpvAssets(context.filesDir, context.cacheDir, { context.assets.open(it) }, { Log.w("MpvAssets", "Failed to prepare mpv assets", it) })
         initialize(
             configDir = context.filesDir.path,
             cacheDir = context.cacheDir.path
