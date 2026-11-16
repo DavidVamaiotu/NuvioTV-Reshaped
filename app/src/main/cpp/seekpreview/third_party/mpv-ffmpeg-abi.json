@@ -1,0 +1,26 @@
+{
+  "dependency_version": "0.2.1",
+  "artifact_coordinate": "io.github.abdallahmehiz:mpv-android-lib-android:0.2.1",
+  "artifact_sha256": "2d52aae094ae873e09441f9936b381a119e38c48b7a645c63cb9a049a20dab9a",
+  "source_commit": "f8bb61cd57a714b4eb8a9f8002dbb5214eed48c7",
+  "runtime_version": "git-2026-11-13-f8bb61c",
+  "headers": "ffmpeg-f8bb61cd57",
+  "libraries": {
+    "libavcodec": {
+      "major": 63,
+      "minor": 28,
+      "micro": 100
+    },
+    "libavutil": {
+      "major": 61,
+      "minor": 20,
+      "micro": 100
+    },
+    "libswscale": {
+      "major": 10,
+      "minor": 6,
+      "micro": 100
+    }
+  },
+  "native_marker": "mpv: FFmpeg headers f8bb61cd57 (63/61/10)"
+}

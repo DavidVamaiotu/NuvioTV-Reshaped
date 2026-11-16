@@ -3,7 +3,7 @@
 // Original container/keyframe/colour implementation by ysosrs123; see NOTICE.md in this package.
 /*
  * Two FFmpeg backends for the keyframe decoder, both already in the APK and loaded with dlopen/dlsym:
- *   "mpv":  MPV's FFmpeg (libavcodec 62), ~2x faster at 4K. Used when its majors match the vendored headers.
+ *   "mpv":  MPV's FFmpeg (libavcodec 63), ~2x faster at 4K. Used when its majors match the vendored headers.
  *   "ff60": FFmpeg 6.0 inside libmediainfo.so, the fallback.
  * Each backend is its own compilation unit of thumb_backend_impl.inc against its own headers, so no struct
  * layout crosses between the two FFmpeg versions.
