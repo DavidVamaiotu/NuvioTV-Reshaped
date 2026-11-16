@@ -1,16 +1,50 @@
 """Host checks for the detached decoder: colour math and C/C++ syntax, without an Android SDK."""
 import ctypes
+import hashlib
+import json
+import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "app/src/main/cpp/seekpreview"
+MPV_ABI_PIN = json.loads((NATIVE / "third_party/mpv-ffmpeg-abi.json").read_text())
 
 
 class NativePreviewTest(unittest.TestCase):
+    def test_mpv_dependency_and_header_abi_pin(self):
+        gradle = (ROOT / "app/build.gradle.kts").read_text()
+        version = re.search(r'io[.]github[.]abdallahmehiz:mpv-android-lib:([^"\s]+)', gradle)
+        self.assertIsNotNone(version)
+        self.assertEqual(MPV_ABI_PIN["dependency_version"], version.group(1),
+                         "MPV updates require an audited FFmpeg ABI/header pin")
+        headers = NATIVE / "third_party" / MPV_ABI_PIN["headers"]
+        for library, expected in MPV_ABI_PIN["libraries"].items():
+            text = "\n".join(p.read_text() for p in (headers / library).glob("*version*.h"))
+            stem = library.upper()
+            for component, value in expected.items():
+                actual = re.search(r"#define\s+" + stem + "_VERSION_" + component.upper() + r"\s+(\d+)", text)
+                self.assertIsNotNone(actual, (library, component))
+                self.assertEqual(value, int(actual.group(1)), (library, component))
+        self.assertIn("third_party/" + MPV_ABI_PIN["headers"], (NATIVE / "CMakeLists.txt").read_text())
+        self.assertIn(MPV_ABI_PIN["native_marker"], (NATIVE / "thumb_backend_mpv.cpp").read_text())
+        # When Gradle has resolved the artifact, verify its audited fingerprint too.
+        # The dependency/header contract above also runs on SDK-free offline hosts.
+        gradle_home = Path(os.environ.get("GRADLE_USER_HOME", str(Path.home() / ".gradle")))
+        artifacts = gradle_home / "caches/modules-2/files-2.1/io.github.abdallahmehiz/mpv-android-lib-android" / version.group(1)
+        for artifact in artifacts.glob("*/*.aar"):
+            self.assertEqual(MPV_ABI_PIN["artifact_sha256"], hashlib.sha256(artifact.read_bytes()).hexdigest())
+            with zipfile.ZipFile(artifact) as native:
+                for abi in ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]:
+                    self.assertIn(MPV_ABI_PIN["runtime_version"].encode(), native.read("jni/" + abi + "/libavutil.so"))
+                    self.assertIn("jni/" + abi + "/libmpv.so", native.namelist())
+                    self.assertIn("jni/" + abi + "/libplayer.so", native.namelist())
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
@@ -121,7 +155,7 @@ jlong GetDirectBufferCapacity(jobject);
 };
 """)
         common = ["c++", "-std=c++17", "-fsyntax-only", "-Wno-deprecated-declarations", "-I" + str(includes)]
-        for file, headers in [("thumb_backend_ff60.cpp", "ffmpeg-n6.0"), ("thumb_backend_mpv.cpp", "ffmpeg-a7522f3fef")]:
+        for file, headers in [("thumb_backend_ff60.cpp", "ffmpeg-n6.0"), ("thumb_backend_mpv.cpp", MPV_ABI_PIN["headers"])]:
             subprocess.run(common + ["-I" + str(NATIVE / "third_party" / headers), str(NATIVE / file)], check=True)
         subprocess.run(common + [str(NATIVE / "thumb_shim.cpp")], check=True)
 

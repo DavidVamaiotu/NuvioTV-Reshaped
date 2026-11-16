@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22.1)
 add_library(reshaped_preview SHARED thumb_shim.cpp thumb_backend_mpv.cpp thumb_backend_ff60.cpp thumbcolor.c thumbdovi.c)
 target_include_directories(reshaped_preview PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
-set_source_files_properties(thumb_backend_mpv.cpp PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/third_party/ffmpeg-a7522f3fef")
+set_source_files_properties(thumb_backend_mpv.cpp PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/third_party/ffmpeg-f8bb61cd57")
 set_source_files_properties(thumb_backend_ff60.cpp PROPERTIES INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/third_party/ffmpeg-n6.0")
 target_compile_features(reshaped_preview PRIVATE cxx_std_17)
 target_compile_options(reshaped_preview PRIVATE -O2 -Wall -Wextra -Wno-deprecated-declarations -Wno-unused-parameter)

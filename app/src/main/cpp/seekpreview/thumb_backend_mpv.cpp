@@ -2,8 +2,8 @@
 // Adapted from ysosrs123/NuvioTV-Fork (Nuvio Arc), commit ae6212ef58d25df819a716f2a38314732e719a2c.
 // Original container/keyframe/colour implementation by ysosrs123; see NOTICE.md in this package.
 /*
- * Primary backend: MPV's FFmpeg (mpv-android-lib, FFmpeg master a7522f3fef, libavcodec 62 / libavutil 60 /
- * libswscale 9). Built against third_party/ffmpeg-a7522f3fef. Refused unless every library's major version
+ * Primary backend: MPV's FFmpeg (mpv-android-lib, FFmpeg f8bb61cd57, libavcodec 63 / libavutil 61 /
+ * libswscale 10). Built against third_party/ffmpeg-f8bb61cd57. Refused unless every library's major version
  * equals the headers', so an mpv-android-lib update falls back to ff60 instead of misreading structs.
  */
 #include <android/log.h>
@@ -32,7 +32,8 @@ extern "C" {
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ThumbDecode", __VA_ARGS__)
 #define BACKEND_NAME "mpv"
 
-static_assert(LIBAVCODEC_VERSION_MAJOR == 62, "mpv backend must build against the a7522f3fef headers");
+static_assert(LIBAVCODEC_VERSION_MAJOR == 63 && LIBAVUTIL_VERSION_MAJOR == 61 && LIBSWSCALE_VERSION_MAJOR == 10,
+              "mpv backend headers must match the pinned MPV 0.2.1 FFmpeg ABI");
 
 namespace {
 #include "thumb_backend_impl.inc"
@@ -71,6 +72,7 @@ bool load_symbols(Api &api, char *version, size_t n) {
         return false;
     }
     if (!resolve_all(api, handles, kCount)) return false;
+    LOGI("mpv: FFmpeg headers f8bb61cd57 (63/61/10)");
     snprintf(version, n, "avcodec %u.%u.%u avutil %u.%u.%u swscale %u.%u.%u", cv >> 16, (cv >> 8) & 0xff, cv & 0xff,
              uv >> 16, (uv >> 8) & 0xff, uv & 0xff, sv >> 16, (sv >> 8) & 0xff, sv & 0xff);
     opened.retained = true; // Keep successful function pointers backed by loaded libraries.
