@@ -938,6 +938,7 @@
     <string name="sub_outline">Viền chữ</string>
     <string name="sub_outline_sub">Thêm viền chữ quanh phụ đề để dễ đọc hơn</string>
     <string name="sub_outline_color">Màu viền</string>
+    <string name="sub_outline_width">Độ rộng viền</string>
     <string name="sub_hdr_style">Kiểu riêng cho HDR / Dolby Vision</string>
     <string name="sub_hdr_style_sub">Sử dụng một màu chữ khác và độ sáng thấp hơn cho phụ đề trên video HDR và Dolby Vision</string>
     <string name="sub_hdr_text_color">Màu chữ HDR</string>
@@ -2741,7 +2742,7 @@
     <string name="collections_editor_back">Quay lại</string>
     <string name="collections_editor_edit_collection">Chỉnh sửa bộ sưu tập</string>
     <string name="collections_editor_catalog_count">%1$d danh mục</string>
-    <string name="collections_editor_source_count">%1$d nguồn · %2$s</string>
+    <string name="collections_editor_source_count">%1$d nguồn</string>
     <string name="collections_editor_sources">Nguồn</string>
     <string name="collections_editor_source">Nguồn</string>
     <string name="collections_editor_view_mode_tabs">Thẻ</string>
