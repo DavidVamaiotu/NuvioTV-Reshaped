@@ -516,8 +516,14 @@ private class NativeOptimizedVideoTrackOutput(
         val codecsToUse = strippedCodecs ?: if (converting) rewriteDvCodecString(format.codecs) else format.codecs
 
         var outFormat = format
+        if (converting) {
+            config.stats.recordConversionMode(config.conversionMode(profile))
+        }
         if (codecsToUse != null && codecsToUse != format.codecs) {
             outFormat = format.buildUpon().setCodecs(codecsToUse).build()
+            if (converting && strippedCodecs == null) {
+                config.stats.recordCodecStringRewrite()
+            }
         }
         if (stripDvRpu && strippedCodecs != null) {
             outFormat = outFormat.buildUpon().setSampleMimeType(MimeTypes.VIDEO_H265).build()
