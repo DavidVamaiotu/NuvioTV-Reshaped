@@ -7,6 +7,9 @@ class DolbyVisionStatsSessionTest {
   DolbyVisionConversionStats.reset();val old=DolbyVisionConversionStats.session;old.recordElType(2)
   DolbyVisionConversionStats.reset();val current=DolbyVisionConversionStats.session
   old.recordElType(1);old.recordLiveDm(0,100,dm(100));assertNull(current.getLastElType());assertNull(current.liveDmAt(100))
+  old.recordSourceProfile(7);old.recordConversionMode(2);old.recordCodecStringRewrite()
+  assertNull(current.getLastSourceProfile());assertNull(current.getLastSelectedConversionMode());assertEquals(0L,current.getCodecStringRewriteCount())
+  assertEquals(7,old.getLastSourceProfile());assertEquals(2,old.getLastSelectedConversionMode());assertEquals(1L,old.getCodecStringRewriteCount())
  }
  @Test fun liveMetadataUsesPresentationTimeAndExpires() {
   val s=DolbyVisionStatsSession();val a=dm(100);val b=dm(200);s.recordLiveDm(0,1000000,a);s.recordLiveDm(0,4000000,b)
