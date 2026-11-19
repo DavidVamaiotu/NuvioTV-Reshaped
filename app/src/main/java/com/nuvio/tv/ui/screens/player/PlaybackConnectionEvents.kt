@@ -128,6 +128,7 @@ internal class PlaybackConnectionEventListener(
     }
 
     override fun canceled(call: Call) {
+        PlayerPlaybackNetworking.cancelProtocolRetry(call)
         emit("canceled")
     }
 
