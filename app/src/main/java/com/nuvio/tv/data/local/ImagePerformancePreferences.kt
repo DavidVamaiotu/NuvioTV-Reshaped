@@ -20,8 +20,22 @@ class ImagePerformancePreferences @Inject constructor(
             .commit()
     }
 
+    val hardwareBitmapsEnabled: Boolean
+        get() = preferences.getBoolean(
+            KEY_HARDWARE_BITMAPS_ENABLED,
+            // Preserve Reshaped's software/RGB565 decoding until the viewer opts in.
+            false
+        )
+
+    fun setHardwareBitmapsEnabled(enabled: Boolean): Boolean {
+        return preferences.edit()
+            .putBoolean(KEY_HARDWARE_BITMAPS_ENABLED, enabled)
+            .commit()
+    }
+
     private companion object {
         const val PREFERENCES_NAME = "image_performance"
         const val KEY_RGB565_ENABLED = "rgb565_enabled"
+        const val KEY_HARDWARE_BITMAPS_ENABLED = "hardware_bitmaps_enabled"
     }
 }

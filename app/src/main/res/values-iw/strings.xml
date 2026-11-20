@@ -994,9 +994,9 @@
     <string name="autoplay_reuse_last_link">שימוש חוזר בקישור האחרון</string>
     <string name="autoplay_reuse_last_link_sub">הפעלה אוטומטית של המקור האחרון שעבד עבור אותו סרט/פרק, כשהמטמון עדיין תקף</string>
     <string name="autoplay_last_link_cache">משך מטמון קישור אחרון</string>
-    <string name="cache_duration_hour_one">שעה אחת</string>
+    <string name="cache_duration_hour_one">%1$d שעה</string>
     <string name="cache_duration_hour_other">%1$d שעות</string>
-    <string name="cache_duration_day_one">יום אחד</string>
+    <string name="cache_duration_day_one">%1$d יום</string>
     <string name="cache_duration_day_other">%1$d ימים</string>
     <string name="cache_duration_days_hours">%1$d ימ׳ %2$d שע׳</string>
     <string name="autoplay_mode_manual">ידני (בחירת מקור עצמאית)</string>
@@ -1305,7 +1305,6 @@
     <string name="mdblist_rate_limited">מגבלת הבקשות של MDBList מוצתה. הסנכרון יתחדש לאחר איפוס המגבלה.</string>
     <string name="mdblist_revoke_failed">הניתוק בוצע במכשיר זה. כדי לבטל את הגישה לגמרי, יש להסיר את האפליקציה בהגדרות חשבון ה-MDBList.</string>
     <string name="mdblist_title">דירוגי MDBList</string>
-    <string name="mdblist_subtitle">הגדרת דירוגים חיצוניים המוצגים בבאנר הראשי של דף הפרטים</string>
     <string name="mdblist_enable_title">אפשור דירוגי MDBList</string>
     <string name="mdblist_enable_subtitle">משיכת דירוגים מספקים חיצוניים במסך הפרטים</string>
     <string name="mdblist_api_key_title">מפתח API</string>
@@ -1332,7 +1331,6 @@
     <string name="mdblist_show_on_hero_title">הצגת דירוגים בבאנר הראשי</string>
     <string name="mdblist_show_on_hero_subtitle">הצגת דירוגי MDBList בקרוסלת הבאנר הראשי (מודרני וקלאסי/רשת)</string>
     <string name="mdblist_rating_order_title">סדר דירוגים</string>
-    <string name="mdblist_rating_order_subtitle">שלושת הדירוגים הראשונים הפעילים והזמינים מוצגים בבאנר הראשי המודרני. ניתן להשתמש בחצים לשינוי הסדר.</string>
     <string name="mdblist_dialog_title">מפתח API של MDBList</string>
     <string name="mdblist_dialog_subtitle">הזנת מפתח ה-API לאחזור דירוגים חיצוניים</string>
     <string name="mdblist_dialog_placeholder">מפתח API של MDBList</string>
@@ -2915,7 +2913,7 @@
     <string name="collection_editor_resolved_trakt_list">רשימת Trakt שזוהתה</string>
     <string name="collection_editor_trakt_search_placeholder">חיפוש כותרת, כתובת URL של Trakt, או מזהה רשימה</string>
     <string name="collection_editor_trakt_name_placeholder">צפייה לסוף שבוע, זוכי פרסים</string>
-    <string name="collection_editor_folder_count_one">פריט אחד</string>
+    <string name="collection_editor_folder_count_one">%1$d פריט</string>
     <string name="collection_editor_folder_count_other">%1$d פריטים</string>
     <string name="collections_editor_delete_folder_title">למחוק תיקייה?</string>
     <string name="collections_editor_delete_folder_subtitle">פעולה זו תמחק לצמיתות את \"%1$s\" ואת תכולתה.</string>
@@ -3494,4 +3492,6 @@
     <string name="library_empty_trakt_subtitle">שימוש ב-+ בפרטים להוספת פריטים לרשימת צפייה</string>
     <string name="library_empty_simkl_title">אין %1$s בסטטוס זה</string>
     <string name="library_empty_simkl_subtitle">יש ללחוץ על + בפרטים כדי להוסיף פריטים לסטטוס Simkl</string>
+    <string name="mdblist_subtitle">הגדרת דירוגים חיצוניים המוצגים בבאנר הראשי של דף הפרטים</string>
+    <string name="mdblist_rating_order_subtitle">First 3 enabled and available ratings are shown on the modern hero. Use the reorder button to change their order.</string>
 </resources>
