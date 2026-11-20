@@ -943,7 +943,6 @@
 
 
     <string name="mdblist_title">Hodnocení MDBList</string>
-    <string name="mdblist_subtitle">Konfigurovat externí hodnocení zobrazená v hrdinovi podrobností</string>
     <string name="mdblist_enable_title">Povolit hodnocení MDBList</string>
     <string name="mdblist_enable_subtitle">Získávat hodnocení od externích poskytovatelů na obrazovce podrobností metadat</string>
     <string name="mdblist_api_key_title">API klíč</string>
@@ -2835,4 +2834,5 @@
     <string name="library_empty_trakt_title">Žádné %1$s v tomto seznamu</string>
     <string name="library_empty_local_subtitle">Začněte ukládat své oblíbené, abyste je zde viděli</string>
     <string name="library_empty_trakt_subtitle">Použijte + v podrobnostech pro přidání položek do watchlistu nebo seznamů</string>
+    <string name="mdblist_subtitle">Konfigurovat externí hodnocení zobrazená v hrdinovi podrobností</string>
 </resources>

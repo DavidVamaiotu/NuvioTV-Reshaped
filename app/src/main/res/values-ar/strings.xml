@@ -1115,7 +1115,6 @@
 
     <!-- MDBListSettingsScreen -->
     <string name="mdblist_title">تقييمات MDBList</string>
-    <string name="mdblist_subtitle">ضبط التقييمات الخارجية المعروضة في القسم المميز بصفحة التفاصيل.</string>
     <string name="mdblist_enable_title">تفعيل تقييمات MDBList</string>
     <string name="mdblist_enable_subtitle">جلب التقييمات من مصادر خارجية في شاشة تفاصيل البيانات الوصفية.</string>
     <string name="mdblist_api_key_title">مفتاح API</string>
@@ -3167,7 +3166,6 @@
     <string name="mdblist_show_on_hero_title">استخدام التقييمات في القسم المميز</string>
     <string name="mdblist_show_on_hero_subtitle">إظهار تقييمات MDBList في القسم المميز (النمط الحديث والكلاسيكي أو الشبكي)</string>
     <string name="mdblist_rating_order_title">ترتيب التقييمات</string>
-    <string name="mdblist_rating_order_subtitle">تُعرض أول 3 تقييمات مفعّلة ومتاحة في القسم المميز الحديث. استخدم الأسهم لإعادة الترتيب.</string>
     <string name="mdblist_mal_title">MyAnimeList</string>
     <string name="official_server_action">استخدام الخادم الرسمي</string>
     <string name="official_server_description">سيتم تسجيل خروجك من الخادم المخصص وسيُعاد تشغيل التطبيق بالخدمة الرسمية.</string>
@@ -3491,4 +3489,6 @@
     <string name="library_empty_simkl_title">لا يوجد %1$s في هذه الحالة</string>
     <string name="playback_net_http2">تفعيل HTTP/2</string>
     <string name="playback_net_http2_sub">تفعيل بروتوكول HTTP/2 لاتصالات الشبكة، بما يتيح تعدد إرسال الطلبات وأوقات مصافحة أسرع.</string>
+    <string name="mdblist_subtitle">ضبط التقييمات الخارجية المعروضة في القسم المميز بصفحة التفاصيل.</string>
+    <string name="mdblist_rating_order_subtitle">First 3 enabled and available ratings are shown on the modern hero. Use the reorder button to change their order.</string>
 </resources>

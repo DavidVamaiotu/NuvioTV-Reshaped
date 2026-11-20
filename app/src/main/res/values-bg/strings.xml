@@ -1253,7 +1253,7 @@
     <string name="mdblist_show_on_hero_title">Използване на оценки за герой</string>
     <string name="mdblist_show_on_hero_subtitle">Показване на оценките от MDBList в карусела на героите (модерни и класически/мрежови)</string>
     <string name="mdblist_rating_order_title">Ред на оценяване</string>
-    <string name="mdblist_rating_order_subtitle">Първите 3 активирани и налични оценки са показани за съвременния герой. Използвайте стрелките, за да ги пренаредите.</string>
+    <string name="mdblist_rating_order_subtitle">First 3 enabled and available ratings are shown on the modern hero. Use the reorder button to change their order.</string>
     <string name="mdblist_dialog_title">Ключ за API на MDBList</string>
     <string name="mdblist_dialog_subtitle">Въведете вашия API ключ, за да получите външни оценки</string>
     <string name="mdblist_dialog_placeholder">Въведете API ключ на MDBList</string>

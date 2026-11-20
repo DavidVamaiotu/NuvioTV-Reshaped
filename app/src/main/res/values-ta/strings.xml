@@ -820,7 +820,6 @@
 
     <!-- MDBListSettingsScreen -->
     <string name="mdblist_title">எம்டிபிலிஸ்ட் மதிப்பீடுகள்</string>
-    <string name="mdblist_subtitle">விவர முக்கியப்பகுதியில் காட்டப்படும் வெளிப்புற மதிப்பீடுகளை அமை</string>
     <string name="mdblist_enable_title">எம்டிபிலிஸ்ட் மதிப்பீடுகளை இயக்கு</string>
     <string name="mdblist_enable_subtitle">மேட்டாடேட்டா விவரத்திரையில் வெளிப்புற வழங்குநர்களிலிருந்து மதிப்பீடுகளை பெறு</string>
     <string name="mdblist_api_key_title">ஏபிஐ விசை</string>
@@ -2257,4 +2256,5 @@
     <string name="library_empty_trakt_title">இந்த பட்டியலில் %1$s இல்லை</string>
     <string name="library_empty_local_subtitle">உங்கள் விருப்பங்களை சேமித்து இங்கே காணுங்கள்</string>
     <string name="library_empty_trakt_subtitle">வாட்ச்லிஸ்ட் அல்லது பட்டியல்களில் சேர்க்க விவரங்களில் + ஐ பயன்படுத்தவும்</string>
+    <string name="mdblist_subtitle">விவர முக்கியப்பகுதியில் காட்டப்படும் வெளிப்புற மதிப்பீடுகளை அமை</string>
 </resources>
