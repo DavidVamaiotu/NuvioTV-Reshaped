@@ -2364,8 +2364,10 @@ private class SubtitleOffsetRenderersFactory(
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
             .setAudioProcessors(arrayOf(gainAudioProcessor, nightModeAudioProcessor))
         val baseAudioSink = builder.build()
+        // Audio sync hook: tap the base sink so the returned sink stays a PlaybackSpeedAwareAudioSink
+        // and buildAudioRenderers keeps installing PlaybackSpeedAwareAudioRenderer.
         val playbackSpeedAwareAudioSink = PlaybackSpeedAwareAudioSink(
-            sink = baseAudioSink,
+            sink = AudioSyncTaps.wrapAudioSink(baseAudioSink),
             initialForcePcm = initialForcePcm,
             forcePcmForBluetooth = bluetoothForcePcm,
             arcPacing = false
@@ -2373,7 +2375,7 @@ private class SubtitleOffsetRenderersFactory(
         playbackSpeedAwareAudioSink.setInitialPlaybackSpeed(playbackSpeedProvider())
         builtSpeedAwareSink = playbackSpeedAwareAudioSink
         onPlaybackSpeedAwareAudioSinkCreated(playbackSpeedAwareAudioSink)
-        return AudioSyncTaps.wrapAudioSink(playbackSpeedAwareAudioSink) // AutoSync hook: audio sync fallback hears the playing audio
+        return playbackSpeedAwareAudioSink // Keep the speed-aware renderer and tap PCM exactly once.
     }
 
     /**
@@ -2435,7 +2437,7 @@ private class SubtitleOffsetRenderersFactory(
             audioOutputReady = { PassthroughOutputReturn.outputReadyNow(context) }
         )
         val playbackSpeedAwareAudioSink = PlaybackSpeedAwareAudioSink(
-            sink = iecAudioSink,
+            sink = AudioSyncTaps.wrapAudioSink(iecAudioSink),
             initialForcePcm = initialForcePcm,
             forcePcmForBluetooth = bluetoothForcePcm,
             passthroughPolicy = formatsPlan.policy,
@@ -2450,7 +2452,7 @@ private class SubtitleOffsetRenderersFactory(
         playbackSpeedAwareAudioSink.setInitialPlaybackSpeed(playbackSpeedProvider())
         builtSpeedAwareSink = playbackSpeedAwareAudioSink
         onPlaybackSpeedAwareAudioSinkCreated(playbackSpeedAwareAudioSink)
-        return AudioSyncTaps.wrapAudioSink(playbackSpeedAwareAudioSink) // AutoSync hook: audio sync fallback hears the playing audio
+        return playbackSpeedAwareAudioSink // Keep the speed-aware renderer and tap PCM exactly once.
     }
 
     override fun buildAudioRenderers(

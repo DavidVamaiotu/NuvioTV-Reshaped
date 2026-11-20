@@ -18,6 +18,7 @@ import com.nuvio.tv.ui.screens.player.autosync.AutoSyncPreferences
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncResolvedTimeline
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncSubtitleCandidate
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncSubtitleTextRetimer
+import com.nuvio.tv.ui.screens.player.autosync.AutoSyncState
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncSyncedSubtitle
 import com.nuvio.tv.ui.screens.player.autosync.AutomaticSubtitleSync
 import com.nuvio.tv.ui.screens.player.autosync.EmbeddedSubtitleTimelineLoader
@@ -205,6 +206,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
     // language that does, even when the user picked it.
     audioFallback?.arm()
 
+    val statusRun = AutoSyncSyncedSubtitle.start(selectedUrl)
     automaticSubtitleSyncJob = scope.launch {
         launch {
             val body = try {
@@ -342,6 +344,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     context,
                     "REJECT V2 - original subtitle timing kept",
                 )
+                if (!audioTakesOver) AutoSyncSyncedSubtitle.mark(selectedUrl, analysisOutcome.failureState())
                 showAutoSyncToast(
                     if (audioTakesOver) AutoSyncBubbleKind.Working else AutoSyncBubbleKind.Failure,
                     if (audioTakesOver) {
@@ -420,6 +423,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                     context,
                     "REJECT V2 - sidecar changed or apply failed",
                 )
+                AutoSyncSyncedSubtitle.mark(selectedUrl, AutoSyncState.FAILED)
                 showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
                 return@launch
             }
@@ -443,7 +447,7 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
                 }
             }
             if (!resolved.reused) resetSubtitleDelayForAutoSync()
-            AutoSyncSyncedSubtitle.mark(chosenSubtitle.url)
+            AutoSyncSyncedSubtitle.mark(chosenSubtitle.url, if (withinToleranceMs != null) AutoSyncState.NOT_NEEDED else AutoSyncState.SYNCED)
 
             val timeline = resolved.timeline
             AutoSyncDebugLog.info {
@@ -481,13 +485,14 @@ internal fun PlayerRuntimeController.maybeRunAutomaticSubtitleSync(
             audioFallback?.disarm()
             AutoSyncDebugLog.finishAndCopy(context, "failed")
             if (!stillRelevant()) return@launch
+            AutoSyncSyncedSubtitle.fail(statusRun)
             if (activeSidecarSubtitleKey == null) {
                 startSidecarAddonSubtitle(selectedSubtitle)
             }
             showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
         }
     }.also { job ->
-        job.invokeOnCompletion { selectedBodyDeferred.complete(null) }
+        job.invokeOnCompletion { selectedBodyDeferred.complete(null); AutoSyncSyncedSubtitle.end(statusRun) }
     }
 }
 
@@ -529,6 +534,7 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
     val audioFallback = AudioSyncFallback.of(this)
     audioFallback?.arm()
 
+    val statusRun = AutoSyncSyncedSubtitle.start(selectedUrl)
     automaticSubtitleSyncJob = scope.launch {
         fun streamUnchanged(): Boolean =
             currentStreamUrl == sourceUrlAtStart && isUsingMpvEngine()
@@ -590,6 +596,7 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
                     if (audioTookOver) {
                         showAutoSyncToast(AutoSyncBubbleKind.Working, context.getString(R.string.autosync_toast_failed_audio_fallback))
                     } else {
+                        AutoSyncSyncedSubtitle.mark(selectedUrl, analysisOutcome.failureState())
                         showAutoSyncToast(AutoSyncBubbleKind.Failure, context.buildAutoSyncFailureToast(analysisOutcome))
                     }
                 }
@@ -621,6 +628,7 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
                     language = PlayerSubtitleUtils.normalizeLanguageCode(chosenSubtitle.lang),
                 ) == true
                 if (!added) {
+                    AutoSyncSyncedSubtitle.mark(selectedUrl, AutoSyncState.FAILED)
                     showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
                     return@launch
                 }
@@ -638,7 +646,7 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
             }
             if (!withinTolerance) updateMpvAvailableTracks()
             if (!resolved.reused) resetSubtitleDelayForAutoSync()
-            AutoSyncSyncedSubtitle.mark(chosenSubtitle.url)
+            AutoSyncSyncedSubtitle.mark(chosenSubtitle.url, if (withinTolerance) AutoSyncState.NOT_NEEDED else AutoSyncState.SYNCED)
             showAutoSyncToast(
                 AutoSyncBubbleKind.Success,
                 context.getString(
@@ -661,13 +669,14 @@ private fun PlayerRuntimeController.runMpvAutomaticSubtitleSync(
             throw cancel
         } catch (error: Throwable) {
             Log.w(PlayerRuntimeController.TAG, "AUTO_SYNC_V2 mpv failed", error)
+            AutoSyncSyncedSubtitle.fail(statusRun)
             if (streamUnchanged() && _uiState.value.selectedAddonSubtitle?.url == selectedUrl) {
                 showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
             }
         } finally {
             if (!audioTookOver && isActive) audioFallback?.disarm()
         }
-    }
+    }.also { job -> job.invokeOnCompletion { AutoSyncSyncedSubtitle.end(statusRun) } }
 }
 
 private fun PlayerRuntimeController.isLibassAddonSubtitle(subtitle: Subtitle): Boolean =
@@ -700,6 +709,7 @@ private fun PlayerRuntimeController.runLibassAutomaticSubtitleSync(
         .distinctBy { it.url }
     val candidateByUrl = candidatesAtStart.associateBy { it.url }
 
+    val statusRun = AutoSyncSyncedSubtitle.start(selectedUrl)
     automaticSubtitleSyncJob = scope.launch {
         fun streamUnchanged(): Boolean =
             currentStreamUrl == sourceUrlAtStart && _exoPlayer === player && !isUsingMpvEngine()
@@ -764,6 +774,7 @@ private fun PlayerRuntimeController.runLibassAutomaticSubtitleSync(
             if (resolved == null) {
                 Log.d(PlayerRuntimeController.TAG, "AUTO_SYNC_V2 libass no match outcome=$analysisOutcome")
                 if (activeSubtitleUrl == selectedUrl) {
+                    AutoSyncSyncedSubtitle.mark(selectedUrl, analysisOutcome.failureState())
                     showAutoSyncToast(AutoSyncBubbleKind.Failure, context.buildAutoSyncFailureToast(analysisOutcome))
                 }
                 return@launch
@@ -795,6 +806,7 @@ private fun PlayerRuntimeController.runLibassAutomaticSubtitleSync(
                 },
             )
             if (!applied) {
+                if (stillRelevant()) AutoSyncSyncedSubtitle.mark(selectedUrl, AutoSyncState.FAILED)
                 return@launch
             }
 
@@ -810,7 +822,7 @@ private fun PlayerRuntimeController.runLibassAutomaticSubtitleSync(
                 }
             }
             if (!resolved.reused) resetSubtitleDelayForAutoSync()
-            AutoSyncSyncedSubtitle.mark(chosenSubtitle.url)
+            AutoSyncSyncedSubtitle.mark(chosenSubtitle.url, if (withinTolerance) AutoSyncState.NOT_NEEDED else AutoSyncState.SYNCED)
             showAutoSyncToast(AutoSyncBubbleKind.Success, context.getString(R.string.autosync_toast_synced))
             Log.d(
                 PlayerRuntimeController.TAG,
@@ -824,9 +836,10 @@ private fun PlayerRuntimeController.runLibassAutomaticSubtitleSync(
             throw cancel
         } catch (error: Throwable) {
             Log.w(PlayerRuntimeController.TAG, "AUTO_SYNC_V2 libass failed", error)
+            AutoSyncSyncedSubtitle.fail(statusRun)
             if (stillRelevant()) showAutoSyncToast(AutoSyncBubbleKind.Failure, context.getString(R.string.reshaped_autosync_toast_failed))
         }
-    }
+    }.also { job -> job.invokeOnCompletion { AutoSyncSyncedSubtitle.end(statusRun) } }
 }
 
 /**
@@ -936,3 +949,10 @@ private fun Context.buildAutoSyncFailureToast(analysisOutcome: AutoSyncAnalysisO
             -> R.string.reshaped_autosync_toast_failed
         },
     )
+
+private fun AutoSyncAnalysisOutcome?.failureState(): AutoSyncState = when (this) {
+    AutoSyncAnalysisOutcome.NO_SUBTITLE_TRACKS,
+    AutoSyncAnalysisOutcome.NO_USABLE_REFERENCE -> AutoSyncState.NO_REFERENCE
+    AutoSyncAnalysisOutcome.NO_FIT -> AutoSyncState.NO_FIT
+    else -> AutoSyncState.FAILED
+}

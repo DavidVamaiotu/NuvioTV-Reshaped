@@ -1,5 +1,9 @@
 package com.nuvio.tv.ui.screens.player.audiosync
 
+import android.content.Context
+import io.mockk.mockk
+import io.mockk.every
+import com.nuvio.tv.ui.screens.player.audiosync.asr.AsrModel
 import com.nuvio.tv.ui.screens.player.audiosync.asr.AsrModelFiles
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -18,6 +22,22 @@ import kotlin.test.assertTrue
 
 class AsrModelFilesTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test
+    fun installedOnnxDownloadRemainsReadyWhenOrtUpgradeIsPartial() {
+        val files = temporary.newFolder()
+        val context = mockk<Context>()
+        every { context.filesDir } returns files
+        val legacy = File(files, "audiosync/asr/gigaspeech-2023-12-12").also { it.mkdirs() }
+        sparseFiles(legacy, AsrModelFiles.legacy)
+        val ort = File(files, "audiosync/asr/gigaspeech-2023-12-12-ort-v1").also { it.mkdirs() }
+        sparseFiles(ort, AsrModelFiles.optimized.take(1))
+        assertTrue(AsrModel.isReady(context))
+        assertEquals(legacy, AsrModel.directory(context))
+        sparseFiles(ort, AsrModelFiles.optimized)
+        assertEquals(ort, AsrModel.directory(context))
+        assertTrue(legacy.isDirectory)
+    }
 
     @Test
     fun verifiedTransferPublishesOnlyTheCompleteFile() {

@@ -13,6 +13,17 @@ class AudioSyncSettingsPersistenceTest {
     }
 
     @Test
+    fun missingOrUnknownSamplingModePreservesReshapedDefaults() {
+        for (stored in listOf(null, "future-mode")) {
+            AudioSyncSettings.installPersistence({ null }, { _, _ -> }, { stored }, { _, _ -> })
+            assertTrue(AudioSyncSettings.fallbackEnabled.value)
+            assertFalse(AudioSyncSettings.showStatistics.value)
+            assertFalse(AudioSyncSettings.samplingOnMobileData.value)
+            assertEquals(AudioSamplingMode.HIGH, AudioSyncSettings.samplingMode.value)
+        }
+    }
+
+    @Test
     fun legacyMeteredOptOutSurvivesNewSamplingModes() {
         val booleans = mutableMapOf("audio_sync_sampling_on_mobile_data" to false)
         val strings = mutableMapOf<String, String>()

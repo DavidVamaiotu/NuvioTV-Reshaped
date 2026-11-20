@@ -16,10 +16,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * Settings, and the tester build also fetches it on an unmetered connection the first time it is
  * needed. Progress and errors are published to [SubtitleSyncStatus.speechModel].
  *
- * The pre-optimized ORT conversion loads faster and comes from [ORT_DOWNLOAD]; when it can't be
- * fetched, the original ONNX files come from the upstream k2-fsa repository, pinned to a commit.
- * Every file of either format is pinned by size and SHA-256 in [AsrModelFiles], so the host does
- * not have to be trusted.
+ * A pre-optimized ORT conversion, which loads faster, comes from Nuvio's mirror at [ORT_DOWNLOAD].
+ * When it cannot be fetched, the original ONNX files come from the upstream k2-fsa repository,
+ * pinned to a commit. Every file of either format is pinned by size and SHA-256 in
+ * [AsrModelFiles], so the host does not have to be trusted.
  */
 internal object AsrModel {
     const val TOKENS = "tokens.txt"
@@ -28,8 +28,13 @@ internal object AsrModel {
     private const val ONNX_VERSION = "gigaspeech-2023-12-12"
     private const val ORT_VERSION = "$ONNX_VERSION-ort-v1"
 
-    /** Where the ORT conversion of the upstream files below is hosted; pinned in [AsrModelFiles.optimized]. */
-    private val ORT_DOWNLOAD: String? = "https://github.com/DavidVamaiotu/NuvioTV-Reshaped/releases/download/asr-models-ort-v1/"
+    /**
+     * Where the ORT conversion of the upstream files below is hosted, or null to use the upstream
+     * ONNX files only. Should only ever point at a Nuvio-controlled release; the files are pinned
+     * in [AsrModelFiles.optimized] either way.
+     */
+    private val ORT_DOWNLOAD: String? =
+        "https://github.com/NuvioMedia/speech-models/releases/download/$ORT_VERSION/"
 
     /** The upstream model repository, pinned to a commit so its files cannot change under us. */
     private const val ONNX_DOWNLOAD =

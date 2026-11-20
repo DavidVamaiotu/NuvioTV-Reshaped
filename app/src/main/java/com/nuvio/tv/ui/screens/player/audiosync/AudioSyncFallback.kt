@@ -3,6 +3,7 @@
 package com.nuvio.tv.ui.screens.player.audiosync
 
 import android.content.Context
+import com.nuvio.tv.R
 import android.net.Uri
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncPreferences
 import kotlinx.coroutines.flow.combine
@@ -15,7 +16,6 @@ import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.text.CuesWithTiming
-import com.nuvio.tv.R
 import com.nuvio.tv.domain.model.Subtitle
 import com.nuvio.tv.ui.screens.player.PlayerPlaybackNetworking
 import com.nuvio.tv.ui.screens.player.PlayerRuntimeController
@@ -28,6 +28,7 @@ import com.nuvio.tv.ui.screens.player.isUsingMpvEngine
 import com.nuvio.tv.ui.screens.player.keepMpvPlayingIfNeeded
 import com.nuvio.tv.ui.screens.player.updateMpvAvailableTracks
 import com.nuvio.tv.ui.screens.player.autosync.AutomaticSubtitleSync
+import com.nuvio.tv.ui.screens.player.autosync.AutoSyncState
 import com.nuvio.tv.ui.screens.player.autosync.AutoSyncSyncedSubtitle
 import com.nuvio.tv.ui.screens.player.autosync.bubble.AutoSyncBubbleKind
 import com.nuvio.tv.ui.screens.player.autosync.bubble.showAutoSyncMessage
@@ -109,6 +110,7 @@ internal class AudioSyncFallback private constructor(
 
     /** A result to announce once the ticker has applied its mapping (or found none). */
     private var pendingStatus: AudioSyncStatus? = null
+    private var statusRun: AutoSyncSyncedSubtitle.Status? = null
 
     /** Playback time the current takeover has gone without any mapping. */
     private var unmatchedPlayedMs = 0L
@@ -222,6 +224,7 @@ internal class AudioSyncFallback private constructor(
             return false
         }
         takeOverJob?.cancel()
+        statusRun = AutoSyncSyncedSubtitle.start(url)
         if (isMpv) {
             takeOverJob = scope.launch { takeOverMpv(url) }
             return true
@@ -238,6 +241,7 @@ internal class AudioSyncFallback private constructor(
                 if (runtime._uiState.value.selectedAddonSubtitle?.url == url && runtime.currentStreamUrl == sourceUrl) {
                     showFailure(appContext.getString(R.string.player_audio_sync_failed))
                 }
+                AutoSyncSyncedSubtitle.fail(statusRun)
                 return@launch disarm()
             }
             target.set(Target(url, cues, generation))
@@ -258,6 +262,7 @@ internal class AudioSyncFallback private constructor(
         if (!isMpvShowing(url)) return disarm()
         if (cues.isEmpty()) {
             showFailure(appContext.getString(R.string.player_audio_sync_failed))
+            AutoSyncSyncedSubtitle.fail(statusRun)
             return disarm()
         }
         target.set(Target(url, cues, generation = 0L))
@@ -293,6 +298,8 @@ internal class AudioSyncFallback private constructor(
     fun stop() {
         takeOverJob?.cancel()
         takeOverJob = null
+        AutoSyncSyncedSubtitle.end(statusRun)
+        statusRun = null
         candidatesJob?.cancel()
         candidatesJob = null
         ticker?.cancel()
@@ -353,6 +360,7 @@ internal class AudioSyncFallback private constructor(
                         unmatchedReported = true
                         SyncLog.i("no audio match after ${unmatchedPlayedMs / 1_000}s of playback; still searching")
                         showFailure(appContext.getString(R.string.player_audio_sync_unmatched))
+                        AutoSyncSyncedSubtitle.fail(statusRun)
                     }
                 }
                 delay(TICK_MS)
@@ -377,9 +385,17 @@ internal class AudioSyncFallback private constructor(
                     pendingStatus = status
                 }
             }
-            AudioSyncStatus.Withdrawn, AudioSyncStatus.Failed -> {
+            AudioSyncStatus.Withdrawn -> {
                 if (controller.currentModel() == null) {
-                    AutoSyncSyncedSubtitle.clear()
+                    statusRun = AutoSyncSyncedSubtitle.start(current.url)
+                    unmatchedPlayedMs = 0L
+                    unmatchedReported = false
+                    toast(status)
+                }
+            }
+            AudioSyncStatus.Failed -> {
+                if (controller.currentModel() == null) {
+                    AutoSyncSyncedSubtitle.mark(current.url, AutoSyncState.FAILED)
                     toast(status)
                 }
             }
@@ -474,7 +490,7 @@ internal class AudioSyncFallback private constructor(
             if (cues.isEmpty() || target.get() !== current) return@launch
             if (isMpv) {
                 if (!isMpvShowing(current.url)) return@launch
-                AutoSyncSyncedSubtitle.clear()
+                statusRun = AutoSyncSyncedSubtitle.start(url)
                 // The previous copy is replaced as soon as the handed-over mapping is applied.
                 target.set(Target(url, cues, generation = 0L, mpvTrackId = current.mpvTrackId))
                 appliedModel = null
@@ -492,7 +508,7 @@ internal class AudioSyncFallback private constructor(
             )
             val generation = runtime.currentSidecarGenerationFor(url)
             if (!committed || generation == null) return@launch
-            AutoSyncSyncedSubtitle.clear()
+            statusRun = AutoSyncSyncedSubtitle.start(url)
             target.set(Target(url, cues, generation))
             appliedModel = null
             runtime._uiState.update { it.copy(selectedAddonSubtitle = subtitle, selectedSubtitleTrackIndex = -1) }

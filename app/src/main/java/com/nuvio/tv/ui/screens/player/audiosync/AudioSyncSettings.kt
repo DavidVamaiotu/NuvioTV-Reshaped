@@ -22,10 +22,10 @@ internal enum class AudioSamplingMode {
  */
 internal object AudioSyncSettings {
     // Declared first: object properties initialize in order.
-    // Tester build: high by default for the fastest sync; metered networks still get at most low.
+    // Preserve Reshaped sampling on unmetered networks; metered sampling requires its own opt-in.
     private val DEFAULT_SAMPLING_MODE = AudioSamplingMode.HIGH
 
-    // Tester build: on by default.
+    // Preserve the existing Reshaped fallback default.
     private val _fallbackEnabled = MutableStateFlow(true)
 
     /** Sync to the audio when AutoSync keeps a subtitle's original timing. */

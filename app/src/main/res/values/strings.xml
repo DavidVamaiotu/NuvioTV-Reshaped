@@ -2460,6 +2460,7 @@
     <string name="cast_detail_error">Something went wrong</string>
     <string name="cast_detail_retry">Retry</string>
     <string name="cast_detail_filmography">Filmography</string>
+    <string name="cast_detail_filter_all">All</string>
     <string name="cast_detail_born">Born: %1$s</string>
     <string name="cast_detail_born_died">Born: %1$s — †%2$s</string>
     <string name="cast_detail_age">age %1$d</string>
@@ -3518,8 +3519,14 @@
     <string name="autosync_tolerance_value">%1$d ms</string>
     <string name="autosync_thorough_title">Thorough Auto Sync Search</string>
     <string name="autosync_thorough_description">Keep comparing other subtitles and embedded tracks for a closer match before syncing. When off, the first strong match is used sooner. Only confident matches are ever applied.</string>
-    <string name="autosync_toast_no_fit">Sync failed: these subtitles don\'t match this version of the video.</string>
     <string name="autosync_label_synced">Auto synced</string>
+    <string name="autosync_status_title">Auto Sync Status</string>
+    <string name="autosync_status_synced">Synced</string>
+    <string name="autosync_status_not_needed">Not needed</string>
+    <string name="autosync_status_in_progress">In progress</string>
+    <string name="autosync_status_no_fit">May not match</string>
+    <string name="autosync_status_no_reference">No embedded subtitles</string>
+    <string name="autosync_status_failed">Failed</string>
     <string name="stream_resume_from_time">Resume from %1$s</string>
     <string name="stream_resume_from_percent">Resume from %1$d%%</string>
     <string name="playback_net_http2">Enable HTTP/2</string>
@@ -3534,4 +3541,5 @@
     <string name="library_empty_trakt_subtitle">Use + in details to add items to watchlist or lists</string>
     <string name="library_empty_simkl_title">No %1$s in this status</string>
     <string name="library_empty_simkl_subtitle">Use + in details to add items to a Simkl status</string>
+    <string name="autosync_toast_no_fit">Sync failed: these subtitles don\'t match this version of the video.</string>
 </resources>

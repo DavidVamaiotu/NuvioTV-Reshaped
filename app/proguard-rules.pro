@@ -153,3 +153,7 @@
 -dontwarn java.beans.Transient
 # JNI entry points belong to the detached seek-preview decoder.
 -keep class com.nuvio.tv.ui.screens.player.seekpreview.engine.ThumbNative { *; }
+
+# Audio Sync speech recognition uses JNI to read configuration fields by name.
+-keep class com.k2fsa.sherpa.onnx.** { *; }
+-keep interface com.k2fsa.sherpa.onnx.** { *; }

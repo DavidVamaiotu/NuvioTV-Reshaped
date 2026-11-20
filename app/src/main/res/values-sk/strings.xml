@@ -3498,7 +3498,6 @@
     <string name="web_subtitle_font_added">Pridané do vášho televízora</string>
     <string name="web_subtitle_font_error">Nepodarilo sa importovať toto písmo. Vyberte platný súbor .ttf alebo .otf menší ako 10 MB.</string>
     <string name="web_subtitle_font_connection_error">Chyba pripojenia</string>
-    <string name="autosync_toast_no_fit">Synchronizácia zlyhala: tieto titulky sa nezhodujú s touto verziou videa.</string>
 
     <!-- Retained Reshaped resource keys for existing controls and integrations. -->
     <string name="library_type_items">položiek</string>
@@ -3526,4 +3525,5 @@
     <string name="update_ready_closes_and_reopens">Sťahovanie je dokončené. Aplikácia sa počas inštalácie aktualizácie zatvorí a sama sa opäť otvorí, čo môže trvať minútu.</string>
     <string name="mdblist_subtitle">Nastavenie externých hodnotení zobrazených v detaile</string>
     <string name="mdblist_rating_order_subtitle">First 3 enabled and available ratings are shown on the modern hero. Use the reorder button to change their order.</string>
+    <string name="autosync_toast_no_fit">Synchronizácia zlyhala: tieto titulky sa nezhodujú s touto verziou videa.</string>
 </resources>
