@@ -1,5 +1,9 @@
 package com.nuvio.tv.ui.screens.player.audiosync
 
+import android.content.Context
+import io.mockk.mockk
+import io.mockk.every
+import com.nuvio.tv.ui.screens.player.audiosync.asr.AsrModel
 import com.nuvio.tv.ui.screens.player.audiosync.asr.AsrModelFiles
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -18,6 +22,22 @@ import kotlin.test.assertTrue
 
 class AsrModelFilesTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test
+    fun installedOnnxDownloadRemainsReadyWhenOrtUpgradeIsPartial() {
+        val files = temporary.newFolder()
+        val context = mockk<Context>()
+        every { context.filesDir } returns files
+        val legacy = File(files, "audiosync/asr/gigaspeech-2023-12-12").also { it.mkdirs() }
+        sparseFiles(legacy, AsrModelFiles.legacy)
+        val ort = File(files, "audiosync/asr/gigaspeech-2023-12-12-ort-v1").also { it.mkdirs() }
+        sparseFiles(ort, AsrModelFiles.optimized.take(1))
+        assertTrue(AsrModel.isReady(context))
+        assertEquals(legacy, AsrModel.directory(context))
+        sparseFiles(ort, AsrModelFiles.optimized)
+        assertEquals(ort, AsrModel.directory(context))
+        assertTrue(legacy.isDirectory)
+    }
 
     @Test
     fun verifiedTransferPublishesOnlyTheCompleteFile() {
@@ -96,7 +116,41 @@ class AsrModelFilesTest {
         assertEquals(AsrModelFiles.Format.ORT, AsrModelFiles.format(directory))
         assertEquals("cpu:${File(directory, "cpu.conf").absolutePath}",
             AsrModelFiles.provider(directory, AsrModelFiles.Format.ORT))
-        assertEquals("GraphOptimizationLevel=0\n", File(directory, "cpu.conf").readText())
+        assertEquals(
+            "GraphOptimizationLevel=0\n" +
+                "SessionConfig.session.use_memory_mapped_ort_model=1\n" +
+                "SessionConfig.session.use_ort_model_bytes_for_initializers=1\n",
+            File(directory, "cpu.conf").readText(),
+        )
+    }
+
+    @Test
+    fun lowMemoryTvsTurnTheMemoryPoolOffForEitherFormat() {
+        val ort = temporary.newFolder()
+        sparseFiles(ort, AsrModelFiles.optimized)
+        AsrModelFiles.provider(ort, AsrModelFiles.Format.ORT, lowMemory = true)
+        assertEquals(
+            "GraphOptimizationLevel=0\n" +
+                "SessionConfig.session.use_memory_mapped_ort_model=1\n" +
+                "SessionConfig.session.use_ort_model_bytes_for_initializers=1\n" +
+                "EnableCpuMemArena=0\n",
+            File(ort, "cpu.conf").readText(),
+        )
+        // The ONNX fallback keeps the runtime's graph optimization; only the pool changes.
+        val onnx = temporary.newFolder()
+        sparseFiles(onnx, AsrModelFiles.legacy)
+        assertEquals("cpu:${File(onnx, "cpu.conf").absolutePath}",
+            AsrModelFiles.provider(onnx, AsrModelFiles.Format.ONNX, lowMemory = true))
+        assertEquals("EnableCpuMemArena=0\n", File(onnx, "cpu.conf").readText())
+    }
+
+    @Test
+    fun aSettingsChangeRewritesAnEarlierConfig() {
+        val directory = temporary.newFolder()
+        sparseFiles(directory, AsrModelFiles.optimized)
+        AsrModelFiles.provider(directory, AsrModelFiles.Format.ORT, lowMemory = true)
+        AsrModelFiles.provider(directory, AsrModelFiles.Format.ORT)
+        assertFalse(File(directory, "cpu.conf").readText().contains("EnableCpuMemArena"))
     }
 
     private fun sparseFiles(directory: File, assets: List<AsrModelFiles.Asset>) {

@@ -3421,7 +3421,6 @@
     <string name="autosync_tolerance_value">%1$d ms</string>
     <string name="autosync_thorough_title">Búsqueda exhaustiva de sincronización automática</string>
     <string name="autosync_thorough_description">Continúa comparando otros subtítulos y pistas integradas para encontrar una coincidencia más precisa antes de sincronizar. Cuando está desactivada, se utiliza antes la primera coincidencia sólida. Solo se aplican coincidencias confiables.</string>
-    <string name="autosync_toast_no_fit">Error de sincronización: estos subtítulos no coinciden con esta versión del video.</string>
     <string name="autosync_label_synced">Sincronizado automáticamente</string>
     <string name="stream_resume_from_time">Reanudar desde %1$s</string>
     <string name="stream_resume_from_percent">Reanudar desde el %1$d%%</string>
@@ -3439,4 +3438,5 @@
     <string name="library_empty_simkl_subtitle">Usa el botón + en los detalles para agregar elementos a un estado de Simkl</string>
     <string name="mdblist_subtitle">Configurar calificaciones externas mostradas en la sección destacada</string>
     <string name="mdblist_rating_order_subtitle">First 3 enabled and available ratings are shown on the modern hero. Use the reorder button to change their order.</string>
+    <string name="autosync_toast_no_fit">Error de sincronización: estos subtítulos no coinciden con esta versión del video.</string>
 </resources>

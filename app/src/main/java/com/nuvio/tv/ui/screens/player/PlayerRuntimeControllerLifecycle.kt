@@ -86,6 +86,7 @@ internal fun PlayerRuntimeController.releasePlayer(
     subtitleAutoSyncLoadJob?.cancel()
     cancelAutomaticSubtitleSync() // AutoSync hook
     com.nuvio.tv.ui.screens.player.seekpreview.local.LocalPreviewSources.unregister(this) // Nuvio RS hook: on-device seek previews
+    com.nuvio.tv.ui.screens.player.audiosync.AudioSyncFallback.release(this)
     stopSidecarAddonSubtitle(clearView = true)
     subtitleTimingRefreshJob?.cancel()
     subtitleTimingRefreshJob = null

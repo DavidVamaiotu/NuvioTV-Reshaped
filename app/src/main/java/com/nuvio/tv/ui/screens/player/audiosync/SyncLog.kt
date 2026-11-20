@@ -29,11 +29,11 @@ internal object SyncLog {
     private val time = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private val url = Regex("""https?://([^/\s?#]+)[^\s]*""")
 
-    fun i(message: String) = add('I', message).also { Log.i(TAG, message) }
+    fun i(message: String) = add('I', message).also { Log.i(TAG, url.replace(message) { "<${it.groupValues[1]}>" }) }
 
-    fun w(message: String) = add('W', message).also { Log.w(TAG, message) }
+    fun w(message: String) = add('W', message).also { Log.w(TAG, url.replace(message) { "<${it.groupValues[1]}>" }) }
 
-    fun d(message: String) = add('D', message).also { Log.d(TAG, message) }
+    fun d(message: String) = add('D', message).also { Log.d(TAG, url.replace(message) { "<${it.groupValues[1]}>" }) }
 
     private fun add(level: Char, message: String) {
         val redacted = url.replace(message) { "<${it.groupValues[1]}>" }

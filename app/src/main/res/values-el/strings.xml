@@ -3328,7 +3328,6 @@
   <string name="autosync_tolerance_value">%1$d ms</string>
   <string name="autosync_thorough_title">Εξονυχιστική αναζήτηση αυτόματου συγχρονισμού</string>
   <string name="autosync_thorough_description">Συνεχίστε τη σύγκριση άλλων υποτίτλων και ενσωματωμένων κομματιών για ακριβέστερη αντιστοίχιση πριν από τον συγχρονισμό. Όταν είναι ανενεργό, χρησιμοποιείται νωρίτερα η πρώτη ισχυρή αντιστοίχιση. Εφαρμόζονται μόνο αντιστοιχίσεις υψηλής βεβαιότητας.</string>
-  <string name="autosync_toast_no_fit">Ο συγχρονισμός απέτυχε: αυτοί οι υπότιτλοι δεν ταιριάζουν με αυτή την έκδοση του βίντεο.</string>
   <string name="autosync_label_synced">Αυτόματα συγχρονισμένος</string>
   <string name="stream_resume_from_time">Συνέχεια από %1$s</string>
   <string name="stream_resume_from_percent">Συνέχεια από %1$d%%</string>
@@ -3344,4 +3343,5 @@
     <string name="library_empty_trakt_subtitle">Χρησιμοποιήστε το + στις λεπτομέρειες για προσθήκη στη watchlist ή σε λίστες</string>
     <string name="mdblist_subtitle">Διαμόρφωση εξωτερικών βαθμολογιών που εμφανίζονται στην ηρωική ενότητα λεπτομερειών</string>
     <string name="mdblist_rating_order_subtitle">First 3 enabled and available ratings are shown on the modern hero. Use the reorder button to change their order.</string>
+    <string name="autosync_toast_no_fit">Ο συγχρονισμός απέτυχε: αυτοί οι υπότιτλοι δεν ταιριάζουν με αυτή την έκδοση του βίντεο.</string>
 </resources>
