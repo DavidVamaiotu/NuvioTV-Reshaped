@@ -1,7 +1,3 @@
-- **Live TV programme guide.** Scroll through past and upcoming programmes for every channel. Open it with Guide under the preview, or ▶ in the player's channel list. Guides also match channels by name, fill in missing logos, work for every source, and load much faster when you come back.
-- **Live TV preview sound.** Previews now play sound, fading in, with a mute button under the preview (also in Settings > Nuvio Reshaped). Previews start sooner too.
-- **Rename categories.** In Live TV, open Edit categories and press ▶ on a category to give it your own name.
-- **Clearer Live TV.** Subtler buttons and rows, a solid guide, and an easier-to-read channel banner. OK on a channel now shows a Now/Next card with resolution, frame rate and audio; OK again opens the controls.
-- **Live TV fixes.** Channels that failed to start now play, the right logo shows while switching, frame rate matching works for channels that don't report one, Continue watching and unfavouriting keep your place, and Live TV frees its memory when you leave it.
-- **QR phone pages** now use the TV's Wi-Fi or Ethernet address, never a VPN's.
-- **AutoSync.** Finishing a sync no longer brings up the player controls, and the sync bubble folds away more smoothly.
+- **Nuvio Reshaped is being discontinued.** Audio sync and AutoSync are now available in the official Nuvio app, so this fork is no longer needed. This is the final Nuvio Reshaped build and no further updates will be released.
+- **Switch to the official app:** https://github.com/NuvioMedia/NuvioTV/releases
+- Thanks to everyone who took part in this challenge. I'm glad it was a successful experiment.
