@@ -1429,7 +1429,7 @@ internal class AudioSubtitleSyncController(
         private fun loadWeights(context: Context): SileroVadWeights {
             cachedWeights?.let { return it }
             return synchronized(this) {
-                cachedWeights ?: context.resources.openRawResource(R.raw.silero_vad_v5_16k).use {
+                cachedWeights ?: context.resources.openRawResource(R.raw.silero_vad_v6_16k).use {
                     SileroVadWeights.read(it)
                 }.also { cachedWeights = it }
             }

@@ -212,7 +212,7 @@ class AudioSubtitleSyncTest {
     }
 
     private fun loadWeights(): SileroVadWeights =
-        File("src/main/res/raw/silero_vad_v5_16k.bin").inputStream().use(SileroVadWeights::read)
+        File("src/main/res/raw/silero_vad_v6_16k.bin").inputStream().use(SileroVadWeights::read)
 
     private fun referenceSignal(length: Int): FloatArray {
         var state = 12_345L
@@ -302,7 +302,7 @@ class AudioSubtitleSyncTest {
     }
 
     private companion object {
-        /** Silero VAD v5 (official ONNX export, onnxruntime) on [referenceSignal], one value per 512 samples. */
+        /** Silero VAD v6.2 (official ONNX export, onnxruntime) on [referenceSignal], one value per 512 samples. */
         val REFERENCE_PROBABILITIES = floatArrayOf(
             0.5301f, 0.7079f, 0.7212f, 0.6686f, 0.5150f, 0.5388f, 0.9100f, 0.9640f, 0.8622f, 0.8879f,
             0.8539f, 0.7242f, 0.6466f, 0.6541f, 0.5937f, 0.5775f, 0.6165f, 0.8755f, 0.8050f, 0.7650f,
