@@ -814,6 +814,8 @@ open class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    com.nuvio.tv.ui.reshaped.DiscontinuedNotice()
+
                     if (needsEssentialAddonSetup) {
                         startupDestination = StartupDestination.Setup
                         EssentialAddonSetupScreen(
