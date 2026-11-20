@@ -1,3 +1,3 @@
-- Updated to upstream Nuvio TV 1.1.0-beta.9, including audio night mode and LFE downmix controls, HDR detection improvements, chapter/skip handling, and playback fixes.
-- Retained Reshaped settings, AutoSync/AudioSync, seek previews, source recovery, pill navigation, and Arc format controls. The rebuilt decoder combines upstream audio changes with Reshaped end-of-stream and per-format transcode handling.
-- Tester keeps grouped Reshaped settings and the latest held-seek TorBox filmstrip, cache, and colour-matching improvements.
+- **Nuvio Reshaped is being discontinued.** Audio sync and AutoSync are now available in the official Nuvio app, so this fork is no longer needed. This is the final Nuvio Reshaped build and no further updates will be released.
+- **Switch to the official app:** https://github.com/NuvioMedia/NuvioTV/releases
+- Thanks to everyone who took part in this challenge. I'm glad it was a successful experiment.
