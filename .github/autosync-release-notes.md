@@ -1,25 +1,3 @@
-- Added the system-installer option and optimized-install messaging while retaining Reshaped update channels and legacy migration; cancelling installation no longer triggers repeated prompts.
-- Preserved on-demand playback position across source switches while keeping Live TV/catch-up at the correct starting point; matched styled MPV subtitle sizing to ExoPlayer and updated Hebrew/Vietnamese translations.
-- Added Continue Watching selection preferences while retaining Reshaped layout and playback controls; synced upstream 1.2.0-beta.1.
-- Fixed letterbox masking over libass overlay subtitles while preserving True Black Bars, subtitle controls and Reshaped playback recovery; updated Indonesian translations.
-- Added upstream next-matching-source fallback while preserving Reshaped ranked filters, expired-link refresh, engine/audio retries and source recovery.
-- Source search results are shared and the currently playing source is focused when opening the sources panel.
-- Continue Watching retains the enriched series title and artwork when advancing to another episode while keeping the new episode details.
-- Included upstream watched-state fixes for YouTube and other single-item add-on videos, retaining pending marks across tracking-source changes.
-- Folder hero descriptions now follow the configured home scrolling layout; updated Vietnamese translations retain Reshaped resource keys.
-- Included upstream Continue Watching metadata/airdate refresh, search focus restoration, AV1 HDR10+ stripping and thermal reporting fixes.
-- Adapted stable root-screen insets to Reshaped Live TV while retaining encrypted-sample guards and Dolby Vision diagnostics.
-- Added French and Polish translations for subtitle appearance, custom-font upload and chapter controls.
-- Fixed a native streaming buffer leak when session teardown races with publication of a newly scheduled download.
-- Integrated upstream subtitle appearance, font upload and chapter controls while retaining existing Reshaped imported fonts and seek previews.
-- Expired-link refresh now hands unsuccessful attempts back to Reshaped engine retries and source recovery, and ignores results after switching sources.
-- Saved list memberships now show checkmarks consistently in the shared Home, Details, and poster list picker.
-- Included upstream HLS SPS/PPS repair, MPV audio-clock position recovery, episode restoration after process death, and slower description scrolling; retained Reshaped playback and network instrumentation.
-- DASH playback correctly recognizes encoded MIME hints in stream URLs while retaining literal plus signs and safe handling of malformed escapes.
-- Movie post-play recommendations now use end-credit chapter timing, while ignoring opening credits and retaining post-credit-tail handling.
-- Fixed a native chunk-buffer cleanup race exposed by the streaming stress suite; concurrent recycling can no longer lose a buffer during pool cleanup.
-- Included upstream Continue Watching focus retention and next-episode rebuilding fixes, plus updated Dutch translations with Reshaped AutoSync resources preserved.
-- Updated to upstream NuvioTV 1.1.0 stable, including playback, audio, subtitle selection, and updater improvements.
-- Included upstream fixes for earlier watch-state sync, refresh after navigation, CloudStream plugin lifecycle compatibility, pinned optical audio capabilities, and updated Lithuanian translations.
-- Retained Reshaped settings, AutoSync/AudioSync, secondary subtitle language fallback, seek previews, custom fonts, source recovery, pill navigation, and the combined FFmpeg decoder.
-- Preserved saved AutoSync choices while adapting upstream's restored-subtitle search and reactive settings.
+- **Nuvio Reshaped is being discontinued.** Audio sync and AutoSync are now available in the official Nuvio app, so this fork is no longer needed. This is the final Nuvio Reshaped build and no further updates will be released.
+- **Switch to the official app:** https://github.com/NuvioMedia/NuvioTV/releases
+- Thanks to everyone who took part in this challenge. I'm glad it was a successful experiment.
