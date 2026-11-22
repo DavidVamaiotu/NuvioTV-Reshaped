@@ -8,7 +8,7 @@ import androidx.media3.container.Mp4Box
 import androidx.media3.extractor.GaplessInfoHolder
 import androidx.media3.extractor.mp4.BoxParser
 import androidx.media3.extractor.mp4.TrackSampleTable
-import com.nuvio.tv.core.network.NoDelaySocketFactory
+import com.nuvio.tv.ui.screens.player.PlayerPlaybackNetworking
 import com.nuvio.tv.ui.screens.player.SubtitleSyncCue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -46,6 +46,10 @@ internal object EmbeddedSubtitleTimelineLoader {
     private const val TOTAL_TIMEOUT_MS = 7_000L
     private const val INITIAL_PROBE_BYTES = 512 * 1024
     private const val HEADER_PROBE_BYTES = 64
+    private const val METADATA_ELEMENT_PROBE_BYTES = 64 * 1024
+    private const val CUES_FALLBACK_PROBE_BYTES = 512 * 1024
+    private const val MAX_CUES_DIRECT_FETCH_BYTES = 2 * 1024 * 1024
+    private const val MAX_MP4_DIRECT_MOOV_BYTES = 4 * 1024 * 1024
     private const val TAIL_PROBE_BYTES = 4 * 1024 * 1024
     private const val MAX_SEEK_HEAD_BYTES = 2 * 1024 * 1024
     private const val MAX_INFO_BYTES = 512 * 1024
@@ -58,6 +62,10 @@ internal object EmbeddedSubtitleTimelineLoader {
     private const val DEFAULT_CUE_DURATION_MS = 5_000L
     private const val LAST_MKV_CUE_ESTIMATED_DURATION_MS = 2_000L
     private const val MAX_MKV_INTER_CUE_ESTIMATED_DURATION_MS = 4_000L
+    private const val PGS_SILENCE_BOUNDARY_MS = 10_000L
+    private const val PGS_MIN_DISPLAY_DURATION_MS = 150L
+    private const val PGS_MAX_DISPLAY_DURATION_MS = 10_000L
+    private const val PGS_MIN_EXPLICIT_DIALOGUE_DURATION_MS = 400L
     private const val MATROSKA_PGS_CODEC_ID = "S_HDMV/PGS"
     private const val MATROSKA_ASS_CODEC_ID = "S_TEXT/ASS"
     private const val MATROSKA_SSA_CODEC_ID = "S_TEXT/SSA"
@@ -109,14 +117,17 @@ internal object EmbeddedSubtitleTimelineLoader {
     private const val ID_CUE_TRACK = 0xF7L
     private const val ID_CUE_DURATION = 0xB2L
 
-    private val httpClient = OkHttpClient.Builder()
-        .socketFactory(NoDelaySocketFactory)
-        .connectTimeout(3, TimeUnit.SECONDS)
-        .readTimeout(4, TimeUnit.SECONDS)
-        .callTimeout(5, TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
+    private val httpClient: OkHttpClient by lazy {
+        // Share PlayerPlaybackNetworking's connection pool, dispatcher, IPv4-first DNS,
+        // TCP_NODELAY socket factory, and self-signed server fallback to avoid cold TLS/DNS setup.
+        PlayerPlaybackNetworking.playbackHttpClient.newBuilder()
+            .connectTimeout(3, TimeUnit.SECONDS)
+            .readTimeout(4, TimeUnit.SECONDS)
+            .callTimeout(5, TimeUnit.SECONDS)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .build()
+    }
 
     private val cacheLock = Any()
     private val cache = object : LinkedHashMap<String, CachedLoadResult>(
@@ -139,7 +150,12 @@ internal object EmbeddedSubtitleTimelineLoader {
         sourceUrl: String,
         sourceHeaders: Map<String, String> = emptyMap(),
     ) {
-        scope.launch { load(sourceUrl, sourceHeaders) }
+        scope.launch {
+            val loaded = load(sourceUrl, sourceHeaders)
+            if (loaded != null && loaded.tracks.isNotEmpty()) {
+                AutomaticSubtitleSync.warmIndexedReferences(loaded)
+            }
+        }
     }
 
     suspend fun load(
@@ -298,6 +314,7 @@ internal object EmbeddedSubtitleTimelineLoader {
                 expectedId = ID_SEEK_HEAD,
                 maxElementBytes = MAX_SEEK_HEAD_BYTES,
                 stats = stats,
+                totalLength = initialMetadata.totalLength,
             ) ?: continue
 
             parseSeekHead(seekHeadBytes).forEach { (id, relativePosition) ->
@@ -325,6 +342,7 @@ internal object EmbeddedSubtitleTimelineLoader {
                     expectedId = ID_INFO,
                     maxElementBytes = MAX_INFO_BYTES,
                     stats = stats,
+                    totalLength = initialMetadata.totalLength,
                 )
             }
             ?.let(::parseTimestampScaleNs)
@@ -345,6 +363,7 @@ internal object EmbeddedSubtitleTimelineLoader {
                 expectedId = ID_TRACKS,
                 maxElementBytes = MAX_TRACKS_BYTES,
                 stats = stats,
+                totalLength = initialMetadata.totalLength,
             )
             )?.let(::parseSubtitleTracks).orEmpty()
         if (subtitleTracks.isEmpty()) {
@@ -374,6 +393,7 @@ internal object EmbeddedSubtitleTimelineLoader {
                     expectedId = ID_CUES,
                     maxElementBytes = MAX_CUES_BYTES,
                     stats = stats,
+                    totalLength = initialMetadata.totalLength,
                 )
                 )?.let { cuesBytes ->
                 parseSubtitleCueTimelines(
@@ -406,9 +426,8 @@ internal object EmbeddedSubtitleTimelineLoader {
 
         val referenceTracks = subtitleTracks.mapNotNull { track ->
             val parsedTimeline = parsedCues[track.number] ?: return@mapNotNull null
+            // parseSubtitleCueTimelines already returns cues sorted and deduplicated by startTimeMs.
             val indexedCues = parsedTimeline.cues
-                .sortedBy { it.startTimeMs }
-                .distinctBy { it.startTimeMs }
             // ASS/SSA tracks index every sign and karaoke event along with the dialogue.
             val cues = if (isMatroskaAssCodec(track.codecId)) {
                 AutoSyncAssDialogueFilter.indexedDialogueCues(
@@ -490,19 +509,48 @@ internal object EmbeddedSubtitleTimelineLoader {
         }
 
         val moovEnd = moovLocation.position + moovLocation.size
+        val moovSizeInt = moovLocation.size.toInt()
         val moovBytes =
-            if (moovEnd <= initial.bytes.size.toLong()) {
-                initial.bytes.copyOfRange(moovLocation.position.toInt(), moovEnd.toInt())
-            } else {
-                fetchRange(
-                    sourceUrl = sourceUrl,
-                    sourceHeaders = sourceHeaders,
-                    start = moovLocation.position,
-                    length = moovLocation.size.toInt(),
-                    requirePartialContent = moovLocation.position > 0L,
-                    stats = stats,
-                    requireExactLength = true,
-                )?.bytes ?: return null
+            when {
+                moovLocation.prefetchedBytes != null &&
+                    moovLocation.prefetchedBytes.size >= moovSizeInt -> {
+                    if (moovLocation.prefetchedBytes.size == moovSizeInt) {
+                        moovLocation.prefetchedBytes
+                    } else {
+                        moovLocation.prefetchedBytes.copyOf(moovSizeInt)
+                    }
+                }
+                moovEnd <= initial.bytes.size.toLong() -> {
+                    initial.bytes.copyOfRange(moovLocation.position.toInt(), moovEnd.toInt())
+                }
+                moovLocation.prefetchedBytes != null &&
+                    moovLocation.prefetchedBytes.isNotEmpty() -> {
+                    val already = moovLocation.prefetchedBytes
+                    val remainder = fetchRange(
+                        sourceUrl = sourceUrl,
+                        sourceHeaders = sourceHeaders,
+                        start = moovLocation.position + already.size.toLong(),
+                        length = moovSizeInt - already.size,
+                        requirePartialContent = true,
+                        stats = stats,
+                        requireExactLength = true,
+                    )?.bytes ?: return null
+                    ByteArray(moovSizeInt).also { merged ->
+                        already.copyInto(merged, 0, 0, already.size)
+                        remainder.copyInto(merged, already.size, 0, remainder.size)
+                    }
+                }
+                else -> {
+                    fetchRange(
+                        sourceUrl = sourceUrl,
+                        sourceHeaders = sourceHeaders,
+                        start = moovLocation.position,
+                        length = moovSizeInt,
+                        requirePartialContent = moovLocation.position > 0L,
+                        stats = stats,
+                        requireExactLength = true,
+                    )?.bytes ?: return null
+                }
             }
 
         val moov = parseMp4MoovTextTracks(moovBytes) ?: return null
@@ -572,19 +620,35 @@ internal object EmbeddedSubtitleTimelineLoader {
 
             val headerBytes: ByteArray
             val headerOffset: Int
+            var prefetchedTail: ByteArray? = null
             if (inInitial) {
                 headerBytes = initial.bytes
                 headerOffset = position.toInt()
             } else {
+                // When jumping near EOF (typical trailing moov after mdat), fetch the tail in one
+                // request so we avoid a separate 16-byte header round-trip.
+                val remainingToEof = totalLength?.minus(position)?.takeIf { it > 0L }
+                val requestLength = if (
+                    remainingToEof != null &&
+                    remainingToEof <= MAX_MP4_DIRECT_MOOV_BYTES.toLong() &&
+                    remainingToEof <= stats.remainingByteBudget()
+                ) {
+                    remainingToEof.toInt()
+                } else {
+                    MP4_BOX_HEADER_BYTES
+                }
                 headerBytes = fetchRange(
                     sourceUrl = sourceUrl,
                     sourceHeaders = sourceHeaders,
                     start = position,
-                    length = MP4_BOX_HEADER_BYTES,
+                    length = requestLength,
                     requirePartialContent = position > 0L,
                     stats = stats,
                 )?.bytes ?: return null
                 headerOffset = 0
+                if (headerBytes.size > MP4_BOX_HEADER_BYTES) {
+                    prefetchedTail = headerBytes
+                }
             }
 
             val header = readMp4BoxHeader(
@@ -601,7 +665,11 @@ internal object EmbeddedSubtitleTimelineLoader {
             }
 
             if (header.type == Mp4Box.TYPE_moov) {
-                return Mp4BoxLocation(position = position, size = header.size)
+                return Mp4BoxLocation(
+                    position = position,
+                    size = header.size,
+                    prefetchedBytes = prefetchedTail,
+                )
             }
             if (header.size <= 0L || position > Long.MAX_VALUE - header.size) return null
             position += header.size
@@ -923,29 +991,33 @@ internal object EmbeddedSubtitleTimelineLoader {
         timestampScaleNs: Long,
         stats: RangeStats,
     ): Map<Int, IndexedSubtitleTimeline>? {
-        val fileLength = totalLength?.takeIf { it > 0L } ?: return null
-        val start = max(0L, fileLength - TAIL_PROBE_BYTES)
-        if (start == 0L) return null
+        val fileLength = totalLength?.takeIf { it > INITIAL_PROBE_BYTES.toLong() } ?: return null
+        val start = max(INITIAL_PROBE_BYTES.toLong(), fileLength - TAIL_PROBE_BYTES)
         val tailLength = (fileLength - start).coerceAtMost(TAIL_PROBE_BYTES.toLong()).toInt()
-        val candidates = fetchRange(
+        val tail = fetchRange(
             sourceUrl = sourceUrl,
             sourceHeaders = sourceHeaders,
             start = start,
             length = tailLength,
             requirePartialContent = true,
             stats = stats,
-        )?.let { tail ->
-            findElementIdOffsets(tail.bytes, ID_CUES).asReversed()
-        } ?: return null
+        ) ?: return null
+        val candidates = findElementIdOffsets(tail.bytes, ID_CUES).asReversed()
         for (relativeOffset in candidates) {
             val absolute = start + relativeOffset
-            val cuesBytes = fetchElementAt(
+            val cuesBytes = extractElementFromInitialProbe(
+                initialBytes = tail.bytes,
+                absolutePosition = relativeOffset.toLong(),
+                expectedId = ID_CUES,
+                maxElementBytes = MAX_CUES_BYTES,
+            ) ?: fetchElementAt(
                 sourceUrl = sourceUrl,
                 sourceHeaders = sourceHeaders,
                 absolutePosition = absolute,
                 expectedId = ID_CUES,
                 maxElementBytes = MAX_CUES_BYTES,
                 stats = stats,
+                totalLength = fileLength,
             ) ?: continue
             val parsed = parseSubtitleCueTimelines(
                 cuesElement = cuesBytes,
@@ -1093,6 +1165,24 @@ internal object EmbeddedSubtitleTimelineLoader {
         return result
     }
 
+    private class PrimitiveTrackCueBuffer {
+        var starts = LongArray(256)
+        var durations = LongArray(256) // <= 0L means absent
+        var size = 0
+
+        fun add(startMs: Long, durationMs: Long) {
+            val idx = size
+            if (idx == starts.size) {
+                val newCap = starts.size * 2
+                starts = starts.copyOf(newCap)
+                durations = durations.copyOf(newCap)
+            }
+            starts[idx] = startMs
+            durations[idx] = durationMs
+            size = idx + 1
+        }
+    }
+
     private fun parseSubtitleCueTimelines(
         cuesElement: ByteArray,
         subtitleTracks: List<MatroskaSubtitleTrack>,
@@ -1101,49 +1191,142 @@ internal object EmbeddedSubtitleTimelineLoader {
         val root = readElement(cuesElement, 0, cuesElement.size) ?: return emptyMap()
         if (root.id != ID_CUES) return emptyMap()
         val rootEnd = root.endWithin(cuesElement.size) ?: return emptyMap()
-        val subtitleTrackNumbers = subtitleTracks.mapTo(mutableSetOf()) { it.number }
-        val pendingByTrack = subtitleTrackNumbers.associateWith { mutableListOf<PendingIndexedCue>() }
-            .toMutableMap()
 
-        forEachChild(cuesElement, root.dataStart, rootEnd) { cuePoint ->
-            if (cuePoint.id != ID_CUE_POINT) return@forEachChild
-            val pointEnd = cuePoint.endWithin(rootEnd) ?: return@forEachChild
-            var cueTimeTicks: Long? = null
-            val positions = mutableListOf<CueTrackPosition>()
+        var maxTrackNum = 0
+        for (i in subtitleTracks.indices) {
+            val n = subtitleTracks[i].number
+            if (n > maxTrackNum) maxTrackNum = n
+        }
+        val useDirectTable = maxTrackNum in 0..256
+        val directBuffers = if (useDirectTable) arrayOfNulls<PrimitiveTrackCueBuffer>(maxTrackNum + 1) else null
+        val mapBuffers = LinkedHashMap<Int, PrimitiveTrackCueBuffer>(subtitleTracks.size * 2)
+        for (i in subtitleTracks.indices) {
+            val n = subtitleTracks[i].number
+            val buf = mapBuffers.getOrPut(n) { PrimitiveTrackCueBuffer() }
+            if (directBuffers != null && n in directBuffers.indices) {
+                directBuffers[n] = buf
+            }
+        }
 
-            forEachChild(cuesElement, cuePoint.dataStart, pointEnd) { child ->
-                when (child.id) {
-                    ID_CUE_TIME -> cueTimeTicks = readUnsigned(cuesElement, child)
-                    ID_CUE_TRACK_POSITIONS -> {
-                        val positionEnd = child.endWithin(pointEnd)
-                        if (positionEnd != null) {
-                            var trackNumber: Int? = null
-                            var durationTicks: Long? = null
-                            forEachChild(cuesElement, child.dataStart, positionEnd) { positionChild ->
-                                when (positionChild.id) {
-                                    ID_CUE_TRACK -> trackNumber = readUnsigned(cuesElement, positionChild)?.toInt()
-                                    ID_CUE_DURATION -> durationTicks = readUnsigned(cuesElement, positionChild)
-                                }
+        fun bufferForTrack(trackNumber: Int): PrimitiveTrackCueBuffer? =
+            if (directBuffers != null) {
+                if (trackNumber in directBuffers.indices) directBuffers[trackNumber] else null
+            } else {
+                mapBuffers[trackNumber]
+            }
+
+        // Reusable scratch for CueTrackPositions encountered before CueTime (rare in Matroska).
+        var deferredTracks = IntArray(8)
+        var deferredDurations = LongArray(8)
+        var deferredCount = 0
+
+        // Zero-allocation inline EBML scanner for Cues -> CuePoint -> CueTime / CueTrackPositions.
+        var pos = root.dataStart
+        var cuePointCount = 0
+        while (pos < rootEnd && cuePointCount++ < 1_000_000) {
+            val cpIdLen = vintLengthInt(cuesElement[pos].toInt() and 0xFF)
+            if (cpIdLen <= 0 || cpIdLen > 4 || pos + cpIdLen >= rootEnd) break
+            val cpId = readRawId(cuesElement, pos, cpIdLen)
+            val cpSizeOff = pos + cpIdLen
+            val cpSizeLen = vintLengthInt(cuesElement[cpSizeOff].toInt() and 0xFF)
+            if (cpSizeLen <= 0 || cpSizeLen > 8 || cpSizeOff + cpSizeLen > rootEnd) break
+            val cpSize = readVintSize(cuesElement, cpSizeOff, cpSizeLen)
+            if (cpSize < 0L || cpSize > Int.MAX_VALUE) break
+            val cpDataStart = cpSizeOff + cpSizeLen
+            val cpEndLong = cpDataStart.toLong() + cpSize
+            if (cpEndLong > rootEnd.toLong()) break
+            val cpEnd = cpEndLong.toInt()
+            if (cpEnd <= pos) break
+            pos = cpEnd
+
+            if (cpId != ID_CUE_POINT) continue
+
+            var cueTimeMs = -1L
+            var hasCueTime = false
+            deferredCount = 0
+
+            var childPos = cpDataStart
+            while (childPos < cpEnd) {
+                val cIdLen = vintLengthInt(cuesElement[childPos].toInt() and 0xFF)
+                if (cIdLen <= 0 || cIdLen > 4 || childPos + cIdLen >= cpEnd) break
+                val cId = readRawId(cuesElement, childPos, cIdLen)
+                val cSizeOff = childPos + cIdLen
+                val cSizeLen = vintLengthInt(cuesElement[cSizeOff].toInt() and 0xFF)
+                if (cSizeLen <= 0 || cSizeLen > 8 || cSizeOff + cSizeLen > cpEnd) break
+                val cSize = readVintSize(cuesElement, cSizeOff, cSizeLen)
+                if (cSize < 0L || cSize > Int.MAX_VALUE) break
+                val cDataStart = cSizeOff + cSizeLen
+                val cEndLong = cDataStart.toLong() + cSize
+                if (cEndLong > cpEnd.toLong()) break
+                val cEnd = cEndLong.toInt()
+                if (cEnd <= childPos) break
+                childPos = cEnd
+
+                if (cId == ID_CUE_TIME) {
+                    val ticks = readUnsignedInline(cuesElement, cDataStart, cSize.toInt())
+                    if (ticks >= 0L) {
+                        val ms = ticksToMs(ticks, timestampScaleNs)
+                        if (ms != null) {
+                            cueTimeMs = ms
+                            hasCueTime = true
+                        }
+                    }
+                } else if (cId == ID_CUE_TRACK_POSITIONS) {
+                    var trackNumber = -1
+                    var durationTicks = -1L
+                    var tpPos = cDataStart
+                    while (tpPos < cEnd) {
+                        val tpIdLen = vintLengthInt(cuesElement[tpPos].toInt() and 0xFF)
+                        if (tpIdLen <= 0 || tpIdLen > 4 || tpPos + tpIdLen >= cEnd) break
+                        val tpId = readRawId(cuesElement, tpPos, tpIdLen)
+                        val tpSizeOff = tpPos + tpIdLen
+                        val tpSizeLen = vintLengthInt(cuesElement[tpSizeOff].toInt() and 0xFF)
+                        if (tpSizeLen <= 0 || tpSizeLen > 8 || tpSizeOff + tpSizeLen > cEnd) break
+                        val tpSize = readVintSize(cuesElement, tpSizeOff, tpSizeLen)
+                        if (tpSize < 0L || tpSize > Int.MAX_VALUE) break
+                        val tpDataStart = tpSizeOff + tpSizeLen
+                        val tpEndLong = tpDataStart.toLong() + tpSize
+                        if (tpEndLong > cEnd.toLong()) break
+                        val tpEnd = tpEndLong.toInt()
+                        if (tpEnd <= tpPos) break
+                        tpPos = tpEnd
+
+                        if (tpId == ID_CUE_TRACK) {
+                            val v = readUnsignedInline(cuesElement, tpDataStart, tpSize.toInt())
+                            if (v >= 0L) trackNumber = v.toInt()
+                        } else if (tpId == ID_CUE_DURATION) {
+                            val v = readUnsignedInline(cuesElement, tpDataStart, tpSize.toInt())
+                            if (v >= 0L) durationTicks = v
+                        }
+                    }
+                    if (trackNumber >= 0) {
+                        val targetBuf = bufferForTrack(trackNumber)
+                        if (targetBuf != null) {
+                            val durMs = if (durationTicks > 0L) {
+                                ticksToMs(durationTicks, timestampScaleNs)?.takeIf { it > 0L } ?: 0L
+                            } else {
+                                0L
                             }
-                            trackNumber?.let { positions += CueTrackPosition(it, durationTicks) }
+                            if (hasCueTime) {
+                                targetBuf.add(cueTimeMs, durMs)
+                            } else {
+                                if (deferredCount == deferredTracks.size) {
+                                    deferredTracks = deferredTracks.copyOf(deferredTracks.size * 2)
+                                    deferredDurations = deferredDurations.copyOf(deferredDurations.size * 2)
+                                }
+                                deferredTracks[deferredCount] = trackNumber
+                                deferredDurations[deferredCount] = durMs
+                                deferredCount++
+                            }
                         }
                     }
                 }
             }
 
-            val timeTicks = cueTimeTicks ?: return@forEachChild
-            val startMs = ticksToMs(timeTicks, timestampScaleNs) ?: return@forEachChild
-            positions.forEach { position ->
-                if (position.trackNumber !in subtitleTrackNumbers) return@forEach
-                val durationMs = position.durationTicks
-                    ?.let { ticksToMs(it, timestampScaleNs) }
-                    ?.takeIf { it > 0L }
-                pendingByTrack[position.trackNumber]?.add(
-                    PendingIndexedCue(
-                        startTimeMs = startMs,
-                        explicitDurationMs = durationMs,
-                    ),
-                )
+            if (hasCueTime && deferredCount > 0) {
+                for (i in 0 until deferredCount) {
+                    bufferForTrack(deferredTracks[i])?.add(cueTimeMs, deferredDurations[i])
+                }
             }
         }
 
@@ -1156,7 +1339,7 @@ internal object EmbeddedSubtitleTimelineLoader {
                     !track.commentary
             }
             .mapNotNull { track ->
-                pendingByTrack[track.number]
+                mapBuffers[track.number]
                     ?.size
                     ?.takeIf { it >= MIN_INDEXED_CUES }
             }
@@ -1166,117 +1349,381 @@ internal object EmbeddedSubtitleTimelineLoader {
             .takeIf { it.isNotEmpty() }
             ?.let { counts -> counts[counts.size / 2] }
 
-        return pendingByTrack.mapValues { (trackNumber, pending) ->
-            val sorted = pending
-                .sortedBy { it.startTimeMs }
-                .distinctBy { it.startTimeMs }
-
-            if (tracksByNumber[trackNumber]?.codecId.equals(MATROSKA_PGS_CODEC_ID, ignoreCase = true)) {
-                buildPgsIndexedTimeline(
-                    sorted = sorted,
-                    peerDialogueCueCount = peerDialogueCueCount,
+        val out = LinkedHashMap<Int, IndexedSubtitleTimeline>(mapBuffers.size * 2)
+        for ((trackNumber, buf) in mapBuffers) {
+            val uniqueSize = sortAndDeduplicateInPlace(buf)
+            val trackMeta = tracksByNumber[trackNumber]
+            if (trackMeta?.codecId.equals(MATROSKA_PGS_CODEC_ID, ignoreCase = true)) {
+                out[trackNumber] = buildPgsIndexedTimelinePrimitive(
+                    starts = buf.starts,
+                    durations = buf.durations,
+                    count = uniqueSize,
+                    peerDialogueCueCount = if (trackMeta?.forced == true) null else peerDialogueCueCount,
                 )
             } else {
-                buildDefaultIndexedTimeline(sorted)
+                out[trackNumber] = buildDefaultIndexedTimelinePrimitive(
+                    starts = buf.starts,
+                    durations = buf.durations,
+                    count = uniqueSize,
+                )
             }
         }
+        return out
+    }
+
+    private fun sortAndDeduplicateInPlace(buf: PrimitiveTrackCueBuffer): Int {
+        val n = buf.size
+        if (n <= 1) return n
+        val starts = buf.starts
+        val durations = buf.durations
+
+        var sorted = true
+        var strictlyAscending = true
+        for (i in 1 until n) {
+            val prev = starts[i - 1]
+            val cur = starts[i]
+            if (cur < prev) {
+                sorted = false
+                strictlyAscending = false
+                break
+            } else if (cur == prev) {
+                strictlyAscending = false
+            }
+        }
+        if (strictlyAscending) return n
+
+        if (!sorted) {
+            // Stable sort by startTimeMs via index permutation so first duplicate matches sortedBy.
+            val indices = Array(n) { it }
+            indices.sortWith(compareBy<Int> { starts[it] }.thenBy { it })
+            val newStarts = LongArray(n)
+            val newDurations = LongArray(n)
+            var outIdx = 0
+            var lastStart = Long.MIN_VALUE
+            for (k in 0 until n) {
+                val src = indices[k]
+                val s = starts[src]
+                if (outIdx == 0 || s != lastStart) {
+                    newStarts[outIdx] = s
+                    newDurations[outIdx] = durations[src]
+                    lastStart = s
+                    outIdx++
+                }
+            }
+            buf.starts = newStarts
+            buf.durations = newDurations
+            buf.size = outIdx
+            return outIdx
+        }
+
+        // Already sorted, just compact consecutive duplicate startTimeMs in-place.
+        var outIdx = 1
+        var lastStart = starts[0]
+        for (i in 1 until n) {
+            val s = starts[i]
+            if (s != lastStart) {
+                if (outIdx != i) {
+                    starts[outIdx] = s
+                    durations[outIdx] = durations[i]
+                }
+                lastStart = s
+                outIdx++
+            }
+        }
+        buf.size = outIdx
+        return outIdx
     }
 
     /**
-     * PGS commonly indexes both a visible display and the later clear display set. AutoSync only
-     * needs the resulting visibility interval, not the bitmap. Pair those events only when that
-     * interpretation is supported by peer text-track density (when available); otherwise preserve
-     * the original cue timeline. This keeps the fast O(n), zero-extra-I/O path conservative.
+     * PGS commonly indexes both a visible display set and a later clear display set, but real
+     * Blu-ray tracks also contain back-to-back dialogue transitions (no intervening clear) and
+     * rapid multi-object updates. Blind `index += 2` pairing inverts the rest of the film after a
+     * single unpaired event.
+     *
+     * Instead, split the timestamp sequence into runs separated by silent gaps exceeding
+     * [PGS_SILENCE_BOUNDARY_MS] (which are guaranteed clear -> next-display boundaries). Clean
+     * even-length runs pair directly; odd-length or anomalous runs use a tiny 2-state DP
+     * (OFF_SCREEN / ON_SCREEN) so back-to-back displays are handled without ever inverting phase.
      */
-    private fun buildPgsIndexedTimeline(
-        sorted: List<PendingIndexedCue>,
+    private fun buildPgsIndexedTimelinePrimitive(
+        starts: LongArray,
+        durations: LongArray,
+        count: Int,
         peerDialogueCueCount: Int?,
     ): IndexedSubtitleTimeline {
-        if (sorted.size < 2) {
+        if (count < 2) {
             return IndexedSubtitleTimeline(
                 cues = emptyList(),
                 estimatedEndStartsMs = emptySet(),
             )
         }
 
-        val pairedCount = sorted.size / 2
-        val explicitDurationCount = sorted.count { (it.explicitDurationMs ?: 0L) > 0L }
-        val shouldPair = if (peerDialogueCueCount != null) {
-            val rawDelta = if (sorted.size >= peerDialogueCueCount) {
-                sorted.size - peerDialogueCueCount
+        val pairedCount = count / 2
+        var explicitDurationCount = 0
+        var plausibleExplicitCount = 0
+        for (i in 0 until count) {
+            val d = durations[i]
+            if (d > 0L) {
+                explicitDurationCount++
+                if (d >= PGS_MIN_EXPLICIT_DIALOGUE_DURATION_MS) plausibleExplicitCount++
+            }
+        }
+        // Only treat explicit durations as evidence of pre-paired cues when most entries carry
+        // realistic dialogue durations (not 1-frame 41ms muxer packet durations).
+        val hasPlausibleExplicitDurations =
+            plausibleExplicitCount.toLong() * 4L >= count.toLong() * 3L
+
+        val shouldPair = if (peerDialogueCueCount != null && !hasPlausibleExplicitDurations) {
+            val rawDelta = if (count >= peerDialogueCueCount) {
+                count - peerDialogueCueCount
             } else {
-                peerDialogueCueCount - sorted.size
+                peerDialogueCueCount - count
             }
             val pairedDelta = if (pairedCount >= peerDialogueCueCount) {
                 pairedCount - peerDialogueCueCount
             } else {
                 peerDialogueCueCount - pairedCount
             }
-
-            // Require a material improvement, not a marginal count coincidence.
             pairedDelta.toLong() * 3L <= rawDelta.toLong() * 2L
         } else {
-            // With no peer text track, explicit durations on most entries are evidence that the
-            // index already represents visible cues rather than alternating display/clear events.
-            explicitDurationCount.toLong() * 4L < sorted.size.toLong() * 3L
+            !hasPlausibleExplicitDurations
         }
 
         if (!shouldPair) {
-            return buildDefaultIndexedTimeline(sorted)
+            return buildDefaultIndexedTimelinePrimitive(starts, durations, count)
         }
 
-        val cues = ArrayList<SubtitleSyncCue>(pairedCount)
-        var index = 0
-        while (index + 1 < sorted.size) {
-            val display = sorted[index]
-            val clear = sorted[index + 1]
-            if (clear.startTimeMs > display.startTimeMs) {
-                val explicitEndMs = display.explicitDurationMs
-                    ?.takeIf { duration ->
-                        duration > 0L && display.startTimeMs <= Long.MAX_VALUE - duration
-                    }
-                    ?.let { duration -> display.startTimeMs + duration }
-                val endTimeMs = explicitEndMs
-                    ?.coerceAtMost(clear.startTimeMs)
-                    ?: clear.startTimeMs
-
-                if (endTimeMs > display.startTimeMs) {
-                    cues += SubtitleSyncCue(
-                        startTimeMs = display.startTimeMs,
-                        endTimeMs = endTimeMs,
-                        text = "",
-                    )
-                }
+        val cues = ArrayList<SubtitleSyncCue>(pairedCount + 16)
+        val estimatedEndStartsMs = HashSet<Long>()
+        var runStart = 0
+        while (runStart < count) {
+            var runEnd = runStart
+            while (
+                runEnd + 1 < count &&
+                starts[runEnd + 1] - starts[runEnd] <= PGS_SILENCE_BOUNDARY_MS
+            ) {
+                runEnd++
             }
-            index += 2
+            emitPgsRunCues(
+                starts = starts,
+                durations = durations,
+                runStart = runStart,
+                runEnd = runEnd,
+                outCues = cues,
+                outEstimatedStarts = estimatedEndStartsMs,
+            )
+            runStart = runEnd + 1
         }
 
         return IndexedSubtitleTimeline(
             cues = cues,
-            estimatedEndStartsMs = emptySet(),
+            estimatedEndStartsMs = if (estimatedEndStartsMs.isEmpty()) emptySet() else estimatedEndStartsMs,
         )
     }
 
-    private fun buildDefaultIndexedTimeline(
-        sorted: List<PendingIndexedCue>,
-    ): IndexedSubtitleTimeline {
-        val estimatedEndStartsMs = HashSet<Long>()
+    private fun emitPgsRunCues(
+        starts: LongArray,
+        durations: LongArray,
+        runStart: Int,
+        runEnd: Int,
+        outCues: MutableList<SubtitleSyncCue>,
+        outEstimatedStarts: MutableSet<Long>,
+    ) {
+        val len = runEnd - runStart + 1
+        if (len == 1) {
+            val s = starts[runStart]
+            val explicitDur = durations[runStart]
+            val dur = if (explicitDur >= PGS_MIN_EXPLICIT_DIALOGUE_DURATION_MS) {
+                explicitDur
+            } else {
+                outEstimatedStarts += s
+                LAST_MKV_CUE_ESTIMATED_DURATION_MS
+            }
+            outCues += SubtitleSyncCue(startTimeMs = s, endTimeMs = s + dur, text = "")
+            return
+        }
 
-        val cues = sorted.mapIndexed { index, cue ->
-            val durationMs = cue.explicitDurationMs ?: run {
-                estimatedEndStartsMs += cue.startTimeMs
-                val nextStartMs = sorted.getOrNull(index + 1)?.startTimeMs
-                if (nextStartMs != null && nextStartMs > cue.startTimeMs) {
-                    (nextStartMs - cue.startTimeMs)
+        // Fast path: clean even-length run where every (2k, 2k+1) pair is a normal display->clear.
+        if ((len and 1) == 0) {
+            var clean = true
+            var i = runStart
+            while (i < runEnd) {
+                val dur = starts[i + 1] - starts[i]
+                if (dur < PGS_MIN_DISPLAY_DURATION_MS || dur > PGS_MAX_DISPLAY_DURATION_MS) {
+                    clean = false
+                    break
+                }
+                i += 2
+            }
+            if (clean) {
+                var idx = runStart
+                while (idx < runEnd) {
+                    val displayStart = starts[idx]
+                    val clearStart = starts[idx + 1]
+                    val explicitDur = durations[idx]
+                    val endTimeMs = if (
+                        explicitDur >= PGS_MIN_EXPLICIT_DIALOGUE_DURATION_MS &&
+                        displayStart <= Long.MAX_VALUE - explicitDur
+                    ) {
+                        minOf(displayStart + explicitDur, clearStart)
+                    } else {
+                        clearStart
+                    }
+                    if (endTimeMs > displayStart) {
+                        outCues += SubtitleSyncCue(displayStart, endTimeMs, "")
+                    }
+                    idx += 2
+                }
+                return
+            }
+        }
+
+        // General path: odd-length or anomalous run (back-to-back displays without clear, or
+        // rapid stacked-object updates). Solve with a tiny 2-state DP over the run:
+        //   state 0 = OFF_SCREEN after event k (event k cleared the screen)
+        //   state 1 = ON_SCREEN after event k (event k started a display; previous display if any ended)
+        // Event 0 must enter ON_SCREEN; event len-1 must exit to OFF_SCREEN.
+        val costOff = DoubleArray(len) { Double.POSITIVE_INFINITY }
+        val costOn = DoubleArray(len) { Double.POSITIVE_INFINITY }
+        val prevOffFromOn = IntArray(len) { -1 } // index of the display that this clear closes
+        val prevOnAction = ByteArray(len) // 0 = from OFF(i-1), 1 = REPLACE from ON(i-1)
+        costOn[0] = 0.0
+
+        for (k in 1 until len) {
+            val dt = starts[runStart + k] - starts[runStart + k - 1]
+            val durPenalty = pgsDurationPenalty(dt)
+
+            // Transition to OFF_SCREEN at k: closes display that started at k-1 (ON at k-1).
+            if (costOn[k - 1].isFinite() && dt <= PGS_MAX_DISPLAY_DURATION_MS) {
+                val c = costOn[k - 1] + durPenalty
+                if (c < costOff[k]) {
+                    costOff[k] = c
+                    prevOffFromOn[k] = k - 1
+                }
+            }
+            // Also allow absorbing 1 rapid intermediate update (< 300ms) inside one display:
+            // display started at k-2 (ON), update at k-1, clear at k.
+            if (k >= 2 && costOn[k - 2].isFinite()) {
+                val dtUpdate = starts[runStart + k - 1] - starts[runStart + k - 2]
+                val dtTotal = starts[runStart + k] - starts[runStart + k - 2]
+                if (dtUpdate < 300L && dtTotal in PGS_MIN_DISPLAY_DURATION_MS..PGS_MAX_DISPLAY_DURATION_MS) {
+                    val c = costOn[k - 2] + 0.6 + pgsDurationPenalty(dtTotal)
+                    if (c < costOff[k]) {
+                        costOff[k] = c
+                        prevOffFromOn[k] = k - 2
+                    }
+                }
+            }
+
+            // Transition to ON_SCREEN at k (only for k < len - 1; last event in run clears):
+            if (k < len - 1) {
+                // Option A: normal display after OFF_SCREEN at k-1.
+                if (costOff[k - 1].isFinite()) {
+                    val gapPenalty = if (dt < 40L) 0.4 else 0.0
+                    val c = costOff[k - 1] + gapPenalty
+                    if (c < costOn[k]) {
+                        costOn[k] = c
+                        prevOnAction[k] = 0
+                    }
+                }
+                // Option B: back-to-back display replacement (ON at k-1 -> ends old cue at k, starts new cue at k).
+                if (costOn[k - 1].isFinite() && dt <= PGS_MAX_DISPLAY_DURATION_MS) {
+                    val c = costOn[k - 1] + 1.15 + durPenalty
+                    if (c < costOn[k]) {
+                        costOn[k] = c
+                        prevOnAction[k] = 1
+                    }
+                }
+            }
+        }
+
+        if (!costOff[len - 1].isFinite()) {
+            // Fallback: emit consecutive intervals capped at MAX_MKV_INTER_CUE_ESTIMATED_DURATION_MS.
+            for (k in 0 until len - 1) {
+                val s = starts[runStart + k]
+                val e = minOf(starts[runStart + k + 1], s + MAX_MKV_INTER_CUE_ESTIMATED_DURATION_MS)
+                if (e > s) outCues += SubtitleSyncCue(s, e, "")
+            }
+            return
+        }
+
+        // Backtrack cues in reverse order
+        val runCues = ArrayList<SubtitleSyncCue>(len / 2 + 2)
+        var k = len - 1
+        var stateOff = true
+        while (k > 0) {
+            if (stateOff) {
+                val displayK = prevOffFromOn[k]
+                if (displayK < 0) break
+                val displayStart = starts[runStart + displayK]
+                val clearStart = starts[runStart + k]
+                if (clearStart > displayStart) {
+                    runCues += SubtitleSyncCue(displayStart, clearStart, "")
+                }
+                k = displayK
+                stateOff = false
+            } else {
+                if (prevOnAction[k] == 1.toByte()) {
+                    // Back-to-back replacement: previous cue ran [k-1, k]
+                    val prevStart = starts[runStart + k - 1]
+                    val curStart = starts[runStart + k]
+                    if (curStart > prevStart) {
+                        runCues += SubtitleSyncCue(prevStart, curStart, "")
+                    }
+                    k -= 1
+                    stateOff = false
+                } else {
+                    k -= 1
+                    stateOff = true
+                }
+            }
+        }
+        runCues.reverse()
+        outCues.addAll(runCues)
+    }
+
+    private fun pgsDurationPenalty(durationMs: Long): Double = when {
+        durationMs < 150L -> 2.5
+        durationMs < 350L -> 0.5
+        durationMs <= 6_500L -> 0.0
+        durationMs <= 8_500L -> 0.35
+        else -> 1.0
+    }
+
+    private fun buildDefaultIndexedTimelinePrimitive(
+        starts: LongArray,
+        durations: LongArray,
+        count: Int,
+    ): IndexedSubtitleTimeline {
+        var estimatedCount = 0
+        for (i in 0 until count) {
+            if (durations[i] <= 0L) estimatedCount++
+        }
+        val estimatedEndStartsMs: Set<Long> = if (estimatedCount == 0) {
+            emptySet()
+        } else {
+            HashSet<Long>((estimatedCount * 4) / 3 + 2)
+        }
+        val estimatedMutable = estimatedEndStartsMs as? HashSet<Long>
+        val cues = ArrayList<SubtitleSyncCue>(count)
+        for (index in 0 until count) {
+            val startMs = starts[index]
+            val explicit = durations[index]
+            val durationMs = if (explicit > 0L) {
+                explicit
+            } else {
+                estimatedMutable?.add(startMs)
+                if (index + 1 < count && starts[index + 1] > startMs) {
+                    (starts[index + 1] - startMs)
                         .coerceAtMost(MAX_MKV_INTER_CUE_ESTIMATED_DURATION_MS)
                         .coerceAtLeast(1L)
                 } else {
                     LAST_MKV_CUE_ESTIMATED_DURATION_MS
                 }
             }
-            SubtitleSyncCue(
-                startTimeMs = cue.startTimeMs,
-                endTimeMs = cue.startTimeMs + durationMs,
+            cues += SubtitleSyncCue(
+                startTimeMs = startMs,
+                endTimeMs = startMs + durationMs,
                 text = "",
             )
         }
@@ -1285,6 +1732,38 @@ internal object EmbeddedSubtitleTimelineLoader {
             cues = cues,
             estimatedEndStartsMs = estimatedEndStartsMs,
         )
+    }
+
+    private fun vintLengthInt(firstByte: Int): Int {
+        if (firstByte == 0) return 0
+        return Integer.numberOfLeadingZeros(firstByte) - 23
+    }
+
+    private fun readRawId(bytes: ByteArray, offset: Int, idLength: Int): Long {
+        var id = 0L
+        for (i in 0 until idLength) {
+            id = (id shl 8) or (bytes[offset + i].toLong() and 0xFFL)
+        }
+        return id
+    }
+
+    private fun readVintSize(bytes: ByteArray, offset: Int, sizeLength: Int): Long {
+        val markerMask = 1 shl (8 - sizeLength)
+        var sizeValue = (bytes[offset].toInt() and (markerMask - 1)).toLong()
+        for (i in 1 until sizeLength) {
+            sizeValue = (sizeValue shl 8) or (bytes[offset + i].toLong() and 0xFFL)
+        }
+        val unknownValue = (1L shl (7 * sizeLength)) - 1L
+        return if (sizeValue == unknownValue) -1L else sizeValue
+    }
+
+    private fun readUnsignedInline(bytes: ByteArray, offset: Int, size: Int): Long {
+        if (size !in 1..8 || offset + size > bytes.size) return -1L
+        var value = 0L
+        for (i in offset until offset + size) {
+            value = (value shl 8) or (bytes[i].toLong() and 0xFFL)
+        }
+        return value
     }
 
     private fun isMatroskaAssCodec(codecId: String?): Boolean =
@@ -1346,46 +1825,65 @@ internal object EmbeddedSubtitleTimelineLoader {
         expectedId: Long,
         maxElementBytes: Int,
         stats: RangeStats,
+        totalLength: Long? = null,
     ): ByteArray? {
         if (absolutePosition < 0L) return null
-        val headerProbe = fetchRange(
+        val budgetInt = stats.remainingByteBudget().coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        if (budgetInt <= 0) return null
+
+        val remainingToEof = totalLength?.minus(absolutePosition)?.takeIf { it > 0L }
+        val probeLength = when {
+            expectedId == ID_CUES && remainingToEof != null &&
+                remainingToEof <= MAX_CUES_DIRECT_FETCH_BYTES.toLong() ->
+                minOf(remainingToEof.toInt(), maxElementBytes, budgetInt)
+            expectedId == ID_CUES ->
+                minOf(CUES_FALLBACK_PROBE_BYTES, maxElementBytes, budgetInt)
+            remainingToEof != null && remainingToEof <= METADATA_ELEMENT_PROBE_BYTES.toLong() ->
+                minOf(remainingToEof.toInt(), maxElementBytes, budgetInt)
+            else ->
+                minOf(METADATA_ELEMENT_PROBE_BYTES, maxElementBytes, budgetInt)
+        }.coerceAtLeast(minOf(HEADER_PROBE_BYTES, budgetInt))
+
+        val probe = fetchRange(
             sourceUrl = sourceUrl,
             sourceHeaders = sourceHeaders,
             start = absolutePosition,
-            length = HEADER_PROBE_BYTES,
+            length = probeLength,
             requirePartialContent = absolutePosition > 0L,
             stats = stats,
         ) ?: return null
-        val header = readElement(headerProbe.bytes, 0, headerProbe.bytes.size) ?: return null
+        val header = readElement(probe.bytes, 0, probe.bytes.size) ?: return null
         if (header.id != expectedId || header.size == null) return null
         val totalSize = header.headerSize.toLong() + header.size
-        if (totalSize <= 0L) return null
-        if (totalSize > maxElementBytes.toLong()) {
-            return null
-        }
-        if (totalSize > stats.remainingByteBudget()) {
-            return null
-        }
-        if (totalSize <= headerProbe.bytes.size) {
-            return if (totalSize == headerProbe.bytes.size.toLong()) {
-                headerProbe.bytes
+        if (totalSize <= 0L || totalSize > maxElementBytes.toLong()) return null
+
+        val totalSizeInt = totalSize.toInt()
+        if (totalSizeInt <= probe.bytes.size) {
+            return if (totalSizeInt == probe.bytes.size) {
+                probe.bytes
             } else {
-                // At most HEADER_PROBE_BYTES (64 B), so this tiny trim is intentionally harmless.
-                headerProbe.bytes.copyOf(totalSize.toInt())
+                probe.bytes.copyOf(totalSizeInt)
             }
         }
 
-        // The large element is read directly into one exact-size array. Avoid ByteArrayOutputStream
-        // and a second copy, which matters for a multi-megabyte Cues index.
-        return fetchRange(
+        val remaining = totalSizeInt - probe.bytes.size
+        if (remaining.toLong() > stats.remainingByteBudget()) return null
+
+        // Fetch only the unread tail so we never re-download the initial chunk.
+        val tail = fetchRange(
             sourceUrl = sourceUrl,
             sourceHeaders = sourceHeaders,
-            start = absolutePosition,
-            length = totalSize.toInt(),
-            requirePartialContent = absolutePosition > 0L,
+            start = absolutePosition + probe.bytes.size.toLong(),
+            length = remaining,
+            requirePartialContent = true,
             stats = stats,
             requireExactLength = true,
-        )?.bytes
+        )?.bytes ?: return null
+
+        return ByteArray(totalSizeInt).also { combined ->
+            probe.bytes.copyInto(combined, 0, 0, probe.bytes.size)
+            tail.copyInto(combined, probe.bytes.size, 0, tail.size)
+        }
     }
 
     private suspend fun fetchRange(
@@ -1667,6 +2165,7 @@ internal object EmbeddedSubtitleTimelineLoader {
     private data class Mp4BoxLocation(
         val position: Long,
         val size: Long,
+        val prefetchedBytes: ByteArray? = null,
     )
 
     private data class Mp4BoxHeader(
