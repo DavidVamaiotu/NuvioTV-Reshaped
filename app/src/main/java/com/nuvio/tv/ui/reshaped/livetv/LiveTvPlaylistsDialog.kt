@@ -186,6 +186,86 @@ internal fun LiveTvPlaylistsDialog(onDismiss: () -> Unit, openOnly: String? = nu
     }
 }
 
+/**
+ * Held OK on a channel in the player's panel: Favorites and the viewer's playlists, ticked where
+ * the channel is. OK puts it in or takes it out and the dialog stays, so it can go in several;
+ * New playlist makes one with the channel in it.
+ */
+@Composable
+internal fun LiveTvAddToListDialog(channel: LiveTvChannel, onDismiss: () -> Unit) {
+    val uiState by LiveTvRepository.uiState.collectAsStateWithLifecycle()
+    var naming by remember { mutableStateOf(false) }
+    if (naming) {
+        LiveTvNewListDialog(
+            channels = listOf(channel),
+            onCreated = {
+                naming = false
+                onDismiss()
+            },
+            onDismiss = { naming = false },
+        )
+    }
+    val firstFocus = remember { FocusRequester() }
+    LaunchedEffect(naming) {
+        if (naming) return@LaunchedEffect
+        repeat(5) {
+            withFrameNanos { }
+            if (runCatching { firstFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
+    }
+    NuvioDialog(
+        onDismiss = onDismiss,
+        title = stringResource(R.string.live_tv_add_to, channel.name),
+        subtitle = stringResource(R.string.live_tv_add_to_description),
+        width = 560.dp,
+        usePlatformDefaultWidth = false,
+        contentSpacing = NuvioTheme.spacing.md,
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+            contentPadding = PaddingValues(vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            item(key = "favorites") {
+                val inFavorites = channel.streamUrl in uiState.favoriteUrls
+                LiveTvCategoryToggle(
+                    label = stringResource(R.string.live_tv_favorites),
+                    count = uiState.favoriteUrls.size.toString(),
+                    visible = inFavorites,
+                    onToggle = {
+                        if (inFavorites) LiveTvRepository.removeFavorites(listOf(channel)) else LiveTvRepository.addFavorites(listOf(channel))
+                    },
+                    modifier = Modifier.focusRequester(firstFocus),
+                )
+            }
+            items(uiState.customLists, key = { it.id }) { list ->
+                val inList = channel.streamUrl in list.urls
+                LiveTvCategoryToggle(
+                    label = list.name,
+                    count = list.urls.size.toString(),
+                    visible = inList,
+                    onToggle = {
+                        if (inList) LiveTvRepository.removeFromCustomList(list.id, listOf(channel)) else LiveTvRepository.addToCustomList(list.id, listOf(channel))
+                    },
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(NuvioTheme.spacing.sm),
+        ) {
+            LiveTvPillButton(
+                text = stringResource(R.string.live_tv_playlist_new),
+                icon = Icons.Filled.Add,
+                onClick = { naming = true },
+            )
+            Spacer(Modifier.weight(1f))
+            LiveTvPillButton(text = stringResource(R.string.live_tv_done), onClick = onDismiss)
+        }
+    }
+}
+
 /** One playlist: its name, its channels in order, and Delete. Back returns to the playlists. */
 @Composable
 private fun LiveTvPlaylistChannels(list: LiveTvCustomList, onBack: () -> Unit) {
